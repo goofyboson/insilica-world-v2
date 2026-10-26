@@ -174,6 +174,15 @@ n = 8), area ratio 1.33 at n = 4, cache identical. V1-GRID 1.2e-14 / 5.3e-14 / 2
 REPRO all bit-identical, numbering 2.3e-14. VIEWER correct. PERF n = 8 2.9 ns per layer-edge-step, two layers
 11.4 ms per step; the graph ×2.0 at n = 4; Hilbert ×1.26 at n = 8. Suite 9 s warm, 71 s from an empty cache; PERF 52 s.
 
+**V2-1 results (2026-10-26, 27/28 + PERF; in review):** ACCURACY N1 1.96e-4 at n = 4, falling ×3.79 then **×2.94**
+per level (threshold ×3; see #30); W5 energy drift 9.4e-7; W6 phase speed −7.8%; Galewsky day 6 0.815 (×136, n = 5)
+and 1.048 (×169, n = 6); 30-day wind error 0.074 m/s; N6 ×3.01; Perot ×2.16 / ×3.85. WAVES air 300.0 vs 300 m/s
+(+0.01%, 8 fast sub-steps per 30-min step), ocean 200.9 vs 200 (+0.43%, 10 per hour), internal 35.14 vs 35.59
+(−1.26%). BAROCLINIC ×1,710 at 3× critical shear, ×0.85 at 0.3×. CONSERVE per-layer budgets ≤ 2.4e-16, thinnest layer
+exactly 1 m, exchange exact, energy drift with no dissipation 3.8e-10 (15 d). REPRO all bit-identical. PERF slow step
+5.4 ns per layer-edge at n = 8; air n = 6 11.3 ms and ocean n = 8 78 ms per model hour. Suite 91 s warm (ACCURACY's
+long runs are most of it).
+
 **Stage history.** V2-0 closed with 41/41 and V2-0b with 45/45 under the earlier, finer-grained suite (IDs F0,
 G1–G4, K1, K2, C1, D1, S1, P1, W1, R1, E1–E4); its results are in #15–#21 and the git history (`880afb0`,
 `224b4dd`). #22 maps those checks onto the suite above.
@@ -215,3 +224,4 @@ One branch per stage (`stage-v2-0`, …), checkpoints pushed there, merged to `m
 | 27 | 2026-10-26 | Exchange | A conservative inter-layer exchange of thickness with its tracer and momentum (upwind), for the vertical processes of V2-2 and V2-3. |
 | 28 | 2026-10-26 | Fast mode | Agreed with the owner: time-split RK3 (MPAS-Atmosphere style), with MPAS-Ocean's barotropic averaging filter to be added only if the ocean case showed fast-mode noise. It did: a balanced two-layer ocean (n = 6, 1-h steps, 15 fast sub-steps) grew its free-surface error from 2.8e-6 m to 1.2e-2 m in 165 days, against 3.0e-5 m for 60-s steps without sub-stepping; at 15-min steps it blew up by day ~100. The averaging filter inside RK3 stages (sub-stepping over twice the stage interval and averaging, with the averaged transport for the layers too) made every two-layer run blow up within days. Divergence damping γ = 0.1 (Skamarock & Klemp 1992, the standard companion of time-split RK3 in MPAS-Atmosphere and WRF) fixed it: 3.0e-6 → 1.5e-5 m over 180 days at both 1-h and 15-min steps, matching the short-step reference. **Pending the owner's agreement** (the agreed remedy was the filter). |
 | 29 | 2026-10-26 | Bottom stress | A layer thinning to the floor over a ridge ran away (its wind 16 → 111 m/s in three days, then NaN), with or without ∇⁴ and at shorter steps: a fixed-rate drag cannot hold a nearly massless layer. Bottom friction now acts as a stress, decelerating a layer as c/h (the physical form; c = 2.5e-4 m/s, ocean-typical, on the outcrop case's lower layer): 30 days stable, the thin layer's fastest wind under 4.3 m/s. CONSERVE's energy check moved to a case with no dissipation (the subcritical jet), since the outcrop case now dissipates by design. **Pending the owner's agreement.** |
+| 30 | 2026-10-26 | Mesh smoothing (proposed) | ACCURACY N1's convergence (×2.94 from n = 5 to 6, threshold ×3) is limited by the mesh: with v1's rule the Lloyd iteration stops at 400 iterations, unconverged from n = 5 up (area max/min 1.42 / 1.54 / 1.69 / 1.79 at n = 5–8). Iterated to its 1e-11 tolerance, N1 falls ×3.80 then ×3.08 (the n = 6 mesh after 4,000 iterations). Measured cost to the tolerance, once per level (grids are cached): n = 6 5,412 iterations, 106 s; n = 7 19,497, 388 s; n = 8 not reached after 18,000 iterations (979 s, last move 5e-8), about 55,000 (~50 min) projected. Proposal: iterate to the tolerance at every level for the engine's grids, keeping v1's 400-iteration rule only for the grids V1-GRID and V1-ENGINE compare with v1. **Pending the owner's agreement.** |

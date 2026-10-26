@@ -18,6 +18,8 @@ are in [docs/v2-plan.md](docs/v2-plan.md). Read it first.
 - **Never change test thresholds or spec rules without asking.** Record every agreed change, with date and reason,
   in the decision log (SPEC §18 in v1; this project's equivalent once its SPEC exists).
 - **Report with numbers:** measured values against thresholds, not just pass/fail.
+- **Grid cache:** grids are cached under `GRID_VERSION` (`src/insilica/grid/__init__.py`); bump it whenever a change
+  alters grid numbers, or stale grids are reused (the n = 8 grid takes about an hour to rebuild; SPEC #31).
 - **Long runs in the background,** at most 5 processes at once (the CPU has 6 physical cores; oversubscribing
   doubled every run's time in v1).
 

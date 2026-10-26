@@ -19,7 +19,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 RESULTS = REPO / 'cache' / 'output' / 'results'
-ORDER = ['GRID', 'V1-GRID', 'V1-ENGINE', 'ACCURACY', 'CONSERVE', 'REPRO', 'VIEWER', 'PERF']
+ORDER = ["GRID", "V1-GRID", "V1-ENGINE", "ACCURACY", "WAVES", "BAROCLINIC", "CONSERVE", "REPRO", "VIEWER", "PERF"]
 
 
 def sort_key(row):

@@ -11,7 +11,7 @@ import numpy as np
 
 from ..constants import R_PLANET
 
-LLOYD_MAX_ITERS = 400
+LLOYD_MAX_ITERS = 400       # v1's rule (kept for the grids compared with v1)
 LLOYD_TOL = 1e-11
 
 
@@ -224,13 +224,13 @@ def lloyd_scvt(V, ring, deg, xp=np, max_iters=LLOYD_MAX_ITERS, tol=LLOYD_TOL):
 
 
 @np.errstate(invalid='ignore', divide='ignore')      # pentagon pad slots are degenerate and masked
-def build_grid(n, xp=np):
+def build_grid(n, xp=np, max_iters=LLOYD_MAX_ITERS):
     """The v1 grid at level n as a dict of NumPy arrays (names as in v1's `buildGrid`)."""
     V, faces = icosphere(n)
     N = V.shape[0]
     adj, deg = _adjacency(faces, N)
     ring = _sorted_ring(V, adj, deg)
-    V, iters, moved = lloyd_scvt(V, ring, deg, xp=xp)
+    V, iters, moved = lloyd_scvt(V, ring, deg, xp=xp, max_iters=max_iters)
 
     pos = V
     lat = np.arcsin(np.clip(pos[:, 2], -1, 1))

@@ -7,3 +7,6 @@ test/output/
 .scratch/
 .DS_Store
 Thumbs.db
+cache/
+*.iw2
+*.egg-info/

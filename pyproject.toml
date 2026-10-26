@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "insilica"
+version = "0.0.0"
+description = "InSilica World V2: layered ocean and atmosphere on one 64-bit GPU fluid engine"
+requires-python = ">=3.12"
+dependencies = ["numpy>=2", "cupy-cuda12x[ctk]>=14", "websockets>=13"]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-xdist>=3"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+insilica = ["kernels/*.cu", "viewer/*", "viewer/vendor/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = ["slow: long runs (n >= 6 or many steps)"]

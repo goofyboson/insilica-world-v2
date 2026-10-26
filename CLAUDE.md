@@ -11,6 +11,10 @@ are in [docs/v2-plan.md](docs/v2-plan.md). Read it first.
 - **Commit as we go** (checkpoints the user can step back to) and push to GitHub
   (`https://github.com/goofyboson/insilica-world-v2.git`, once the user has created it).
 - **Keep README.md current:** the full stage table and the current progress.
+- **Testing method: least redundancy and run time, most integrity** (SPEC §7, decision #22). One test per link of the
+  integrity chain, each as strong as possible; nothing a stronger test already implies. A new stage extends an
+  existing test where it can, adds one only for what no test can see, and retires checks it supersedes. The default
+  suite stays fast (seconds warm); the speed probe runs with `--perf` at every stage close.
 - **Never change test thresholds or spec rules without asking.** Record every agreed change, with date and reason,
   in the decision log (SPEC §18 in v1; this project's equivalent once its SPEC exists).
 - **Report with numbers:** measured values against thresholds, not just pass/fail.

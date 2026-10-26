@@ -3,7 +3,7 @@
 
 The steps follow v1's order exactly (same icosahedron, the same midpoint numbering, the same Jacobi Lloyd
 update with the poles pinned, the same counterclockwise neighbor sort), so cell, edge and vertex numbers match
-v1 one to one and the geometry agrees to rounding (test G4). The spherical-triangle formulas are V2's own,
+v1 one to one and the geometry agrees to rounding (test V1-GRID). The spherical-triangle formulas are V2's own,
 precise for small triangles (SPEC §9 #15). Everything is vectorized with NumPy; the Lloyd
 iteration may run on the GPU (`xp=cupy`) for large n, which changes results only by rounding.
 """

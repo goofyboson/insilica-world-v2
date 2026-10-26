@@ -1,4 +1,4 @@
-"""W1: the viewer protocol, driven by a Python WebSocket client against a real engine on a free port."""
+"""VIEWER: the viewer protocol, driven by a Python WebSocket client against a real engine on a free port."""
 import asyncio
 import json
 import threading
@@ -53,8 +53,8 @@ async def recv_bin(ws):
             return parse_frame(m)
 
 
-def test_W1_protocol(record, server):
-    """W1 Viewer protocol: connect, grid, a field's bytes equal the engine's array, pause/step/play round trip"""
+def test_viewer(record, server):
+    """VIEWER Viewer protocol: connect, grid, a field's bytes equal the engine's array, pause/step/play round trip"""
     port, engine = server['port'], server['engine']
     problems = []
 
@@ -112,6 +112,6 @@ def test_W1_protocol(record, server):
     if b'InSilica World V2' not in page or len(three) < 500_000:
         problems.append('static files')
     ok = not problems
-    record('W1', 'all round trips correct (grid, f8 bytes exact, f4 bytes, step +1/+5, play pushes, pause holds, error reply, page + three.js served)'
+    record('VIEWER', 'all round trips correct (grid, f8 bytes exact, f4 bytes, step +1/+5, play pushes, pause holds, error reply, page + three.js served)'
            if ok else '; '.join(problems), 'all correct', ok)
     assert ok

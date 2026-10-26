@@ -4,7 +4,7 @@ Works on the mass-weighted tracer M·psi given each edge's mass flux Fm (per ste
 order 1: first-order upwind. order 3: 3rd-order upwind-biased fluxes in RK3 stages with Zalesak
 flux-corrected transport against the upwind solution, so tracers stay within local bounds (no negatives).
 Arrays are layered: psi, M0, M1 (L, N); Fm (L, E). Fused kernels (kernels/fused.cu): five cell passes, the edge
-fluxes recomputed where they are summed; bit-identical to reference.py (test E2). Allocates nothing.
+fluxes recomputed where they are summed. Allocates nothing.
 """
 import cupy as cp
 import numpy as np

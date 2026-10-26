@@ -73,7 +73,7 @@ From n = 5 the Lloyd iteration stops at its 400-iteration cap before converging 
   held through the stages; linear drag. Fused kernels (#18): five per stage (limiter scale, limited flux, cell
   tendency + RK update, vertex PV, edge tendency + RK update), 15 per step (21 with ∇⁴), against V2-0's 27.
 - Transport (`transport.Transport`): 3rd-order fluxes f (mean − a − b) + |f| (b − a) β in RK3 stages (a, b the
-  scaled curvatures at the edge's two cells; β = 1 is 3rd-order upwind, β = 0 4th-order centered; #20) with Zalesak
+  scaled curvatures at the edge's two cells; β = 1 is 3rd-order upwind, β = 0 4th-order centered; default 0.25, #20, #21) with Zalesak
   FCT against the upwind solution, on M·psi with the step's mass fluxes; `mass_after` gives the receiving masses in
   flux form, so the tracer total is conserved to rounding. Fused: five cell passes with the edge fluxes recomputed
   where they are summed.
@@ -147,7 +147,7 @@ curl(grad) 1.4e-16; Perot max 1.98e-2 → 1.94e-2 (rms halves per level). G4 mes
 pass. P1 n = 8 64-bit 3.7 ns per layer-edge-step (32-bit ×1.75 faster), launch 12 µs, Morton ×1.2 at n = 8.
 R1 69 s cold, 34 s warm before #15 (80 s warm after it; the changed generator hash rebuilt every grid).
 
-### Stage V2-0b — Engine refinements (agreed 2026-10-26)
+### Stage V2-0b — Engine refinements (agreed 2026-10-26; closed 2026-10-26, 45/45)
 
 Voronoi-edge midpoint for the Perot rebuild and edge sampling, fused kernels with a CUDA graph per tick, cells
 renumbered along a space-filling curve. All V2-0 tests keep their thresholds; G3's Perot check moves to E1; K1 runs
@@ -165,7 +165,7 @@ kernel (#20).
 **Results (2026-10-26, 45/45):** E1 max 1.03e-3 → 4.80e-4 → 2.25e-4 (×2.15, ×2.13), rms ×3.87, ×3.85. E2
 bit-identical (limiter active in up to 2 cells). E3 topology identical, geometry 2.9e-16 (half the edges point the
 other way). E4 h 3.2e-15, u 2.3e-14, tracer 5.7e-15. K1 SWE 2.3e-15 / 4.3e-14 (960 steps); upwind 4.2e-15; v1's FCT3
-form 3.4e-15. N6 with β = 1: FCT3 0.445 (×2.06 better than upwind; v1's mixed form gave 0.363). P1, two layers in
+form 3.4e-15. N6 with β = 0.25 (#21): FCT3 0.305, ×3.01 better than upwind (β = 1 gave 0.445, ×2.06; v1's mixed form 0.363). P1, two layers in
 64-bit, V2-0 → V2-0b: n = 4 0.396 → 0.088 ms (×4.5), n = 5 ×2.1, n = 6 ×1.7, n = 7 ×1.2, n = 8 14.6 → 11.3 ms (×1.27);
 engine 2.9 ns per layer-edge-step at n = 8; fusion alone ×1.9 at n = 4, the graph another ×2.4; Hilbert ×1.27 at
 n = 8 (Morton ×1.28), and ahead of Morton at n = 6–7.
@@ -198,3 +198,4 @@ One branch per stage (`stage-v2-0`, …), checkpoints pushed there, merged to `m
 | 18 | 2026-10-26 | Fused kernels, CUDA graph | Agreed with the owner. Kernels fused to 15 launches per RK3 step (from 27) and 5 transport passes (from 11), with bit-identical results; each world tick captured once as a CUDA graph and replayed with one launch. The unfused kernels stay as the test reference (E2). |
 | 19 | 2026-10-26 | Cell order | Agreed with the owner: cells renumbered along a 3-D Hilbert curve by default (measured against Morton: equal at n = 8, faster at n = 6–7). Tests that compare with v1 map through `perm`. Each corner is now computed once and shared by its three cells: per-cell copies differed in the last bits, so an edge's length depended on which cell it was read from (E3 read 6e-15 at n = 4 before the change, 2.9e-16 after). |
 | 20 | 2026-10-26 | Transport bug from v1 | Found by the renumbering: v1's 3rd-order flux, f (mean − a − b) + \|f\| (f ≥ 0 ? b − a : a − b), takes the curvature of the edge's eI cell for both flux signs, so for f < 0 it is downwind-biased and the result depends on how edges are oriented (FCT3 differed by 6e-3 after one step on the renumbered grid). Corrected to f (mean − a − b) + \|f\| (b − a) β, which uses the upwind cell's curvature and is orientation-independent (E4). β (the upwind weight) is a parameter, default 1 pending the owner's choice; measured FCT3 L2 on the one-revolution bell: β = 1 0.445 / 0.126 (n = 4 / 5), 0.5 0.357 / 0.076, 0.25 (MPAS's default) 0.305 / 0.054, 0 0.263 / 0.063. v1's mixed form gave 0.363 at n = 4; its partly downwind (anti-diffusive) half sharpened the bell. N6 with β = 1: ×2.06 (threshold ≥ 2×). K1 checks v1's form through the reference kernel on v1's numbering. |
+| 21 | 2026-10-26 | Transport β | Agreed with the owner: the engine's default upwind weight is β = 0.25, MPAS's default (`transport.BETA`; a world can override it with `params['beta']`). N6 FCT3 L2 0.305, ×3.01 better than upwind (threshold ≥ 2×); at n = 5 the bell's L2 is 0.054 (β = 1: 0.126). E2 compares the fused and reference kernels at this β. |

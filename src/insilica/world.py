@@ -15,7 +15,7 @@ from .constants import GRAV, OMEGA, R_PLANET
 from .gpu import DeviceGrid, dsum, source_hash
 from .io import save as savefile
 from .swe import SWE
-from .transport import Transport
+from .transport import BETA, Transport
 
 PRESETS = ('w2', 'w5', 'galewsky')
 FIELDS = ('h', 'hs', 'psi', 'speed', 'vort')     # hs: surface height h + b
@@ -100,7 +100,7 @@ class World:
         h, b, u = initial_state(self.grid, preset)
         self.b = cp.asarray(b)
         self.swe = SWE(self.dg, layers=layers, b=self.b, drag=self.params.get('drag', 0.0), nu4=self.params.get('nu4', 0.0))
-        self.tr = Transport(self.dg, layers=layers, beta=self.params.get('beta', 1.0))
+        self.tr = Transport(self.dg, layers=layers, beta=self.params.get('beta', BETA))
         self.tick = 0
         L = layers
         self.h = cp.asarray(np.tile(h, (L, 1)))

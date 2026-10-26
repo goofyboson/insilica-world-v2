@@ -79,7 +79,7 @@ class SWEReference:
 
 
 class TransportReference:
-    def __init__(self, dg, layers=1, v1_formula=False, beta=1.0):
+    def __init__(self, dg, layers=1, v1_formula=False, beta=0.25):
         """v1_formula: v1's 3rd-order flux, which uses the eI cell's curvature for both flux signs (SPEC §9 #20).
         beta: weight of the upwind term (1: 3rd-order upwind; 0: 4th-order centered)."""
         self.dg, self.L, self.v1bias, self.beta = dg, layers, np.int32(1 if v1_formula else 0), beta

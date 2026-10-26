@@ -12,16 +12,17 @@ A planet simulator with two moving ocean layers and two moving air layers, run b
 
 ## Current status
 
-**V2-0b Engine refinements built on branch `stage-v2-0b` (45/45), awaiting merge; then V2-1 Fluid core.** Fused
+**V2-0b Engine refinements closed 2026-10-26 (45/45), merged to `main`. Next: V2-1 Fluid core.** Fused
 kernels with a CUDA graph per tick and Hilbert-ordered cells make a step ×4.5 faster at n = 4 and ×1.27 at n = 8.
-A transport bug carried over from v1 is fixed (SPEC §9 #20). v1's grid, TRiSK geometry, shallow-water
+A transport bug carried over from v1 is fixed and the 3rd-order flux uses MPAS's upwind weight β = 0.25 (SPEC §9
+#20, #21). v1's grid, TRiSK geometry, shallow-water
 solver and FCT transport run as 64-bit CUDA kernels and match v1's own results; save/load, the viewer, the test
 runner and the speed probe work (n = 8 in 64-bit: 3.7 ns per layer-edge-step). Results: the V2-0 section of SPEC.md.
 
 | Stage | Scope | Status |
 |---|---|---|
 | V2-0 | Foundation: Python package, CuPy kernels, grid port, save/load, WebSocket viewer skeleton, 64-bit speed probe on the RTX 4070 | ✅ Done (41/41) |
-| V2-0b | Engine refinements: Voronoi-edge midpoint for wind rebuild, fused kernels + CUDA graph, Hilbert cell order, v1 transport fix | ✅ 45/45, awaiting merge |
+| V2-0b | Engine refinements: Voronoi-edge midpoint for wind rebuild, fused kernels + CUDA graph, Hilbert cell order, v1 transport fix | ✅ Done (45/45) |
 | V2-1 | Fluid core: multi-layer TRiSK, variable thickness, real-speed fast waves (split-explicit), FCT transport | ⏳ Next |
 | V2-2 | Atmosphere: two air layers (isentropic interface), radiation, convection, condensation | ⏳ Planned |
 | V2-3 | Ocean: two layers, wind stress, thermocline, entrainment, sea ice; aquaplanet first | ⏳ Planned |

@@ -11,11 +11,13 @@ import numpy as np
 
 from .gpu import grid_dims
 
+BETA = 0.25         # upwind weight of the 3rd-order flux: MPAS's default (SPEC §9 #21)
+
 
 class Transport:
-    def __init__(self, dg, layers=1, beta=1.0):
-        """beta: weight of the 3rd-order flux's upwind term, f (mean − a − b) + |f| (b − a) β (SPEC §9 #20):
-        1 is 3rd-order upwind, 0 is 4th-order centered (MPAS's default is 0.25)."""
+    def __init__(self, dg, layers=1, beta=BETA):
+        """beta: weight of the 3rd-order flux's upwind term, f (mean − a − b) + |f| (b − a) β (SPEC §9 #20, #21):
+        1 is 3rd-order upwind, 0 is 4th-order centered; the default 0.25 is MPAS's."""
         self.dg, self.L, self.beta = dg, layers, beta
         N, L, dt = dg.N, layers, dg.dtype
         z = lambda *s: cp.zeros(s, dtype=dt)

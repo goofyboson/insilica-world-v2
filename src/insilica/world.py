@@ -125,7 +125,7 @@ class World:
     def step(self, k=1, graph=True):
         """k ticks. The first tick runs directly (and compiles the kernels); after that the tick is captured once
         as a CUDA graph and replayed with a single launch per tick (SPEC §9 #18). graph=False runs every tick
-        directly; the results are bit-identical (test E2)."""
+        directly; the results are bit-identical (test REPRO)."""
         for _ in range(k):
             if graph and self._graph is None and self.tick > self._tick0:
                 with self._stream:

@@ -6,8 +6,8 @@ generalized to L independent layers stacked in one array (shape (L, N) and (L, E
 
 Wicker–Skamarock RK3 with v1's positivity limiter in every stage; the ∇⁴ term is evaluated once per step from the
 step's starting wind and held through the stages (as MPAS and v1). Fused kernels (kernels/fused.cu): five
-launches per stage, fifteen per step (21 with ∇⁴), bit-identical to the one-loop-per-kernel reference
-(reference.py, test E2). The step allocates nothing, so it can be captured in a CUDA graph (world.py).
+launches per stage, fifteen per step (21 with ∇⁴), doing v1's arithmetic in v1's order (checked against v1 by
+V1-ENGINE). The step allocates nothing, so it can be captured in a CUDA graph (world.py).
 """
 import cupy as cp
 import numpy as np

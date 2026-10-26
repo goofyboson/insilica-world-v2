@@ -13,10 +13,9 @@ for the physics still to be ported.
 | `src/insilica/grid/icosa.py` | icosahedral Voronoi mesh with Lloyd/SCVT (port of v1 `buildGrid`, `lloydSCVT`); Hilbert and Morton renumbering |
 | `src/insilica/grid/trisk.py` | TRiSK C-grid geometry (port of v1 `getTrisk`), the GPU gather tables, the Perot wind rebuild `cell_winds` |
 | `src/insilica/grid/__init__.py` | `Grid`, `get(n, order)` with the disk cache `cache/grids/n{n}-{order}-{generator hash}.npz` |
-| `src/insilica/kernels/*.cu` | CUDA C kernels (ASCII only), compiled at run time by NVRTC through CuPy: `fused.cu` (the engine), `trisk.cu` (one loop per kernel: the reference, the ∇⁴ operator, `mass_update`, `block_sum`) |
+| `src/insilica/kernels/*.cu` | CUDA C kernels (ASCII only), compiled at run time by NVRTC through CuPy: `fused.cu` (the engine), `trisk.cu` (the ∇⁴ operator, `mass_update`, `block_sum`) |
 | `src/insilica/gpu.py` | kernel loading, `DeviceGrid`, deterministic sums `dsum` |
 | `src/insilica/swe.py`, `transport.py` | shallow water on L stacked layers; FCT tracer transport (ports of v1 `makeSolver`, `transportStep`), fused kernels |
-| `src/insilica/reference.py` | the unfused V2-0 kernels' drivers, kept for tests E2 and K1 |
 | `src/insilica/world.py` | the V2-0 world: presets, stepping, fields, save/load |
 | `src/insilica/io/save.py` | save-file format (§6) |
 | `src/insilica/runcache.py` | spin-up cache `cache/runs/` |
@@ -77,7 +76,7 @@ From n = 5 the Lloyd iteration stops at its 400-iteration cap before converging 
   FCT against the upwind solution, on M·psi with the step's mass fluxes; `mass_after` gives the receiving masses in
   flux form, so the tracer total is conserved to rounding. Fused: five cell passes with the edge fluxes recomputed
   where they are summed.
-- The fused kernels do the reference kernels' arithmetic in the same order: bit-identical results (E2).
+- The fused kernels do v1's arithmetic in v1's order (V1-ENGINE).
 - A world tick (SWE step + transport) allocates nothing and is captured once as a CUDA graph, then replayed with one
   launch per tick (#18).
 
@@ -117,58 +116,37 @@ and refuses a file made with a different grid generator.
 
 ## 7. Tests and runner
 
-`python tools/run_tests.py [--jobs J] [--cold] [--no-perf]` runs the suite in up to 5 processes (pytest-xdist,
-`--dist loadgroup`; tests that share a grid or a run share an xdist group), then P1 alone, and prints each measured
-value against its threshold. `--cold` uses an empty cache directory.
+**Method (agreed 2026-10-26, #22).** Least redundancy and run time, most integrity: one test per link of the
+integrity chain (mesh → agreement with v1 → accuracy → conservation → reproducibility → viewer), each as strong as
+possible, and nothing a stronger test already implies. A new stage adds tests only for what no existing test can
+see, extends an existing test where it can, and retires checks its new tests supersede. Thresholds change only with
+the owner's agreement, recorded here.
 
-### Stage V2-0 — Foundation (agreed 2026-10-26; closed 2026-10-26, 41/41)
+`python tools/run_tests.py [--perf] [--jobs J] [--cold]` prints the GPU environment, runs the suite in up to 5
+processes (pytest-xdist, `--dist loadgroup`; tests sharing a grid share an xdist group) and prints every measured
+value against its threshold. `--perf` then runs PERF alone (at every stage close); `--cold` uses an empty cache.
 
-| ID | Test | Threshold |
+| Test | What it checks | Threshold |
 |---|---|---|
-| F0 | CuPy, compute capability 8.9, a 64-bit kernel (exp/log/pow/sin) compiles and matches NumPy | cc 8.9; a few ulp (rel < 1e-15) |
-| G1 | topology n = 0–8: N = 10·4ⁿ+2, E = 30·4ⁿ, V = 20·4ⁿ, 12 pentagons, N − E + V = 2, every edge in 2 cells, every vertex in 3 | exact |
-| G2 | geometry n = 0–8: Σ areas, Σ kites, Σ triangles = 4πR²; each cell's kites = its polygon; dual ⟂ primal edges; area max/min | ≤ 1e-12; < 1.5 at n = 4 |
-| G3 | TRiSK n = 4–6: weight antisymmetry; discrete curl(grad) = 0; Perot rebuild of solid-body rotation | ≤ 1e-12; ≤ 1e-12; error falls with n |
-| G4 | grid matches v1 at n = 2–5 | same mesh; geometry ≤ 1e-12 · 4^(n−4) (#16) |
-| K1 | ported SWE kernel vs v1 (Williamson 2, n = 4, 450 s), and with mountain, ∇⁴, drag and limiter; FCT and upwind transport | 1 step ≤ 1e-12; 960 steps ≤ 1e-9 |
-| K2 | v1's N1 and N6 on the GPU | N1 L2 < 1e-3; N6 ≥ 2× better than upwind, min > −1e-9, mass drift < 1e-12 |
-| C1 | cosine bell one revolution at n = 4, 6; coupled world (W5 + bell) 5 days at n = 4, 1 day at n = 6 | relative change of every total ≤ 1e-13 |
-| D1 | two identical Galewsky runs (n = 5, 200 steps); repeated tree sums | identical |
-| S1 | save → load → save; save at T + K steps vs straight; grid cache; spin-up cache | bit-identical |
-| P1 | ns per layer-edge per RK3 step, n = 4–8, L = 1/2/4, 64- and 32-bit; launch overhead; Morton order | report; gate: n = 8 ≤ 16 ns |
-| W1 | viewer protocol with a Python client: grid, f8 bytes exact, f4 bytes, step +1/+5, play pushes, pause holds, error reply, page served | all correct |
-| R1 | the runner: whole suite with ≤ 5 processes, cold and warm cache | time reported |
+| GRID (n = 0–8) | topology (N = 10·4ⁿ+2, E = 30·4ⁿ, V = 20·4ⁿ, 12 pentagons, Euler, every edge in 2 cells and vertex in 3); Σ areas = 4πR² three ways; each cell's kites = its polygon; dual ⟂ primal edges; TRiSK weight antisymmetry; discrete curl(grad) = 0; area max/min; at n = 4 the disk cache returns the freshly built grid | topology exact; ≤ 1e-12; < 1.5 at n = 4; cache bit-identical |
+| V1-GRID (n = 2–5) | the mesh built in v1's numbering is v1's mesh: same edges, vertices, neighbor cycles, weight lists, circulation signs; all geometry against v1's dump | same mesh; ≤ 1e-12 · 4^(n−4) (#16) |
+| V1-ENGINE | the engine as it runs (fused kernels, CUDA graph, Hilbert-ordered grid) against v1's own results: Williamson 2 at n = 4 (1 and 960 steps of 450 s), a steep mountain with ∇⁴, drag and the positivity limiter active (10 steps), upwind transport of v1's cosine bell (1 and 576 steps) | 1 step ≤ 1e-12; 576–960 steps ≤ 1e-9; limiter exercised |
+| ACCURACY | N1 Williamson 2, 5 days at n = 4 (height L2); N6 cosine bell once around at n = 4 (FCT3 against upwind); Perot rebuild of solid-body rotation at n = 4, 5, 6 | N1 < 1e-3; N6 ≥ 2× better, min > −1e-9, tracer drift < 1e-12; Perot max ≥ ×1.8 and rms ≥ ×3.5 per level |
+| CONSERVE (n = 4, 6) | Williamson 5 + bell with ∇⁴ and drag, 5 days at n = 4 and 1 day at n = 6: total volume Σh·A, layer mass ΣM, tracer ΣM·psi | relative change ≤ 1e-13 |
+| REPRO | repeat runs, graph against direct ticks and repeated tree sums; save → load → save bytes and save-at-T + continue against a straight run; spin-up cache miss then hit; two identical layers against each other and a one-layer run; the Hilbert-ordered grid against v1's numbering after 960 steps | bit-identical; numbering ≤ 1e-12 |
+| VIEWER | the protocol with a Python client: grid, exact f8 bytes, f4 bytes, step +1/+5, play pushes, pause holds, error reply, page and three.js served | all correct |
+| PERF (`--perf`) | ns per layer-edge per RK3 step at n = 4–8 for L = 1, 2, 4 in 64- and 32-bit; launch overhead; what the graph and the cell numbering each give | report; gate: n = 8 ≤ 16 ns |
 
-**Results (2026-10-26, 41/41, after #15 and #16):** F0 3.9e-16. G1 exact at n = 0–8. G2 sums ≤ 3.7e-16, cell vs kites
-2.7e-15 (n = 4) to 7.2e-14 (n = 8), orthogonality ≤ 1.6e-13, area ratio 1.33 at n = 4. G3 antisymmetry 1.4e-15,
-curl(grad) 1.4e-16; Perot max 1.98e-2 → 1.94e-2 (rms halves per level). G4 mesh identical at n = 2–5, geometry
-1.2e-14 / 5.2e-14 / 2.3e-13 / 1.29e-12 against bounds 6.3e-14 / 2.5e-13 / 1e-12 / 4e-12 (#16). K1 1 step 2.3e-15, 960 steps
-4.2e-14, limiter case 4.4e-14; FCT 2.3e-13 after a revolution. K2 N1 1.99e-4, N6 ×2.53. C1 ≤ 1.1e-15. D1, S1, W1
-pass. P1 n = 8 64-bit 3.7 ns per layer-edge-step (32-bit ×1.75 faster), launch 12 µs, Morton ×1.2 at n = 8.
-R1 69 s cold, 34 s warm before #15 (80 s warm after it; the changed generator hash rebuilt every grid).
+**Results (2026-10-26, 22/22):** GRID topology exact at every level, worst geometry 1.6e-13 (orthogonality at
+n = 8), area ratio 1.33 at n = 4, cache identical. V1-GRID 1.2e-14 / 5.3e-14 / 2.3e-13 / 1.29e-12 against
+6.3e-14 / 2.5e-13 / 1e-12 / 4e-12. V1-ENGINE 2.3e-15 (1 step), 4.3e-14 (960 steps), mountain 4.4e-14, upwind
+4.2e-15 / 2.1e-14. ACCURACY N1 2.01e-4; N6 FCT3 0.305, ×3.01; Perot ×2.16 / ×3.85 per level. CONSERVE ≤ 1.8e-16.
+REPRO all bit-identical, numbering 2.3e-14. VIEWER correct. PERF n = 8 2.9 ns per layer-edge-step, two layers
+11.4 ms per step; the graph ×2.0 at n = 4; Hilbert ×1.26 at n = 8. Suite 9 s warm, 71 s from an empty cache; PERF 52 s.
 
-### Stage V2-0b — Engine refinements (agreed 2026-10-26; closed 2026-10-26, 45/45)
-
-Voronoi-edge midpoint for the Perot rebuild and edge sampling, fused kernels with a CUDA graph per tick, cells
-renumbered along a space-filling curve. All V2-0 tests keep their thresholds; G3's Perot check moves to E1; K1 runs
-the engine (fused kernels, renumbered grid) through maps to v1's numbering, and v1's FCT3 form through the reference
-kernel (#20).
-
-| ID | Test | Threshold |
-|---|---|---|
-| E1 | Perot rebuild of solid-body rotation with the Voronoi-edge midpoint, n = 4 → 5 → 6 | max error falls ≥ ×1.8 and rms ≥ ×3.5 per level |
-| E2 | fused kernels against the reference kernels (3-layer SWE: steep mountain with the limiter active, 30 steps; Galewsky 100 steps; ∇⁴, drag; upwind and FCT transport 100 steps) and the graph tick against direct ticks | bit-identical |
-| E3 | the renumbered grid is the same mesh as v1's numbering (n = 4, 5) | topology exact; geometry ≤ 1e-15 |
-| E4 | a run on the renumbered grid against one on v1's numbering (Williamson 5 + bell, n = 4, 960 steps) | ≤ 1e-12 |
-| P1 | speed of each change and of the engine at n = 4–8 | report |
-
-**Results (2026-10-26, 45/45):** E1 max 1.03e-3 → 4.80e-4 → 2.25e-4 (×2.15, ×2.13), rms ×3.87, ×3.85. E2
-bit-identical (limiter active in up to 2 cells). E3 topology identical, geometry 2.9e-16 (half the edges point the
-other way). E4 h 3.2e-15, u 2.3e-14, tracer 5.7e-15. K1 SWE 2.3e-15 / 4.3e-14 (960 steps); upwind 4.2e-15; v1's FCT3
-form 3.4e-15. N6 with β = 0.25 (#21): FCT3 0.305, ×3.01 better than upwind (β = 1 gave 0.445, ×2.06; v1's mixed form 0.363). P1, two layers in
-64-bit, V2-0 → V2-0b: n = 4 0.396 → 0.088 ms (×4.5), n = 5 ×2.1, n = 6 ×1.7, n = 7 ×1.2, n = 8 14.6 → 11.3 ms (×1.27);
-engine 2.9 ns per layer-edge-step at n = 8; fusion alone ×1.9 at n = 4, the graph another ×2.4; Hilbert ×1.27 at
-n = 8 (Morton ×1.28), and ahead of Morton at n = 6–7.
+**Stage history.** V2-0 closed with 41/41 and V2-0b with 45/45 under the earlier, finer-grained suite (IDs F0,
+G1–G4, K1, K2, C1, D1, S1, P1, W1, R1, E1–E4); its results are in #15–#21 and the git history (`880afb0`,
+`224b4dd`). #22 maps those checks onto the suite above.
 
 ## 8. Git
 
@@ -199,3 +177,4 @@ One branch per stage (`stage-v2-0`, …), checkpoints pushed there, merged to `m
 | 19 | 2026-10-26 | Cell order | Agreed with the owner: cells renumbered along a 3-D Hilbert curve by default (measured against Morton: equal at n = 8, faster at n = 6–7). Tests that compare with v1 map through `perm`. Each corner is now computed once and shared by its three cells: per-cell copies differed in the last bits, so an edge's length depended on which cell it was read from (E3 read 6e-15 at n = 4 before the change, 2.9e-16 after). |
 | 20 | 2026-10-26 | Transport bug from v1 | Found by the renumbering: v1's 3rd-order flux, f (mean − a − b) + \|f\| (f ≥ 0 ? b − a : a − b), takes the curvature of the edge's eI cell for both flux signs, so for f < 0 it is downwind-biased and the result depends on how edges are oriented (FCT3 differed by 6e-3 after one step on the renumbered grid). Corrected to f (mean − a − b) + \|f\| (b − a) β, which uses the upwind cell's curvature and is orientation-independent (E4). β (the upwind weight) is a parameter, default 1 pending the owner's choice; measured FCT3 L2 on the one-revolution bell: β = 1 0.445 / 0.126 (n = 4 / 5), 0.5 0.357 / 0.076, 0.25 (MPAS's default) 0.305 / 0.054, 0 0.263 / 0.063. v1's mixed form gave 0.363 at n = 4; its partly downwind (anti-diffusive) half sharpened the bell. N6 with β = 1: ×2.06 (threshold ≥ 2×). K1 checks v1's form through the reference kernel on v1's numbering. |
 | 21 | 2026-10-26 | Transport β | Agreed with the owner: the engine's default upwind weight is β = 0.25, MPAS's default (`transport.BETA`; a world can override it with `params['beta']`). N6 FCT3 L2 0.305, ×3.01 better than upwind (threshold ≥ 2×); at n = 5 the bell's L2 is 0.054 (β = 1: 0.126). E2 compares the fused and reference kernels at this β. |
+| 22 | 2026-10-26 | Test method | Agreed with the owner, and to be kept for every later stage: least redundancy and run time with the most integrity (§7). The 45 results of V2-0/V2-0b became seven tests with every threshold kept: GRID = G1 + G2 + G3 + grid cache; V1-GRID = G4; V1-ENGINE = K1, now run on the engine as it runs (fused kernels, CUDA graph, Hilbert order); ACCURACY = N1 + N6 + E1; CONSERVE = C1 (world; the bell's budget is in N6); REPRO = D1 + S1 + spin-up cache + E2's graph check + E4, plus a new check that two identical layers stay bit-identical to each other and to one layer (replacing E2's multi-layer coverage); VIEWER = W1. Retired: F0 (every test needs the GPU; the runner prints the environment), E3 (implied by V1-ENGINE and REPRO's numbering check), E2's fused-against-reference comparison together with the reference kernels (`reference.py` and the one-loop-per-kernel kernels in `trisk.cu`; V1-ENGINE checks the engine against v1 directly), K1's check of v1's old 3rd-order form (no longer run, #20), R1 (the runner's summary line). PERF runs only with `--perf`, at every stage close. Suite 206 s → 9 s warm. |

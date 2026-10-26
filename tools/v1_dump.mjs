@@ -1,6 +1,6 @@
 // Reference dump from v1 (read-only): loads v1's sim core from ../insilica-world/insilica-world.html and
 // writes its grid, TRiSK geometry and kernel results as .npy files, which tests/test_v1_match.py
-// compares with V2's ports (tests G4, K1). Nothing in v1 is written.
+// compares with V2 (tests V1-GRID, V1-ENGINE). Nothing in v1 is written.
 //   node tools/v1_dump.mjs <out-dir> [v1-dir]
 import fs from 'node:fs';
 import path from 'node:path';
@@ -49,7 +49,7 @@ for (let n = 2; n <= 5; n++) {
   meta.grids[n] = { N, E, NV: T.NV, totalArea: g.totalArea, seconds: (Date.now() - t0) / 1000 };
 }
 
-// K1: Williamson 2 at n = 4 (v1's w2Setup and N1), states after 0, 1 and 960 steps of 450 s.
+// V1-ENGINE: Williamson 2 at n = 4 (v1's w2Setup and N1), states after 0, 1 and 960 steps of 450 s.
 {
   const g = S.buildGrid(4), T = TR.getTrisk(g), a = K.R_PLANET, Om = K.OMEGA, u0 = 2 * Math.PI * a / (12 * 86400), gh0 = 2.94e4;
   const h = new Float64Array(g.N), b = new Float64Array(g.N), u = new Float64Array(g.E);
@@ -79,8 +79,8 @@ for (let n = 2; n <= 5; n++) {
   npy(path.join(d, 'h2_10.npy'), h2); npy(path.join(d, 'u2_10.npy'), u2);
 }
 
-// K1/K2: cosine bell once around (v1's N6), FCT3 and upwind; states after 1 and 576 steps.
-for (const order of [1, 3]) {
+// V1-ENGINE: cosine bell once around (v1's N6) with upwind transport; states after 1 and 576 steps.
+for (const order of [1]) {
   const g = S.buildGrid(4), T = TR.getTrisk(g), a = K.R_PLANET, u0 = 2 * Math.PI * a / (12 * 86400), rB = a / 3, lc = 3 * Math.PI / 2, alpha = Math.PI / 2 - 0.05;
   const psi = new Float64Array(g.N), M = Float64Array.from(T.areaCell), M1 = new Float64Array(g.N), Fm = new Float64Array(g.E);
   for (let i = 0; i < g.N; i++) {

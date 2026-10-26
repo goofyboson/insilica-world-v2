@@ -1,9 +1,8 @@
-"""Performance probe (test P1): the cost of the TRiSK shallow-water RK3 step on this GPU.
+"""Performance probe (test PERF): the cost of the TRiSK shallow-water RK3 step on this GPU.
 
 Engine configuration (fused kernels, one CUDA graph per step, Hilbert-ordered cells) at n = 4–8 for L = 1, 2, 4
-layers in 64-bit and 32-bit, in ns per layer-edge per RK3 step; and, at L = 2 in 64-bit, each V2-0b change on
-its own: V2-0's one-loop-per-kernel reference on v1's numbering, fused kernels, plus the graph, plus Hilbert or
-Morton numbering. A single layer (L = 1) is also what one split-explicit fast-mode sub-step will cost.
+layers in 64-bit and 32-bit, in ns per layer-edge per RK3 step; and, at L = 2 in 64-bit, what the CUDA graph and
+the cell numbering each give: direct launches on v1's numbering, plus the graph, plus Hilbert or Morton numbering. A single layer (L = 1) is also what one split-explicit fast-mode sub-step will cost.
 
   python -m insilica.probe [--levels 4 5 6 7 8] [--json out.json]
 """
@@ -16,15 +15,13 @@ import numpy as np
 
 from . import grid as gridmod
 from .gpu import DeviceGrid
-from .reference import SWEReference
 from .swe import SWE
 from .world import default_dt, initial_state
 
-VARIANTS = (('V2-0 reference, v1 order', 'v1', SWEReference, False),
-            ('fused, v1 order', 'v1', SWE, False),
-            ('fused + graph, v1 order', 'v1', SWE, True),
-            ('fused + graph, morton', 'morton', SWE, True),
-            ('fused + graph, hilbert', 'hilbert', SWE, True))
+VARIANTS = (('direct, v1 order', 'v1', SWE, False),
+            ('graph, v1 order', 'v1', SWE, True),
+            ('graph, morton', 'morton', SWE, True),
+            ('graph, hilbert', 'hilbert', SWE, True))
 
 
 def time_steps(g, layers, dtype, cls=SWE, graph=True, steps=None):
@@ -91,7 +88,8 @@ def run(levels=(4, 5, 6, 7, 8), layers=(1, 2, 4), log=print):
 
 
 def summary(out):
-    """64/32-bit ratios (L = 2), the gate value (n = 8, 64-bit, worst L) and each variant's speed-up over V2-0."""
+    """64/32-bit ratios (L = 2), the gate value (n = 8, 64-bit, worst L) and each variant's speed-up over direct
+    launches on v1's numbering."""
     rows = {(r['n'], r['L'], r['dtype']): r['ns_per_layer_edge'] for r in out['runs']}
     ratio = {n: rows[(n, 2, 'float64')] / rows[(n, 2, 'float32')] for (n, L, d) in rows if L == 2 and d == 'float64'}
     n8 = [rows[k] for k in rows if k[0] == 8 and k[2] == 'float64']
@@ -111,7 +109,7 @@ def cli():
     s = summary(out)
     print('64/32-bit time ratio (L = 2):', ', '.join(f'n={n} ×{v:.2f}' for n, v in sorted(s['ratio'].items())))
     for n in a.levels:
-        print(f'n={n} speed-up over V2-0:', ', '.join(f'{v} ×{s["speedup"][(n, v)]:.2f}' for v, *_ in VARIANTS[1:]))
+        print(f'n={n} speed-up over direct launches, v1 order:', ', '.join(f'{v} ×{s["speedup"][(n, v)]:.2f}' for v, *_ in VARIANTS[1:]))
     if a.json:
         with open(a.json, 'w') as f:
             json.dump(out, f, indent=1)

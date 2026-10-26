@@ -46,7 +46,8 @@ Engine and viewer (then open http://127.0.0.1:8765/):
 .venv/Scripts/python -m insilica.server --n 5 --preset galewsky
 ```
 
-Tests (up to 5 processes, then the speed probe alone; prints every measured value against its threshold):
+Tests (seven tests in up to 5 processes, about 10 s warm; prints every measured value against its threshold; add
+`--perf` for the speed probe):
 
 ```bash
 .venv/Scripts/python tools/run_tests.py

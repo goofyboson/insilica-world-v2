@@ -1,6 +1,7 @@
-// Fused TRiSK shallow-water and FCT transport kernels (SPEC section 9 #18). They do exactly the arithmetic of
-// trisk.cu's one-loop-per-kernel ports, in the same order, so results are bit-identical (test E2), with fewer
-// launches and fewer arrays: the thickness flux is recomputed inside the limiter's cell pass, q at edges inside
+// Fused TRiSK shallow-water and FCT transport kernels (SPEC section 9 #18): v1's makeSolver and transportStep
+// (src/sim/56-swe.js) doing v1's arithmetic in v1's order (gathers walk a cell's or vertex's edges in the order
+// v1's scatter loops visit them; compiled with --fmad=false), with fewer launches and fewer arrays than one
+// kernel per v1 loop: the thickness flux is recomputed inside the limiter's cell pass, q at edges inside
 // the edge tendency, the RK update is folded into the tendency kernels, and transport recomputes its edge
 // fluxes inside the cell passes that sum them.
 //

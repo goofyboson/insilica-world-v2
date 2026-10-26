@@ -108,7 +108,7 @@ and refuses a file made with a different grid generator.
 `--dist loadgroup`; tests that share a grid or a run share an xdist group), then P1 alone, and prints each measured
 value against its threshold. `--cold` uses an empty cache directory.
 
-### Stage V2-0 — Foundation (agreed 2026-10-26)
+### Stage V2-0 — Foundation (agreed 2026-10-26; closed 2026-10-26, 41/41)
 
 | ID | Test | Threshold |
 |---|---|---|

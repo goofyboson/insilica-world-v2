@@ -12,7 +12,7 @@ GATE_NS = 16.0      # n = 8, 64-bit: above this, stop and discuss (2× the plan'
 
 @pytest.mark.perf
 def test_P1_performance(record):
-    """P1 Performance probe: ns per layer-edge per RK3 step, n = 4–8, L = 1/2/4, 64- and 32-bit; launch overhead"""
+    """P1 Performance probe: engine ns per layer-edge per RK3 step (n = 4–8, L = 1/2/4, 64/32-bit) and each V2-0b change"""
     out = probe.run(levels=(4, 5, 6, 7, 8), layers=(1, 2, 4), log=lambda *a: None)
     s = probe.summary(out)
     (CACHE_DIR / 'output').mkdir(parents=True, exist_ok=True)
@@ -20,9 +20,12 @@ def test_P1_performance(record):
     f64 = {(r['n'], r['L']): r for r in out['runs'] if r['dtype'] == 'float64'}
     table = '; '.join(f'n={n}: ' + ', '.join(f'L{L} {f64[(n, L)]["ns_per_layer_edge"]:.2f}' for L in (1, 2, 4)) for n in (4, 5, 6, 7, 8))
     ratio = ', '.join(f'n={n} ×{v:.2f}' for n, v in sorted(s['ratio'].items()))
-    mort = ', '.join(f'n={r["n"]} L{r["L"]} ×{r["speedup"]:.2f}' for r in out['morton'])
+    base = {r['n']: r['ms_per_step'] for r in out['variants'] if r['variant'] == probe.VARIANTS[0][0]}
+    steps = '; '.join(f'n={n}: V2-0 {base[n]:.3f} ms → ' + ', '.join(f'{v.split(",")[0].replace("fused + graph", "+graph")}'
+                      f'{"" if "v1 order" in v else " " + v.split(", ")[1]} ×{s["speedup"][(n, v)]:.2f}' for v, *_ in probe.VARIANTS[1:])
+                      for n in (4, 5, 6, 7, 8))
     ms8 = f64[(8, 2)]['ms_per_step']
-    ok = s['n8_worst'] <= GATE_NS and all(r['finite'] for r in out['runs'])
-    record('P1', f'64-bit ns per layer-edge-step: {table}. 64/32-bit time (L2): {ratio}. Launch {out["launch_us"]:.1f} µs. '
-           f'Morton order: {mort}. n = 8 two layers: {ms8:.1f} ms per RK3 step', f'report; gate n = 8 ≤ {GATE_NS:.0f} ns', ok)
+    ok = s['n8_worst'] <= GATE_NS and all(r['finite'] for r in out['runs'] + out['variants'])
+    record('P1', f'engine 64-bit ns per layer-edge-step: {table}. 64/32-bit time (L2): {ratio}. Launch {out["launch_us"]:.1f} µs. '
+           f'L2 64-bit speed-ups over V2-0: {steps}. n = 8 two layers: {ms8:.2f} ms per RK3 step', f'report; gate n = 8 ≤ {GATE_NS:.0f} ns', ok)
     assert ok

@@ -244,6 +244,16 @@ def build_grid(n, xp=np):
     P = pos[:, None, :]
     corners = circumcenter(np.broadcast_to(P, (N, 6, 3)), pos[nb], pos[np.take_along_axis(nb, nxt, axis=1)])
     corners = np.where(valid[..., None], corners, 0.0)
+    # Each corner is shared by three cells; compute-once-and-share keeps the copies bit-identical (SPEC §9 #19),
+    # so an edge's length and every cell's polygon agree whichever cell they are read from. The copy kept is the
+    # one from the first cell in v1's loop order (as TRiSK's vertex positions).
+    tri = np.sort(np.stack([np.broadcast_to(np.arange(N)[:, None], (N, 6)), nb, np.take_along_axis(nb, nxt, axis=1)], -1), -1)
+    key = ((tri[..., 0] * N + tri[..., 1]) * N + tri[..., 2]).ravel()
+    flat = np.flatnonzero(valid.ravel())
+    _, first, inv = np.unique(key[flat], return_index=True, return_inverse=True)
+    cf = corners.reshape(-1, 3)
+    cf[flat] = cf[flat[first[inv]]]
+    corners = cf.reshape(N, 6, 3)
     ca = np.take_along_axis(corners, prv[..., None], axis=1)            # corner k−1
     cb = corners                                                        # corner k
     dist = np.where(valid, R_PLANET * angle_between(np.broadcast_to(P, (N, 6, 3)), pos[nb]), 0.0)
@@ -277,9 +287,13 @@ def edge_list(nbr, deg):
     return dict(E=len(ii), eI=ii.astype(np.int32), eJ=jj.astype(np.int32), eKi=kk.astype(np.uint8), eKj=kj.astype(np.uint8))
 
 
+def _quantize(pos, bits=21):
+    return np.clip(((pos + 1) * 0.5 * (2 ** bits - 1)).astype(np.uint64), 0, 2 ** bits - 1)
+
+
 def morton_order(pos):
     """Cell permutation along a 3-D Morton (Z-order) curve of the unit positions, for memory locality."""
-    q = np.clip(((pos + 1) * 0.5 * (2 ** 21 - 1)).astype(np.uint64), 0, 2 ** 21 - 1)
+    q = _quantize(pos)
 
     def spread(v):
         v = v & np.uint64(0x1FFFFF)
@@ -289,6 +303,38 @@ def morton_order(pos):
         return v
 
     key = spread(q[:, 0]) | (spread(q[:, 1]) << np.uint64(1)) | (spread(q[:, 2]) << np.uint64(2))
+    return np.argsort(key, kind='stable')
+
+
+def hilbert_order(pos, bits=21):
+    """Cell permutation along a 3-D Hilbert curve of the unit positions (Skilling 2004, "Programming the Hilbert
+    curve": axes to transpose, then the transposed bits read out as one key), for memory locality."""
+    X = [c.copy() for c in _quantize(pos, bits).T]
+    one = np.uint64(1)
+    Q = 1 << (bits - 1)
+    while Q > 1:                                       # undo excess work
+        P, q = np.uint64(Q - 1), np.uint64(Q)
+        for i in range(3):
+            hit = (X[i] & q) != 0
+            t = (X[0] ^ X[i]) & P
+            X0 = np.where(hit, X[0] ^ P, X[0] ^ t)
+            Xi = np.where(hit, X[i], X[i] ^ t)
+            X[0] = X0
+            if i:
+                X[i] = Xi
+        Q >>= 1
+    for i in (1, 2):                                   # Gray encode
+        X[i] = X[i] ^ X[i - 1]
+    t = np.zeros_like(X[0])
+    Q = 1 << (bits - 1)
+    while Q > 1:
+        t = np.where((X[2] & np.uint64(Q)) != 0, t ^ np.uint64(Q - 1), t)
+        Q >>= 1
+    X = [x ^ t for x in X]
+    key = np.zeros_like(X[0])
+    for b in range(bits - 1, -1, -1):
+        for i in range(3):
+            key = (key << one) | ((X[i] >> np.uint64(b)) & one)
     return np.argsort(key, kind='stable')
 
 
@@ -303,4 +349,5 @@ def reorder(g, perm):
     nb = g['nbr'][perm]
     out['nbr'] = np.where(nb >= 0, inv[np.maximum(nb, 0)], -1).astype(np.int32)
     out.update(edge_list(out['nbr'], out['deg']))
+    out['perm'] = perm.astype(np.int32)
     return out

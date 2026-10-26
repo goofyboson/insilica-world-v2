@@ -21,4 +21,5 @@ insilica = ["kernels/*.cu", "viewer/*", "viewer/vendor/*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
-markers = ["slow: long runs (n >= 6 or many steps)"]
+markers = ["perf: the performance probe (run alone by tools/run_tests.py)"]
+filterwarnings = ["ignore:CUDA path could not be detected"]

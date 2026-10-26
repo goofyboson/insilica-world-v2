@@ -27,7 +27,8 @@ def dump_dir():
     commit = subprocess.run(['git', '-C', str(V1), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip() or 'nogit'
     script = (REPO / 'tools' / 'v1_dump.mjs').read_bytes()
     import hashlib
-    d = REPO / 'cache' / 'v1' / f'{commit[:12]}-{hashlib.sha1(script).hexdigest()[:8]}'
+    from insilica.grid import CACHE_DIR
+    d = CACHE_DIR / 'v1' / f'{commit[:12]}-{hashlib.sha1(script).hexdigest()[:8]}'
     if not (d / 'meta.json').exists():
         tmp = d.with_name(d.name + '.tmp')
         shutil.rmtree(tmp, ignore_errors=True)

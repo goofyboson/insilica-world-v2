@@ -221,14 +221,47 @@ def build_grid(n, xp=np):
         area = area + np.where(valid[:, k], a, 0.0)
     area = area * R_PLANET * R_PLANET
 
-    # Unordered edge list (i < j) in v1's order: by i, then slot k (v1 SPEC §5.3).
+    g = dict(n=n, N=N, pos=pos, lat=lat, lon=lon, area=area, east=east, north=north,
+             nbr=nbr.astype(np.int32), deg=deg.astype(np.uint8), dist=dist, edgeLen=edge_len, edgeDir=edge_dir,
+             corners=corners, totalArea=float(np.sum(area)), lloydIters=iters, lloydMoved=moved)
+    g.update(edge_list(g['nbr'], g['deg']))
+    return g
+
+
+def edge_list(nbr, deg):
+    """Unordered edge list (i < j) in v1's order: by i, then slot k (v1 SPEC §5.3), with each side's slot."""
+    N = nbr.shape[0]
+    valid = np.arange(6)[None, :] < deg.astype(np.int64)[:, None]
     ii, kk = np.nonzero(valid & (nbr > np.arange(N)[:, None]))
     jj = nbr[ii, kk]
     kj = np.argmax(nbr[jj] == ii[:, None], axis=1)
-    return dict(
-        n=n, N=N, pos=pos, lat=lat, lon=lon, area=area, east=east, north=north,
-        nbr=nbr.astype(np.int32), deg=deg.astype(np.uint8), dist=dist, edgeLen=edge_len, edgeDir=edge_dir,
-        corners=corners, totalArea=float(np.sum(area)),
-        E=len(ii), eI=ii.astype(np.int32), eJ=jj.astype(np.int32), eKi=kk.astype(np.uint8), eKj=kj.astype(np.uint8),
-        lloydIters=iters, lloydMoved=moved,
-    )
+    return dict(E=len(ii), eI=ii.astype(np.int32), eJ=jj.astype(np.int32), eKi=kk.astype(np.uint8), eKj=kj.astype(np.uint8))
+
+
+def morton_order(pos):
+    """Cell permutation along a 3-D Morton (Z-order) curve of the unit positions, for memory locality."""
+    q = np.clip(((pos + 1) * 0.5 * (2 ** 21 - 1)).astype(np.uint64), 0, 2 ** 21 - 1)
+
+    def spread(v):
+        v = v & np.uint64(0x1FFFFF)
+        for shift, mask in ((32, 0x1F00000000FFFF), (16, 0x1F0000FF0000FF), (8, 0x100F00F00F00F00F),
+                            (4, 0x10C30C30C30C30C3), (2, 0x1249249249249249)):
+            v = (v | (v << np.uint64(shift))) & np.uint64(mask)
+        return v
+
+    key = spread(q[:, 0]) | (spread(q[:, 1]) << np.uint64(1)) | (spread(q[:, 2]) << np.uint64(2))
+    return np.argsort(key, kind='stable')
+
+
+def reorder(g, perm):
+    """The same mesh with cells renumbered: new cell k is old cell perm[k]. Edges and vertices are renumbered
+    by the usual rules (edges by their lower cell, vertices by first appearance)."""
+    inv = np.empty_like(perm)
+    inv[perm] = np.arange(len(perm))
+    out = dict(g)
+    for k in ('pos', 'lat', 'lon', 'area', 'east', 'north', 'deg', 'dist', 'edgeLen', 'edgeDir', 'corners'):
+        out[k] = g[k][perm]
+    nb = g['nbr'][perm]
+    out['nbr'] = np.where(nb >= 0, inv[np.maximum(nb, 0)], -1).astype(np.int32)
+    out.update(edge_list(out['nbr'], out['deg']))
+    return out

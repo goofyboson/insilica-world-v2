@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "engine",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "insilica.server", "--n", "5", "--preset", "galewsky"],
+      "port": 8765
+    }
+  ]
+}

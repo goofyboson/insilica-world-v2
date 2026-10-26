@@ -12,13 +12,13 @@ A planet simulator with two moving ocean layers and two moving air layers, run b
 
 ## Current status
 
-**V2-0 Foundation built on branch `stage-v2-0`, under review.** v1's grid, TRiSK geometry, shallow-water solver and
-FCT transport run as 64-bit CUDA kernels and match v1's own results; save/load, the viewer, the test runner and the
-speed probe work. Results and open questions: see the V2-0 section of SPEC.md and the stage report.
+**V2-0 Foundation built on branch `stage-v2-0`: 41/41 tests pass.** v1's grid, TRiSK geometry, shallow-water
+solver and FCT transport run as 64-bit CUDA kernels and match v1's own results; save/load, the viewer, the test
+runner and the speed probe work (n = 8 in 64-bit: 3.7 ns per layer-edge-step). Results: the V2-0 section of SPEC.md.
 
 | Stage | Scope | Status |
 |---|---|---|
-| V2-0 | Foundation: Python package, CuPy kernels, grid port, save/load, WebSocket viewer skeleton, 64-bit speed probe on the RTX 4070 | 🔍 Built, in review |
+| V2-0 | Foundation: Python package, CuPy kernels, grid port, save/load, WebSocket viewer skeleton, 64-bit speed probe on the RTX 4070 | ✅ 41/41, awaiting merge |
 | V2-1 | Fluid core: multi-layer TRiSK, variable thickness, real-speed fast waves (split-explicit), FCT transport | ⏳ Next |
 | V2-2 | Atmosphere: two air layers (isentropic interface), radiation, convection, condensation | ⏳ Planned |
 | V2-3 | Ocean: two layers, wind stress, thermocline, entrainment, sea ice; aquaplanet first | ⏳ Planned |

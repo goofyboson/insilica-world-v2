@@ -31,7 +31,7 @@ def slot_maps(n, g):
 
 @pytest.mark.parametrize('n', [2, 3, 4, 5])
 def test_G4_grid_matches_v1(record, n):
-    """G4 Grid matches v1 (n = 2–5): same mesh; geometry within 1e-12"""
+    """G4 Grid matches v1 (n = 2–5): same mesh; geometry within 1e-12 × 4^(n−4)"""
     g = gridmod.get(n)
     sub = f'n{n}'
     em, vm = v1ref.maps(n, g)                         # asserts identical edge and vertex sets
@@ -80,11 +80,13 @@ def test_G4_grid_matches_v1(record, n):
     sign_same = np.array_equal(g.circ1, v1ref.load(sub, 'circ1')[em]) and np.array_equal(g.circ2, v1ref.load(sub, 'circ2')[em])
     topo_ok = deg_same and cyc_ok and eoe_same and sign_same
     geo = max(worst.values())
-    ok = topo_ok and geo <= 1e-12
+    # v1's small-triangle rounding grows 4× per level (SPEC §9 #15, #16), so the bound does too.
+    limit = 1e-12 * 4.0 ** (n - 4)
+    ok = topo_ok and geo <= limit
     top = ', '.join(f'{k} {fmt(v)}' for k, v in sorted(worst.items(), key=lambda kv: -kv[1])[:4])
     record(f'G4 n={n}', f'mesh {"identical" if topo_ok else "DIFFERS"} (edges, vertices, cycles, weight lists); '
            f'{rotated} of {g.N} cells start their slot cycle at another neighbor; geometry max {fmt(geo)} (largest: {top})',
-           'same mesh; geometry ≤ 1e-12', ok)
+           f'same mesh; geometry ≤ 1e-12·4^(n−4) = {limit:.2e}', ok)
     assert ok
 
 

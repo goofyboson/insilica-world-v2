@@ -15,15 +15,16 @@ from .constants import GRAV, OMEGA, R_PLANET
 from .gpu import DeviceGrid, dsum, source_hash
 from .io import save as savefile
 from .swe import SWE
-from .transport import Transport
+from .transport import BETA, Transport
 
 PRESETS = ('w2', 'w5', 'galewsky')
 FIELDS = ('h', 'hs', 'psi', 'speed', 'vort')     # hs: surface height h + b
 
 
 def edge_east_north(g):
-    """Edge latitudes and the east/north components of each edge's normal (v1's edgeInfo)."""
-    x = g.xe
+    """Latitude, longitude and the east/north components of each edge's normal, at the Voronoi edge midpoint xm,
+    where analytic winds are sampled (SPEC §9 #17; v1's edgeInfo used xe)."""
+    x = g.xm
     lat = np.arcsin(np.clip(x[:, 2], -1, 1))
     lon = np.arctan2(x[:, 1], x[:, 0])
     en = -np.sin(lon) * g.ne[:, 0] + np.cos(lon) * g.ne[:, 1]
@@ -99,7 +100,7 @@ class World:
         h, b, u = initial_state(self.grid, preset)
         self.b = cp.asarray(b)
         self.swe = SWE(self.dg, layers=layers, b=self.b, drag=self.params.get('drag', 0.0), nu4=self.params.get('nu4', 0.0))
-        self.tr = Transport(self.dg, layers=layers)
+        self.tr = Transport(self.dg, layers=layers, beta=self.params.get('beta', BETA))
         self.tick = 0
         L = layers
         self.h = cp.asarray(np.tile(h, (L, 1)))
@@ -108,16 +109,36 @@ class World:
         self.psi = cp.asarray(np.tile(cosine_bell(self.grid), (L, 1)))
         self._Fm = cp.zeros_like(self.u)
         self._M1 = cp.zeros_like(self.M)
+        # A blocking stream: work on it orders with the default stream, so reads after step() see the results.
+        self._stream = cp.cuda.Stream(non_blocking=False)
+        self._graph, self._tick0 = None, 0
 
     STATE = ('h', 'u', 'M', 'psi')
 
-    def step(self, k=1):
+    def _tick(self):
+        """One tick's kernels, on fixed buffers (no allocation), so the sequence can be captured as a graph."""
+        self.swe.step(self.h, self.u, self.dt, self._Fm)
+        self.tr.mass_after(self.M, self._Fm, self._M1)
+        self.tr.step(self.M, self._M1, self._Fm, self.psi, order=3)
+        cp.copyto(self.M, self._M1)
+
+    def step(self, k=1, graph=True):
+        """k ticks. The first tick runs directly (and compiles the kernels); after that the tick is captured once
+        as a CUDA graph and replayed with a single launch per tick (SPEC §9 #18). graph=False runs every tick
+        directly; the results are bit-identical (test E2)."""
         for _ in range(k):
-            self.swe.step(self.h, self.u, self.dt, self._Fm)
-            self.tr.mass_after(self.M, self._Fm, self._M1)
-            self.tr.step(self.M, self._M1, self._Fm, self.psi, order=3)
-            self.M, self._M1 = self._M1, self.M
+            if graph and self._graph is None and self.tick > self._tick0:
+                with self._stream:
+                    self._stream.begin_capture()
+                    self._tick()
+                    self._graph = self._stream.end_capture()
+            if graph and self._graph is not None:
+                self._graph.launch(self._stream)
+            else:
+                with self._stream:
+                    self._tick()
             self.tick += 1
+        self._stream.synchronize()
         return self
 
     # ---- diagnostics ----
@@ -169,19 +190,19 @@ class World:
     # ---- save / load ----
     def save(self, path):
         meta = dict(kind='insilica-world-v2', n=self.n, preset=self.preset, layers=self.L, dt=self.dt, tick=self.tick,
-                    params=self.params, gridHash=gridmod.generator_hash(), sourceHash=source_hash())
+                    params=self.params, order=self.grid.order, gridHash=gridmod.generator_hash(), sourceHash=source_hash())
         savefile.write(path, meta, {k: getattr(self, k).get() for k in self.STATE})
 
     @classmethod
     def load(cls, path):
         meta, arrays = savefile.read(path)
-        if meta.get('gridHash') != gridmod.generator_hash():
-            raise ValueError('save file was made with a different grid generator')
+        if meta.get('gridHash') != gridmod.generator_hash() or meta.get('order') != gridmod.DEFAULT_ORDER:
+            raise ValueError('save file was made with a different grid generator or cell order')
         w = cls(n=meta['n'], preset=meta['preset'], layers=meta['layers'], dt=meta['dt'], params=meta['params'])
         for k in cls.STATE:
             a = arrays[k]
             if a.shape != getattr(w, k).shape or a.dtype != np.float64:
                 raise ValueError(f'save file array {k}: shape {a.shape} {a.dtype}, expected {getattr(w, k).shape} float64')
-            setattr(w, k, cp.asarray(a))
-        w.tick = meta['tick']
+            getattr(w, k)[...] = cp.asarray(a)          # into the existing buffers a captured graph uses
+        w.tick = w._tick0 = meta['tick']
         return w

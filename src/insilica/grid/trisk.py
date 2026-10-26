@@ -99,8 +99,14 @@ def build_trisk(g):
     cnt = ok.sum(axis=1)
     eoe_start = np.concatenate([[0], np.cumsum(cnt)])
     fV = 2 * OMEGA * v_pos[:, 2]
+    # The Voronoi edge's own midpoint (SPEC §9 #17). xe, where the line between the two cell centers crosses
+    # the edge, is the true corner of the kites and stays the TRiSK edge point; xm is the centre of the edge,
+    # used where a formula wants it: the Perot wind rebuild and sampling analytic winds onto edges. The edge
+    # normal ne is the same at both points (p_j − p_i is perpendicular to the edge's whole great circle).
+    xm = v_pos[ev1] + v_pos[ev2]
+    xm = xm / _norm(xm)[:, None]
 
-    t = dict(NV=NV, vPos=v_pos, cornerV=corner_v.astype(np.int32), cellEdge=cell_edge.astype(np.int32), cellSign=cell_sign,
+    t = dict(NV=NV, vPos=v_pos, xm=xm, cornerV=corner_v.astype(np.int32), cellEdge=cell_edge.astype(np.int32), cellSign=cell_sign,
              ev1=ev1.astype(np.int32), ev2=ev2.astype(np.int32), de=de, le=le, xe=xe, ne=ne, kite=kite, areaCell=area_cell,
              areaV=area_v, circ1=circ1, circ2=circ2, fV=fV, eoeStart=eoe_start.astype(np.int32), eoe=eoe.astype(np.int32), w=w)
     t.update(gather_tables(g, t))
@@ -134,3 +140,13 @@ def gather_tables(g, t):
     o = np.lexsort((cells, vs))
     return dict(cellEdgeAsc=cell_edge_asc.astype(np.int32), vEdge=v_edge.astype(np.int32), vEdgeSign=v_edge_sign.astype(np.int8),
                 vCell=cells[o].reshape(NV, 3).astype(np.int32), vSlot=slots[o].reshape(NV, 3).astype(np.int8))
+
+
+def cell_winds(g, u):
+    """Wind vectors at cells from edge normal winds (Perot): U_i = (1/A_i) Σ_e l_e (x_e − x_i) u_e^out, with x_e
+    the Voronoi edge midpoint xm, projected onto the tangent plane. u (E,) → (N, 3) in m/s.
+    (v1's cellWinds uses the kite corner xe instead; its error does not fall with resolution, SPEC §9 #17.)"""
+    ce = np.where(g.cellEdge >= 0, g.cellEdge, 0)
+    c = np.where(g.cellEdge >= 0, g.cellSign * u[ce] * g.le[ce] * R_PLANET, 0.0)
+    v = np.sum(c[..., None] * (g.xm[ce] - g.pos[:, None, :]), axis=1) / g.areaCell[:, None]
+    return v - np.sum(v * g.pos, axis=1)[:, None] * g.pos

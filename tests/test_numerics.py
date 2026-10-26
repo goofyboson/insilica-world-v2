@@ -38,7 +38,7 @@ def solid_body_fm(g, dt, alpha=math.pi / 2 - 0.05):
     a = R_PLANET
     u0 = 2 * math.pi * a / (12 * 86400)
     om = np.array([-math.sin(alpha) * u0 / a, 0, math.cos(alpha) * u0 / a])
-    V = np.cross(om, g.xe * a)
+    V = np.cross(om, g.xm * a)              # sampled at the Voronoi edge midpoint (SPEC §9 #17)
     return np.sum(V * g.ne, axis=1) * g.le * dt
 
 

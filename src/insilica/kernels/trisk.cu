@@ -183,16 +183,21 @@ extern "C" __global__ void tr_cell_update(int N, int E, const real* M0, const re
   out[o] = t / (Fm ? mx : M1[o]);
 }
 
-// 3rd-order upwind-biased edge flux (Skamarock & Gassmann 2011), stencil weights from d2_stencil (host).
+// 3rd-order upwind-biased edge flux (Skamarock & Gassmann 2011), stencil weights from d2_stencil (host):
+// a and b are the scaled second derivatives at eI and eJ: f (mean - a - b) + |f| (b - a) beta, which with
+// beta = 1 uses the upwind cell's curvature (-2a for f >= 0, -2b for f < 0) and with beta = 0 is 4th-order
+// centered. v1bias = 1 reproduces v1's form, which takes -2a for both signs (the downwind cell when f < 0;
+// SPEC section 9 #20); only test K1 uses it.
 extern "C" __global__ void tr_ho_flux(int N, int E, const real* Fm, const real* p, const int* idx, const real* wt,
-                                      const int* eI, const int* eJ, real* out) {
+                                      const int* eI, const int* eJ, int v1bias, real beta, real* out) {
   LOOP(e, E)
   const real* ps = p + (size_t)l * N;
   const real f = Fm[(size_t)l * E + e];
   const int o = e * 8;
   const real a = wt[o] * ps[idx[o]] + wt[o + 1] * ps[idx[o + 1]] + wt[o + 2] * ps[idx[o + 2]] + wt[o + 3] * ps[idx[o + 3]];
   const real b = wt[o + 4] * ps[idx[o + 4]] + wt[o + 5] * ps[idx[o + 5]] + wt[o + 6] * ps[idx[o + 6]] + wt[o + 7] * ps[idx[o + 7]];
-  out[(size_t)l * E + e] = f * ((real)0.5 * (ps[eI[e]] + ps[eJ[e]]) - (a + b)) + fabs(f) * (f >= 0 ? (b - a) : (a - b));
+  const real up = v1bias ? (f >= 0 ? (b - a) : (a - b)) : (b - a) * beta;
+  out[(size_t)l * E + e] = f * ((real)0.5 * (ps[eI[e]] + ps[eJ[e]]) - (a + b)) + fabs(f) * up;
 }
 
 extern "C" __global__ void tr_antidiff(int E, const real* H, const real* FL, real* A) {

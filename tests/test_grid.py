@@ -7,6 +7,7 @@ import pytest
 from conftest import fmt
 from insilica import grid as gridmod
 from insilica.constants import R_PLANET
+from insilica.grid.trisk import cell_winds
 
 SPHERE = 4 * math.pi * R_PLANET ** 2
 LEVELS = list(range(0, 9))
@@ -54,18 +55,9 @@ def test_G2_geometry(record, n):
     assert ok
 
 
-def perot(g, u):
-    """v1's cellWinds: wind vectors at cells from edge normal winds (Perot), projected to the tangent plane."""
-    sign = g.cellSign.astype(float)
-    ce = np.where(g.cellEdge >= 0, g.cellEdge, 0)
-    c = np.where(g.cellEdge >= 0, sign * u[ce] * g.le[ce] * R_PLANET, 0.0)
-    v = np.sum(c[..., None] * (g.xe[ce] - g.pos[:, None, :]), axis=1) / g.areaCell[:, None]
-    return v - np.sum(v * g.pos, axis=1)[:, None] * g.pos
-
-
 @pytest.mark.parametrize('n', [pytest.param(n, marks=_group(n)) for n in (4, 5, 6)])
 def test_G3_trisk_identities(record, n):
-    """G3 TRiSK identities: weight antisymmetry, discrete curl(grad) = 0, Perot rebuild of solid-body rotation"""
+    """G3 TRiSK identities: weight antisymmetry, discrete curl(grad) = 0"""
     g = gridmod.get(n)
     # antisymmetry l_e d_e w_ee' = −l_e' d_e' w_e'e
     e = np.repeat(np.arange(g.E), np.diff(g.eoeStart))
@@ -87,37 +79,30 @@ def test_G3_trisk_identities(record, n):
     np.add.at(mag, g.ev1, np.abs(terms1))
     np.add.at(mag, g.ev2, np.abs(terms2))
     cg = float(np.max(np.abs(curl) / mag))
-    # solid-body rotation about a tilted axis, 1 m/s at most
-    om = np.array([0.3, -0.2, 0.9])
-    om /= np.linalg.norm(om) * R_PLANET
-    V = lambda x: np.cross(om, x * R_PLANET)
-    u = np.sum(V(g.xe) * g.ne, axis=1)
-    rec = perot(g, u)
-    exact = V(g.pos)
-    perr = float(np.max(np.linalg.norm(rec - exact, axis=1)) / np.max(np.linalg.norm(exact, axis=1)))
     ok = anti <= 1e-12 and cg <= 1e-12
-    record(f'G3 n={n}', f'antisymmetry {fmt(anti)}, curl(grad) {fmt(cg)}, Perot solid-body error {fmt(perr)}',
-           '≤ 1e-12, ≤ 1e-12; Perot reported (must fall with n)', ok)
+    record(f'G3 n={n}', f'antisymmetry {fmt(anti)}, curl(grad) {fmt(cg)}', '≤ 1e-12, ≤ 1e-12', ok)
     assert ok
 
 
 
 @pytest.mark.xdist_group('grid6')
-def test_G3_perot_converges(record):
-    """G3 Perot error falls with resolution (n = 4, 5, 6)"""
+def test_E1_perot_converges(record):
+    """E1 Perot rebuild of solid-body rotation with the Voronoi edge midpoint converges (n = 4, 5, 6)"""
     mx, rms = [], []
     for n in (4, 5, 6):
         g = gridmod.get(n)
         om = np.array([0.3, -0.2, 0.9])
         om /= np.linalg.norm(om) * R_PLANET
         V = lambda x: np.cross(om, x * R_PLANET)
-        u = np.sum(V(g.xe) * g.ne, axis=1)
-        err = np.linalg.norm(perot(g, u) - V(g.pos), axis=1) / np.max(np.linalg.norm(V(g.pos), axis=1))
+        u = np.sum(V(g.xm) * g.ne, axis=1)
+        err = np.linalg.norm(cell_winds(g, u) - V(g.pos), axis=1) / np.max(np.linalg.norm(V(g.pos), axis=1))
         mx.append(float(err.max()))
         rms.append(float(np.sqrt(np.mean(err ** 2))))
-    ok = mx[0] > mx[1] > mx[2]
-    record('G3 Perot', f'max {" → ".join(fmt(x) for x in mx)} (×{mx[0] / mx[1]:.2f}, ×{mx[1] / mx[2]:.2f} per level); '
-           f'rms {" → ".join(fmt(x) for x in rms)} (×{rms[0] / rms[1]:.2f}, ×{rms[1] / rms[2]:.2f})', 'max decreasing with n', ok)
+    fm = [mx[0] / mx[1], mx[1] / mx[2]]
+    fr = [rms[0] / rms[1], rms[1] / rms[2]]
+    ok = min(fm) >= 1.8 and min(fr) >= 3.5
+    record('E1 Perot', f'max {" → ".join(fmt(x) for x in mx)} (×{fm[0]:.2f}, ×{fm[1]:.2f} per level); '
+           f'rms {" → ".join(fmt(x) for x in rms)} (×{fr[0]:.2f}, ×{fr[1]:.2f})', 'max ≥ ×1.8 and rms ≥ ×3.5 per level', ok)
     assert ok
 
 
@@ -126,7 +111,7 @@ def test_G_cache_identical(record):
     """Grid cache: a grid read back from the disk cache equals a freshly built one, bit for bit"""
     fresh, _ = gridmod.make(4)
     gridmod.get(4)                      # makes sure the cache file exists
-    gridmod._mem.pop(4, None)
+    gridmod._mem.pop((4, gridmod.DEFAULT_ORDER), None)
     cached = gridmod.get(4)             # read from disk
     a, b = fresh.arrays(), cached.arrays()
     diff = [k for k in a if not np.array_equal(np.asarray(a[k]), np.asarray(b[k]))]

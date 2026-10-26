@@ -52,9 +52,10 @@ def test_grid(record, n):
     worst = max(sums, kites, orth, anti, curl)
     cache = None
     if n == 4:          # a grid read back from the disk cache equals a freshly built one, bit for bit
-        fresh, _ = gridmod.make(4)
-        gridmod._mem.pop((4, gridmod.DEFAULT_ORDER), None)
-        cached = gridmod.get(4)
+        fresh, _ = gridmod.make(4, order='v1')
+        gridmod.get(4, order='v1')
+        gridmod._mem.pop((4, 'v1', 'converged'), None)
+        cached = gridmod.get(4, order='v1')
         a, b = fresh.arrays(), cached.arrays()
         cache = not [k for k in a if not np.array_equal(np.asarray(a[k]), np.asarray(b[k]))]
     ok = topo and worst <= 1e-12 and (n != 4 or ratio < 1.5) and cache is not False

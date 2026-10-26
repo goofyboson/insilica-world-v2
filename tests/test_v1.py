@@ -32,7 +32,7 @@ def slot_maps(n, g):
 @pytest.mark.parametrize('n', [2, 3, 4, 5])
 def test_v1_grid(record, n):
     """V1-GRID The grid (built in v1's numbering) is v1's mesh: same mesh; geometry within 1e-12 × 4^(n−4)"""
-    g = gridmod.get(n, order='v1')
+    g = gridmod.get(n, order='v1', lloyd='v1')
     sub = f'n{n}'
     em, vm, _, _ = v1ref.maps(n, g)                   # asserts identical edge and vertex sets
     sm, has = slot_maps(n, g)
@@ -96,7 +96,7 @@ def test_v1_engine(record):
     # Transport: v1's upwind scheme on its cosine bell (the engine's 3rd-order flux differs from v1's on purpose,
     # SPEC §9 #20, and is checked by ACCURACY and REPRO). Arrays map through the cell permutation; normal
     # quantities flip sign where an edge points the other way.
-    g = gridmod.get(4)
+    g = gridmod.get(4, lloyd='v1')                    # v1's smoothing rule, so the mesh is v1's (#30)
     dg = DeviceGrid(g)
     em, _, sg, cm = v1ref.maps(4, g)
     cell = lambda a: a[cm]

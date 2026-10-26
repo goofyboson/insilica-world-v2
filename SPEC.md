@@ -126,14 +126,13 @@ value against its threshold. `--cold` uses an empty cache directory.
 | W1 | viewer protocol with a Python client: grid, f8 bytes exact, f4 bytes, step +1/+5, play pushes, pause holds, error reply, page served | all correct |
 | R1 | the runner: whole suite with ≤ 5 processes, cold and warm cache | time reported |
 
-**Results (2026-10-26, 37/41):** F0 3.9e-16. G1 exact at n = 0–8. G2 sums ≤ 1.4e-15, orthogonality ≤ 1.5e-13, area
-ratio 1.33 at n = 4; cell vs kites 3.2e-13 (n = 5), **1.4e-12, 7.3e-12, 2.7e-11 at n = 6, 7, 8 (fail)**. G3
-antisymmetry 1.4e-15, curl(grad) 1.7e-16; Perot max 1.98e-2 → 1.94e-2 (rms halves per level). G4 mesh identical at
-n = 2–5, geometry 1.4e-14 / 7.0e-14 / 3.5e-13 / **1.41e-12 (n = 5, fail)**. K1 1 step 3.5e-15, 960 steps 5.0e-14,
-limiter case 4.3e-14; FCT 1.9e-13 after a revolution. K2 N1 1.99e-4, N6 ×2.53. C1 ≤ 9.8e-16. D1, S1, W1 pass.
-P1 n = 8 64-bit 3.7 ns per layer-edge-step (32-bit ×1.74 faster), launch 12 µs, Morton ×1.2 at n = 8. R1 69 s cold,
-34 s warm (P1 28 s of it). The three failures are open questions for the owner (stage report): both come from the
-precision of small spherical triangles and arcs computed from unit vectors, which loses about 4× per level.
+**Results (2026-10-26, 40/41, after #15):** F0 3.9e-16. G1 exact at n = 0–8. G2 sums ≤ 3.7e-16, cell vs kites
+2.7e-15 (n = 4) to 7.2e-14 (n = 8), orthogonality ≤ 1.6e-13, area ratio 1.33 at n = 4. G3 antisymmetry 1.4e-15,
+curl(grad) 1.4e-16; Perot max 1.98e-2 → 1.94e-2 (rms halves per level). G4 mesh identical at n = 2–5, geometry
+1.2e-14 / 5.2e-14 / 2.3e-13 / **1.29e-12 (n = 5, fail: v1's own rounding, #15)**. K1 1 step 2.3e-15, 960 steps
+4.2e-14, limiter case 4.4e-14; FCT 2.3e-13 after a revolution. K2 N1 1.99e-4, N6 ×2.53. C1 ≤ 1.1e-15. D1, S1, W1
+pass. P1 n = 8 64-bit 3.7 ns per layer-edge-step (32-bit ×1.75 faster), launch 12 µs, Morton ×1.2 at n = 8.
+R1 69 s cold, 34 s warm before #15 (80 s warm after it; the changed generator hash rebuilt every grid).
 
 ## 8. Git
 
@@ -157,3 +156,4 @@ One branch per stage (`stage-v2-0`, …), checkpoints pushed there, merged to `m
 | 12 | 2026-10-26 | Saves | The zip/npy format of §6; v1 save files are not imported. |
 | 13 | 2026-10-26 | Git | One branch per stage, merged to `main` at the stage's close (as v1 §18 #48). |
 | 14 | 2026-10-26 | G4 procedure | Edges and vertices are compared through maps matched by their cells (an edge by its cell pair, a vertex by its cell triple), and each cell's slots through the rotation that aligns its neighbor cycle. Where a neighbor lies exactly due west of a cell (angle ±π, on the icosahedron's symmetry lines), rounding picks which neighbor comes first, in v1 and in V2 alike: 3–6 cells per level start their slot cycle at a different neighbor, which renumbers some edges. The mesh itself (cells, edges, vertices, cycles, weight lists, signs) is identical. |
+| 15 | 2026-10-26 | Mesh precision | Asked for by the owner before closing V2-0, so that G2 and G4 hold at their 1e-12 thresholds. v1's formulas (circumcenter from (b − a) × (c − a), area from a·(b × c), arc from atan2(|a × b|, a·b)) lose precision on small triangles: against a 40-digit reference with the points on the unit sphere (`tools/precision_check.py`), at n = 8 corners are off by 5.6e-14 rad, areas by 3.0e-12 and arcs by 1.1e-14 (relative). V2 now forms them from chords in a tangent frame at the first point, with radial parts from a·b − 1 = −|b − a|²/2 and arcs as 2 asin(|b − a|/2): 2.5e-16, 6.8e-16 and 2.7e-16. G2's cell-vs-kites check went from 1.4e-12 / 7.3e-12 / 2.7e-11 (n = 6, 7, 8, failing) to 1.7e-14 / 3.2e-14 / 7.2e-14. Against v1, G4 moved from 1.4e-14 / 7.0e-14 / 3.5e-13 / 1.41e-12 to 1.2e-14 / 5.2e-14 / 2.3e-13 / 1.29e-12 (n = 2–5). From v1's own positions at n = 5, v1's cell areas are off by 5.1e-13 and V2's by 4.6e-15, so the remaining G4 gap at n = 5 is v1's own rounding (≈ 1e-12 in the TRiSK weights), plus 8.9e-15 rad of position difference from the unconverged Lloyd iteration. K1 is unchanged (2.3e-15 after 1 step, 4.2e-14 after 960). G4 at n = 5 stays failing until the owner decides. |

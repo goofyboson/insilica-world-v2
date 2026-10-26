@@ -3,7 +3,8 @@
 
 The steps follow v1's order exactly (same icosahedron, the same midpoint numbering, the same Jacobi Lloyd
 update with the poles pinned, the same counterclockwise neighbor sort), so cell, edge and vertex numbers match
-v1 one to one and the geometry agrees to rounding (test G4). Everything is vectorized with NumPy; the Lloyd
+v1 one to one and the geometry agrees to rounding (test G4). The spherical-triangle formulas are V2's own,
+precise for small triangles (SPEC §9 #15). Everything is vectorized with NumPy; the Lloyd
 iteration may run on the GPU (`xp=cupy`) for large n, which changes results only by rounding.
 """
 import numpy as np
@@ -36,27 +37,65 @@ def _dot(a, b):
     return a[..., 0] * b[..., 0] + a[..., 1] * b[..., 1] + a[..., 2] * b[..., 2]
 
 
+# Small-triangle precision (SPEC §9 #15). v1's formulas take cross products of whole unit vectors, whose
+# components are O(1): the small quantities that fix a mesh triangle (its area ~h², its circumcenter's offset
+# ~h) then carry absolute rounding of ~1e-16, a relative error of eps/h² in areas and eps/h in corner
+# positions, growing 4× and 2× per grid level. The forms below work with chords u = b − a, v = c − a (O(h),
+# and differences of nearby floats are nearly exact) in a tangent frame at a, and take the radial parts from
+# the exact identity a·b − 1 = −|b − a|²/2 for unit vectors, so every result keeps relative precision ~eps.
+
+def _tangent_basis(a):
+    """Orthonormal tangent vectors (e1, e2) at unit vectors a, e2 = a × e1."""
+    xp = _am(a)
+    k = xp.argmin(xp.abs(a), axis=-1)
+    axis = (xp.arange(3) == k[..., None]).astype(a.dtype)          # the coordinate axis least aligned with a
+    e1 = _cross(a, axis)
+    e1 = e1 / _norm(e1)[..., None]
+    return e1, _cross(a, e1)
+
+
+def _local(u, a, e1, e2):
+    """Chord u from a in the frame (e1, e2, a); the radial part from −|u|²/2."""
+    return _dot(u, e1), _dot(u, e2), -0.5 * _dot(u, u)
+
+
 def angle_between(a, b):
-    return np.arctan2(_norm(_cross(a, b)), _dot(a, b))
+    """Great-circle angle between unit vectors, from the chord: 2 asin(|b − a|/2)."""
+    xp = _am(a)
+    return 2 * xp.arcsin(xp.minimum(1.0, 0.5 * _norm(b - a)))
 
 
 def sph_tri_area(a, b, c):
-    """Area of the spherical triangle (a, b, c) of unit vectors (Van Oosterom & Strackee)."""
-    triple = (a[..., 0] * (b[..., 1] * c[..., 2] - b[..., 2] * c[..., 1])
-              + a[..., 1] * (b[..., 2] * c[..., 0] - b[..., 0] * c[..., 2])
-              + a[..., 2] * (b[..., 0] * c[..., 1] - b[..., 1] * c[..., 0]))
-    den = 1 + _dot(a, b) + _dot(b, c) + _dot(c, a)
+    """Area of the spherical triangle (a, b, c) of unit vectors (Van Oosterom & Strackee):
+    tan(E/2) = |a·(b × c)| / (1 + a·b + b·c + c·a), with a·(b × c) = a·(u × v) taken in a's tangent frame and
+    the denominator as 4 − (|b − a|² + |c − b|² + |a − c|²)/2."""
     xp = _am(a)
+    u, v = b - a, c - a
+    e1, e2 = _tangent_basis(a)
+    u1, u2 = _dot(u, e1), _dot(u, e2)
+    v1, v2 = _dot(v, e1), _dot(v, e2)
+    triple = u1 * v2 - u2 * v1
+    w = c - b
+    den = 4 - 0.5 * (_dot(u, u) + _dot(w, w) + _dot(v, v))
     return 2 * xp.arctan2(xp.abs(triple), den)
 
 
 def circumcenter(pa, pb, pc):
-    """Circumcenter of spherical triangles (a, b, c), on the side of their centroid (v1 `circumcenter`).
-    Degenerate triangles (the pad slots of pentagons) give NaN; callers mask them."""
-    c = _cross(pb - pa, pc - pa)
-    s = pa + pb + pc
-    c = _am(c).where((_dot(c, s) < 0)[..., None], -c, c)
-    return c / _norm(c)[..., None]
+    """Circumcenter of spherical triangles (a, b, c): the unit normal of the plane through them on the
+    triangle's side (as v1's `circumcenter`). The normal w = u × v is formed in a's frame (e1, e2, a), where
+    its radial part w3 is ~h² and its tangential parts w1, w2 ~h³, each to relative precision eps; the corner
+    is a + (w1 e1 + w2 e2)/w3, normalized. Degenerate triangles (the pad slots of pentagons) give NaN; callers
+    mask them."""
+    xp = _am(pa)
+    e1, e2 = _tangent_basis(pa)
+    u1, u2, u3 = _local(pb - pa, pa, e1, e2)
+    v1, v2, v3 = _local(pc - pa, pa, e1, e2)
+    w1 = u2 * v3 - u3 * v2
+    w2 = u3 * v1 - u1 * v3
+    w3 = u1 * v2 - u2 * v1
+    t1, t2 = w1 / w3, w2 / w3
+    p = pa + t1[..., None] * e1 + t2[..., None] * e2
+    return p / _norm(p)[..., None]
 
 
 def icosphere(n):

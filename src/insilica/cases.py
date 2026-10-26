@@ -192,5 +192,5 @@ PRESETS = {
     'galewsky': dict(build=_single('galewsky'), dt=default_dt),
     'phillips': dict(build=lambda g: phillips(g, 3.0)[:3], gprime=lambda g: phillips(g, 3.0)[3], dt=lambda n: 1200.0 * 2.0 ** (5 - n),
                      visc4_U=20.0),
-    'outcrop': dict(build=lambda g: outcrop(g), gprime=0.02, dt=lambda n: 3600.0, stress=[0.0, 2.5e-4], visc4_U=1.0),
+    'outcrop': dict(build=lambda g: outcrop(g), gprime=0.02, dt=lambda n: 3600.0, stress=[0.0, 2.5e-4], visc4_U=0.5),
 }

@@ -13,10 +13,12 @@ for the physics still to be ported.
 | `src/insilica/grid/icosa.py` | icosahedral Voronoi mesh with Lloyd/SCVT (port of v1 `buildGrid`, `lloydSCVT`); Hilbert and Morton renumbering |
 | `src/insilica/grid/trisk.py` | TRiSK C-grid geometry (port of v1 `getTrisk`), the GPU gather tables, the Perot wind rebuild `cell_winds` |
 | `src/insilica/grid/__init__.py` | `Grid`, `get(n, order)` with the disk cache `cache/grids/n{n}-{order}-{generator hash}.npz` |
-| `src/insilica/kernels/*.cu` | CUDA C kernels (ASCII only), compiled at run time by NVRTC through CuPy: `fused.cu` (the engine), `trisk.cu` (the ∇⁴ operator, `mass_update`, `block_sum`) |
+| `src/insilica/kernels/*.cu` | CUDA C kernels (ASCII only), compiled at run time by NVRTC through CuPy: `layers.cu` (the layered core), `fused.cu` (one-layer TRiSK and FCT transport), `trisk.cu` (the ∇⁴ operator, `mass_update`, `block_sum`) |
 | `src/insilica/gpu.py` | kernel loading, `DeviceGrid`, deterministic sums `dsum` |
-| `src/insilica/swe.py`, `transport.py` | shallow water on L stacked layers; FCT tracer transport (ports of v1 `makeSolver`, `transportStep`), fused kernels |
-| `src/insilica/world.py` | the V2-0 world: presets, stepping, fields, save/load |
+| `src/insilica/layers.py` | the layered core: stacked layers, time-split RK3 with the fast mode sub-stepped, floor, exchange hook (§3) |
+| `src/insilica/swe.py`, `transport.py` | v1's one-layer shallow water (kept for V1-ENGINE) and FCT tracer transport (ports of v1 `makeSolver`, `transportStep`), fused kernels |
+| `src/insilica/cases.py` | initial states: single-layer benchmarks and the layered cases, with their settings (`PRESETS`) |
+| `src/insilica/world.py` | the world: a case on the layered core with tracers; stepping, fields, save/load (§4) |
 | `src/insilica/io/save.py` | save-file format (§6) |
 | `src/insilica/runcache.py` | spin-up cache `cache/runs/` |
 | `src/insilica/server/`, `viewer/` | the engine server (`python -m insilica.server`) and the browser page (§5) |
@@ -77,15 +79,41 @@ From n = 5 the Lloyd iteration stops at its 400-iteration cap before converging 
   flux form, so the tracer total is conserved to rounding. Fused: five cell passes with the edge fluxes recomputed
   where they are summed.
 - The fused kernels do v1's arithmetic in v1's order (V1-ENGINE).
-- A world tick (SWE step + transport) allocates nothing and is captured once as a CUDA graph, then replayed with one
+- **Layered core** (`layers.Layers`, V2-1): L Boussinesq layers (k = 0 on top), thickness h_k and wind u_k, over
+  topography b. Layer k feels the Montgomery potential M_k = g·η + M'_k, with η = b + Σh the free surface and
+  M'_k = Σ_{m≤k} g'_{m−1} z_m (z_m the top of layer m, g'_{m−1} the reduced gravity across the interface above it),
+  so each layer is v1's TRiSK shallow water with that potential (#24). Momentum also has drag r_k u and a stress
+  term (c_k/h_k) u (#29) and ∇⁴ hyperviscosity ν4 = U·d³/π⁴, refused at start-up if ν4·λ²·dt > 1 (λ the vector
+  Laplacian's largest eigenvalue, ≈ 27/d²; #25).
+- **Time stepping**: time-split RK3 (Wicker & Skamarock 2002, as MPAS-Atmosphere; #28). In each RK3 stage the slow
+  tendencies (everything but g·∇η) come from the stage's input state; their thickness-weighted column mean G drives
+  the fast mode, which is sub-stepped from tⁿ by forward-backward steps at the true external speed √(gH)
+  (τ·√(gH)/d_min ≤ 0.5), with divergence damping γ = 0.1 (the pressure gradient takes η + γ(η − η_prev)). Each layer
+  then moves with its own baroclinic flux plus its share of the stage's mean barotropic transport, so the layers
+  sum to the sub-stepped surface; η is never a separate variable.
+- **Floor** (#26): a layer may send out, in any stage, only what it held above the floor (1 m) at the step's start;
+  limiting fluxes adds no mass.
+- **Exchange** (#27): `Layers.exchange` moves thickness across interfaces with its tracer and momentum (upwind),
+  conserving every total; the hook convection, entrainment and overturning will use.
+- A world tick (layer step + transport) allocates nothing and is captured once as a CUDA graph, then replayed with one
   launch per tick (#18).
 
-## 4. The V2-0 world
+## 4. The world
 
-`World(n, preset, layers)`: state `h (L,N)`, `u (L,E)`, `M (L,N)` (layer volume per cell, moved by the same fluxes
-as h), `psi (L,N)`. Presets: `w2` (Williamson 2), `w5` (Williamson 5, flow over a mountain), `galewsky` (Galewsky
-jet), each carrying v1 N6's cosine bell as tracer. dt = 450 s · 2^(4−n). A tick is one SWE step plus one FCT step.
-This is a stand-in for the tools; V2-1 replaces it with the layered fluid core.
+`World(n, preset, params, layers, state)`: a case from `cases.PRESETS` on the layered core, with state `h (L,N)`,
+`u (L,E)`, `M (L,N)` (layer volume per cell, moved by the same fluxes as h) and `psi (L,N)` (v1 N6's cosine bell
+in every layer). A tick is one layer step plus one FCT step with its fluxes. Presets:
+
+| Preset | Layers | Step | What |
+|---|---|---|---|
+| `w2`, `w5`, `rh4`, `galewsky` | 1 | 450 s · 2^(4−n) (rh4 300 s) | Williamson 2, 5, 6 and the Galewsky jet |
+| `phillips` | 2 | 1200 s · 2^(5−n) | a balanced jet at 45°N over a lower layer at rest, 3× the critical shear: baroclinic instability |
+| `outcrop` | 2 | 1 h | two ocean layers flowing over a ridge where the lower layer thins to the floor; bottom stress 2.5e-4 m/s |
+
+`params` overrides a case's settings: `dt`, `gprime`, `floor`, `drag`, `stress`, `nu4` or `visc4_U`, `rotation`,
+`beta`, `div_damp`, `nfast` (fast sub-steps per step; by default 1.2 × what √(gH) of the deepest column needs, then
+saved with the world). `layers=K` splits a one-layer case into K equal layers with g' = 0 (they move as one: REPRO).
+Fields for the viewer: `h`, `z` (the layer's top), `eta`, `psi`, `speed`, `vort`, per layer.
 
 ## 5. Viewer protocol
 
@@ -131,11 +159,13 @@ value against its threshold. `--perf` then runs PERF alone (at every stage close
 | GRID (n = 0–8) | topology (N = 10·4ⁿ+2, E = 30·4ⁿ, V = 20·4ⁿ, 12 pentagons, Euler, every edge in 2 cells and vertex in 3); Σ areas = 4πR² three ways; each cell's kites = its polygon; dual ⟂ primal edges; TRiSK weight antisymmetry; discrete curl(grad) = 0; area max/min; at n = 4 the disk cache returns the freshly built grid | topology exact; ≤ 1e-12; < 1.5 at n = 4; cache bit-identical |
 | V1-GRID (n = 2–5) | the mesh built in v1's numbering is v1's mesh: same edges, vertices, neighbor cycles, weight lists, circulation signs; all geometry against v1's dump | same mesh; ≤ 1e-12 · 4^(n−4) (#16) |
 | V1-ENGINE | the engine as it runs (fused kernels, CUDA graph, Hilbert-ordered grid) against v1's own results: Williamson 2 at n = 4 (1 and 960 steps of 450 s), a steep mountain with ∇⁴, drag and the positivity limiter active (10 steps), upwind transport of v1's cosine bell (1 and 576 steps) | 1 step ≤ 1e-12; 576–960 steps ≤ 1e-9; limiter exercised |
-| ACCURACY | N1 Williamson 2, 5 days at n = 4 (height L2); N6 cosine bell once around at n = 4 (FCT3 against upwind); Perot rebuild of solid-body rotation at n = 4, 5, 6 | N1 < 1e-3; N6 ≥ 2× better, min > −1e-9, tracer drift < 1e-12; Perot max ≥ ×1.8 and rms ≥ ×3.5 per level |
-| CONSERVE (n = 4, 6) | Williamson 5 + bell with ∇⁴ and drag, 5 days at n = 4 and 1 day at n = 6: total volume Σh·A, layer mass ΣM, tracer ΣM·psi | relative change ≤ 1e-13 |
-| REPRO | repeat runs, graph against direct ticks and repeated tree sums; save → load → save bytes and save-at-T + continue against a straight run; spin-up cache miss then hit; two identical layers against each other and a one-layer run; the Hilbert-ordered grid against v1's numbering after 960 steps | bit-identical; numbering ≤ 1e-12 |
+| ACCURACY | through the layered core: N1 Williamson 2, 5 days at n = 4, 5, 6; W5, 15 days at n = 4; W6 Rossby–Haurwitz, 7 days at n = 4 (v1 N4's phase fit); Galewsky at n = 5 and 6 against an unperturbed twin (v1 N3's metric); Williamson 2 for 30 days at n = 5 (v1 N5); N6 cosine bell at n = 4; Perot rebuild of solid-body rotation at n = 4, 5, 6 | N1 < 1e-3 at n = 4, falls ≥ ×3 per level; W5 energy drift < 1e-4; W6 phase speed within ±10%; Galewsky day 6 > 0.3, growth > ×20, max |u| < 200; 30-day wind error < 1 m/s; N6 ≥ 2× better, min > −1e-9, drift < 1e-12; Perot max ≥ ×1.8, rms ≥ ×3.5 per level |
+| WAVES | at n = 5 with long steps (fast mode sub-stepped): an external wave in air (300 m/s, 30-min steps) and ocean (200 m/s, 1-h steps), and a two-layer internal wave against the exact free-surface speed | external within 2%, internal within 3% |
+| BAROCLINIC | Phillips two-layer instability at n = 6: a balanced jet at 45°N over a lower layer at rest, at 3× and 0.3× the critical shear 2βL_d², disturbance energy against an unperturbed twin from day 1 to day 20 | ≥ ×100 at 3×; ≤ ×2 at 0.3× |
+| CONSERVE (n = 4, 6) | the outcrop case (15 days at n = 4, 1 day at n = 6): each layer's volume, mass and tracer, the thinnest layer; then an exchange of up to 40% of each donor: volume, tracer, momentum and M = h·A; and energy on the subcritical two-layer jet with no dissipation at all | ≤ 1e-13; never below the floor; exchange ≤ 1e-13; energy drift < 1e-4 |
+| REPRO | repeat runs, graph against direct ticks and repeated tree sums; save → load → save bytes and save-at-T + continue against a straight run; spin-up cache miss then hit; a one-layer case split into two equal layers with g' = 0 against itself and the one-layer run; the Hilbert-ordered grid against v1's numbering after 960 steps | bit-identical; numbering ≤ 1e-12 |
 | VIEWER | the protocol with a Python client: grid, exact f8 bytes, f4 bytes, step +1/+5, play pushes, pause holds, error reply, page and three.js served | all correct |
-| PERF (`--perf`) | ns per layer-edge per RK3 step at n = 4–8 for L = 1, 2, 4 in 64- and 32-bit; launch overhead; what the graph and the cell numbering each give | report; gate: n = 8 ≤ 16 ns |
+| PERF (`--perf`) | ns per layer-edge per slow step at n = 4–8 for L = 1, 2, 4; launch overhead; cost per model hour of whole world ticks for air (n = 6, `phillips`) and ocean (n = 8, `outcrop`) | n = 8 ≤ 16 ns; air ≤ 15 ms and ocean ≤ 180 ms per model hour (the plan's §5 estimates) |
 
 **Results (2026-10-26, 22/22):** GRID topology exact at every level, worst geometry 1.6e-13 (orthogonality at
 n = 8), area ratio 1.33 at n = 4, cache identical. V1-GRID 1.2e-14 / 5.3e-14 / 2.3e-13 / 1.29e-12 against
@@ -178,3 +208,10 @@ One branch per stage (`stage-v2-0`, …), checkpoints pushed there, merged to `m
 | 20 | 2026-10-26 | Transport bug from v1 | Found by the renumbering: v1's 3rd-order flux, f (mean − a − b) + \|f\| (f ≥ 0 ? b − a : a − b), takes the curvature of the edge's eI cell for both flux signs, so for f < 0 it is downwind-biased and the result depends on how edges are oriented (FCT3 differed by 6e-3 after one step on the renumbered grid). Corrected to f (mean − a − b) + \|f\| (b − a) β, which uses the upwind cell's curvature and is orientation-independent (E4). β (the upwind weight) is a parameter, default 1 pending the owner's choice; measured FCT3 L2 on the one-revolution bell: β = 1 0.445 / 0.126 (n = 4 / 5), 0.5 0.357 / 0.076, 0.25 (MPAS's default) 0.305 / 0.054, 0 0.263 / 0.063. v1's mixed form gave 0.363 at n = 4; its partly downwind (anti-diffusive) half sharpened the bell. N6 with β = 1: ×2.06 (threshold ≥ 2×). K1 checks v1's form through the reference kernel on v1's numbering. |
 | 21 | 2026-10-26 | Transport β | Agreed with the owner: the engine's default upwind weight is β = 0.25, MPAS's default (`transport.BETA`; a world can override it with `params['beta']`). N6 FCT3 L2 0.305, ×3.01 better than upwind (threshold ≥ 2×); at n = 5 the bell's L2 is 0.054 (β = 1: 0.126). E2 compares the fused and reference kernels at this β. |
 | 22 | 2026-10-26 | Test method | Agreed with the owner, and to be kept for every later stage: least redundancy and run time with the most integrity (§7). The 45 results of V2-0/V2-0b became seven tests with every threshold kept: GRID = G1 + G2 + G3 + grid cache; V1-GRID = G4; V1-ENGINE = K1, now run on the engine as it runs (fused kernels, CUDA graph, Hilbert order); ACCURACY = N1 + N6 + E1; CONSERVE = C1 (world; the bell's budget is in N6); REPRO = D1 + S1 + spin-up cache + E2's graph check + E4, plus a new check that two identical layers stay bit-identical to each other and to one layer (replacing E2's multi-layer coverage); VIEWER = W1. Retired: F0 (every test needs the GPU; the runner prints the environment), E3 (implied by V1-ENGINE and REPRO's numbering check), E2's fused-against-reference comparison together with the reference kernels (`reference.py` and the one-loop-per-kernel kernels in `trisk.cu`; V1-ENGINE checks the engine against v1 directly), K1's check of v1's old 3rd-order form (no longer run, #20), R1 (the runner's summary line). PERF runs only with `--perf`, at every stage close. Suite 206 s → 9 s warm. |
+| 23 | 2026-10-26 | Layer thickness | Agreed with the owner: physics alone controls the layers (heating and cooling across isentropes, convection, entrainment, Ekman pumping, overturning). The remap toward a target thickness (ALE), #3's fallback, is not built; it is to be recommended again only if a phenomenon cannot be made to emerge physically. With two layers per fluid a remap acts as artificial vertical mixing and would hide physics errors. |
+| 24 | 2026-10-26 | Layered core | Boussinesq density layers with the Montgomery potential M_k = g·η + M'_k (§3); the potential is one function, so V2-2 can add isentropic air layers. |
+| 25 | 2026-10-26 | Hyperviscosity | ν4 = U·d³/π⁴ (`visc4_U`, d the mean cell spacing): one setting serves every level. Measured: the vector Laplacian's largest eigenvalue is ≈ 27/d², not (π/d)², so the grid's shortest modes damp at ≈ 7.5·U/d; a world refuses ν4·λ²·dt > 1 at start-up (the Phillips case first had visc4_U = 50, unstable at 2.13; it uses 20, 0.85–0.98). |
+| 26 | 2026-10-26 | Floor | 1 m, enforced by limiting each layer's outflow per stage to what it held above the floor at the step's start (no mass added). |
+| 27 | 2026-10-26 | Exchange | A conservative inter-layer exchange of thickness with its tracer and momentum (upwind), for the vertical processes of V2-2 and V2-3. |
+| 28 | 2026-10-26 | Fast mode | Agreed with the owner: time-split RK3 (MPAS-Atmosphere style), with MPAS-Ocean's barotropic averaging filter to be added only if the ocean case showed fast-mode noise. It did: a balanced two-layer ocean (n = 6, 1-h steps, 15 fast sub-steps) grew its free-surface error from 2.8e-6 m to 1.2e-2 m in 165 days, against 3.0e-5 m for 60-s steps without sub-stepping; at 15-min steps it blew up by day ~100. The averaging filter inside RK3 stages (sub-stepping over twice the stage interval and averaging, with the averaged transport for the layers too) made every two-layer run blow up within days. Divergence damping γ = 0.1 (Skamarock & Klemp 1992, the standard companion of time-split RK3 in MPAS-Atmosphere and WRF) fixed it: 3.0e-6 → 1.5e-5 m over 180 days at both 1-h and 15-min steps, matching the short-step reference. **Pending the owner's agreement** (the agreed remedy was the filter). |
+| 29 | 2026-10-26 | Bottom stress | A layer thinning to the floor over a ridge ran away (its wind 16 → 111 m/s in three days, then NaN), with or without ∇⁴ and at shorter steps: a fixed-rate drag cannot hold a nearly massless layer. Bottom friction now acts as a stress, decelerating a layer as c/h (the physical form; c = 2.5e-4 m/s, ocean-typical, on the outcrop case's lower layer): 30 days stable, the thin layer's fastest wind under 4.3 m/s. CONSERVE's energy check moved to a case with no dissipation (the subcritical jet), since the outcrop case now dissipates by design. **Pending the owner's agreement.** |

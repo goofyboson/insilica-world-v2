@@ -1,8 +1,10 @@
-"""Performance probe (test PERF): the cost of the TRiSK shallow-water RK3 step on this GPU.
+"""Performance probe (test PERF): what the layered engine costs on this GPU.
 
-Engine configuration (fused kernels, one CUDA graph per step, Hilbert-ordered cells) at n = 4–8 for L = 1, 2, 4
-layers in 64-bit and 32-bit, in ns per layer-edge per RK3 step; and, at L = 2 in 64-bit, what the CUDA graph and
-the cell numbering each give: direct launches on v1's numbering, plus the graph, plus Hilbert or Morton numbering. A single layer (L = 1) is also what one split-explicit fast-mode sub-step will cost.
+1. The slow step: ns per layer-edge per time-split RK3 step (one fast sub-step per stage), n = 4–8, L = 1, 2, 4,
+   64-bit, CUDA graph, Hilbert-ordered cells.
+2. Cost per model hour of whole world ticks (layers, fast sub-steps and tracer transport) for the plan's two
+   showcase fluids: air at n = 6 (two layers, 10 km deep, the Phillips jet, 10-minute steps) and ocean at n = 8
+   (two layers over a ridge, 1-hour steps with the external mode sub-stepped at ~160 m/s).
 
   python -m insilica.probe [--levels 4 5 6 7 8] [--json out.json]
 """
@@ -15,46 +17,49 @@ import numpy as np
 
 from . import grid as gridmod
 from .gpu import DeviceGrid
-from .swe import SWE
-from .world import default_dt, initial_state
+from .layers import Layers
+from .world import World, default_dt, initial_state
 
-VARIANTS = (('direct, v1 order', 'v1', SWE, False),
-            ('graph, v1 order', 'v1', SWE, True),
-            ('graph, morton', 'morton', SWE, True),
-            ('graph, hilbert', 'hilbert', SWE, True))
+SHOWCASE = (('air', 6, 'phillips'), ('ocean', 8, 'outcrop'))
 
 
-def time_steps(g, layers, dtype, cls=SWE, graph=True, steps=None):
-    dg = DeviceGrid(g, dtype=dtype)
+def time_steps(g, layers, steps=None):
+    dg = DeviceGrid(g)
     h0, b, u0 = initial_state(g, 'w2')
-    s = cls(dg, layers=layers, b=b)
-    h = cp.asarray(np.tile(h0, (layers, 1)), dtype=dtype)
-    u = cp.asarray(np.tile(u0, (layers, 1)), dtype=dtype)
+    core = Layers(dg, layers, b=b, gprime=[0.1] * (layers - 1))
+    h = cp.asarray(np.tile(h0 / layers, (layers, 1)))
+    u = cp.asarray(np.tile(u0, (layers, 1)))
     dt = default_dt(g.n)
     stream = cp.cuda.Stream(non_blocking=False)
     with stream:
-        for _ in range(3):
-            s.step(h, u, dt)
-        run = lambda: s.step(h, u, dt)
-        if graph:
-            stream.begin_capture()
-            s.step(h, u, dt)
-            gr = stream.end_capture()
-            run = lambda: gr.launch(stream)
+        core.step(h, u, dt, 1)
+        stream.begin_capture()
+        core.step(h, u, dt, 1)
+        gr = stream.end_capture()
         if steps is None:
             steps = max(20, min(400, int(4e8 // (layers * g.E))))
         start, stop = cp.cuda.Event(), cp.cuda.Event()
         stream.synchronize()
-        w0 = time.perf_counter()
         start.record(stream)
         for _ in range(steps):
-            run()
+            gr.launch(stream)
         stop.record(stream)
         stop.synchronize()
-    wall = (time.perf_counter() - w0) / steps
-    gpu = cp.cuda.get_elapsed_time(start, stop) / 1e3 / steps
-    return dict(n=g.n, L=layers, dtype=np.dtype(dtype).name, order=g.order, steps=steps, ms_per_step=gpu * 1e3,
-                wall_ms_per_step=wall * 1e3, ns_per_layer_edge=gpu / (layers * g.E) * 1e9, finite=bool(cp.all(cp.isfinite(h))))
+    sec = cp.cuda.get_elapsed_time(start, stop) / 1e3 / steps
+    return dict(n=g.n, L=layers, ms_per_step=sec * 1e3, ns_per_layer_edge=sec / (layers * g.E) * 1e9,
+                finite=bool(cp.all(cp.isfinite(h))))
+
+
+def model_hour(name, n, preset, hours=None):
+    """Seconds of wall time per model hour for whole world ticks, measured over a few model hours."""
+    w = World(n, preset)
+    w.step(2)                                   # compile, capture the graph
+    ticks = max(2, int(round((hours or (24 if n <= 6 else 6)) * 3600 / w.dt)))
+    t0 = time.perf_counter()
+    w.step(ticks)
+    sec = (time.perf_counter() - t0) / (ticks * w.dt / 3600)
+    return dict(name=name, n=n, preset=preset, layers=w.L, dt=w.dt, nfast=w.nfast, s_per_model_hour=sec,
+                model_years_per_day=86400 / (sec * 24 * 365), finite=bool(cp.all(cp.isfinite(w.u))))
 
 
 def launch_overhead(k=2000):
@@ -70,34 +75,21 @@ def launch_overhead(k=2000):
 
 
 def run(levels=(4, 5, 6, 7, 8), layers=(1, 2, 4), log=print):
-    out = dict(launch_us=launch_overhead(), runs=[], variants=[])
+    out = dict(launch_us=launch_overhead(), runs=[], showcase=[])
     log(f'launch overhead: {out["launch_us"]:.1f} µs per kernel launch from Python')
     for n in levels:
-        for name, order, cls, graph in VARIANTS:
-            r = time_steps(gridmod.get(n, order=order), 2, np.float64, cls, graph)
-            r['variant'] = name
-            out['variants'].append(r)
-            log(f'n={n} L=2 64-bit {name}: {r["ms_per_step"]:.3f} ms/step, {r["ns_per_layer_edge"]:.2f} ns per layer-edge-step')
         g = gridmod.get(n)
         for L in layers:
-            for dt in (np.float64, np.float32):
-                r = time_steps(g, L, dt)
-                out['runs'].append(r)
-                log(f'n={n} L={L} {r["dtype"]} engine: {r["ms_per_step"]:.3f} ms/step, {r["ns_per_layer_edge"]:.2f} ns per layer-edge-step')
+            r = time_steps(g, L)
+            out['runs'].append(r)
+            log(f'n={n} L={L}: {r["ms_per_step"]:.3f} ms per slow step, {r["ns_per_layer_edge"]:.2f} ns per layer-edge-step')
+    for name, n, preset in SHOWCASE:
+        if n in levels:
+            r = model_hour(name, n, preset)
+            out['showcase'].append(r)
+            log(f'{name} n={n} ({preset}, {r["layers"]} layers, step {r["dt"]:.0f} s, {r["nfast"]} fast sub-steps): '
+                f'{r["s_per_model_hour"] * 1e3:.1f} ms per model hour ({r["model_years_per_day"]:.1f} model years per day)')
     return out
-
-
-def summary(out):
-    """64/32-bit ratios (L = 2), the gate value (n = 8, 64-bit, worst L) and each variant's speed-up over direct
-    launches on v1's numbering."""
-    rows = {(r['n'], r['L'], r['dtype']): r['ns_per_layer_edge'] for r in out['runs']}
-    ratio = {n: rows[(n, 2, 'float64')] / rows[(n, 2, 'float32')] for (n, L, d) in rows if L == 2 and d == 'float64'}
-    n8 = [rows[k] for k in rows if k[0] == 8 and k[2] == 'float64']
-    speedup = {}
-    for r in out['variants']:
-        base = next(x for x in out['variants'] if x['n'] == r['n'] and x['variant'] == VARIANTS[0][0])
-        speedup[(r['n'], r['variant'])] = base['ms_per_step'] / r['ms_per_step']
-    return dict(ratio=ratio, n8_worst=max(n8) if n8 else None, n8_best=min(n8) if n8 else None, speedup=speedup)
 
 
 def cli():
@@ -106,10 +98,6 @@ def cli():
     ap.add_argument('--json')
     a = ap.parse_args()
     out = run(a.levels)
-    s = summary(out)
-    print('64/32-bit time ratio (L = 2):', ', '.join(f'n={n} ×{v:.2f}' for n, v in sorted(s['ratio'].items())))
-    for n in a.levels:
-        print(f'n={n} speed-up over direct launches, v1 order:', ', '.join(f'{v} ×{s["speedup"][(n, v)]:.2f}' for v, *_ in VARIANTS[1:]))
     if a.json:
         with open(a.json, 'w') as f:
             json.dump(out, f, indent=1)

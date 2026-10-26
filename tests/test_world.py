@@ -4,6 +4,7 @@ import cupy as cp
 import pytest
 
 from conftest import fmt
+from insilica import cases
 from insilica import grid as gridmod
 from insilica import runcache
 from insilica import world as worldmod
@@ -11,25 +12,54 @@ from insilica.gpu import dsum
 from insilica.world import World
 
 
-@pytest.mark.parametrize('n,days', [pytest.param(4, 5, marks=pytest.mark.xdist_group('grid4')),
+@pytest.mark.parametrize('n,days', [pytest.param(4, 15, marks=pytest.mark.xdist_group('grid4')),
                                     pytest.param(6, 1, marks=pytest.mark.xdist_group('grid6'))])
 def test_conserve(record, n, days):
-    """CONSERVE Williamson 5 + cosine bell: total volume Σh·A, layer mass ΣM and tracer ΣM·psi"""
-    w = World(n=n, preset='w5', params={'nu4': 1e14 * 16.0 ** (4 - n), 'drag': 1e-6})
+    """CONSERVE Budgets on two ocean layers over a ridge (the lower outcrops, with bottom stress): per-layer volume,
+    mass and tracer exact and thickness never below the floor; the exchange hook's budgets; and energy with no
+    dissipation at all on a balanced two-layer jet"""
+    w = World(n, 'outcrop')
     t0 = w.totals()
-    w.step(int(days * 86400 / w.dt))
+    low, steps = float(cp.min(w.h)), int(days * 86400 / w.dt)
+    for _ in range(steps):
+        w.step()
+        low = min(low, float(cp.min(w.h)))
     t1 = w.totals()
-    d = {k: (t1[k] - t0[k]) / t0[k] for k in t0}
-    ok = all(abs(v) <= 1e-13 for v in d.values())
-    record(f'CONSERVE n={n}', f'{w.tick} steps ({days} d): volume {fmt(d["volume"])}, M {fmt(d["M"])}, tracer {fmt(d["tracer"])}',
-           '|relative change| ≤ 1e-13', ok)
+    layer_keys = [k for k in t0 if k != 'momentum']
+    worst = max(abs((t1[k] - t0[k]) / t0[k]) for k in layer_keys)
+    finite = bool(cp.all(cp.isfinite(w.h)) and cp.all(cp.isfinite(w.u)))
+    floor_ok = low >= 1.0 - 1e-9
+    # exchange: move ±(up to 40% of the donor above the floor) between the layers, then check every budget
+    rng = np.random.default_rng(n)
+    hh = w.h.get()
+    up, down = 0.4 * (hh[1] - 1.0), 0.4 * (hh[0] - 1.0)
+    wx = np.where(rng.random(w.grid.N) < 0.5, up, -down) * rng.random(w.grid.N)
+    x0 = w.totals()
+    w.exchange(wx[None])
+    x1 = w.totals()
+    xch = {'volume': abs((x1['volume0'] + x1['volume1']) - (x0['volume0'] + x0['volume1'])) / (x0['volume0'] + x0['volume1']),
+           'tracer': abs((x1['tracer0'] + x1['tracer1']) - (x0['tracer0'] + x0['tracer1'])) / (x0['tracer0'] + x0['tracer1']),
+           'momentum': abs(x1['momentum'] - x0['momentum']) / abs(x0['momentum']),
+           'M = h·A': max(float(cp.max(cp.abs(w.M[k] / cp.asarray(w.grid.areaCell) - w.h[k])) / cp.max(w.h[k])) for k in range(2))}
+    moved = float(np.sum(np.abs(wx) * w.grid.areaCell) / x0['volume1'])
+    # energy, no dissipation: the subcritical two-layer jet (BAROCLINIC's 0.3× case, unperturbed)
+    h, b, u, gp, hb = cases.phillips(w.grid, 0.3)
+    j = World(n, 'phillips', params={'gprime': [gp], 'visc4_U': 0.0}, state=(hb, b, u))
+    e0 = j.energy()
+    j.step(int(days * 86400 / j.dt))
+    drift = (j.energy() - e0) / e0
+    ok = worst <= 1e-13 and floor_ok and finite and max(xch.values()) <= 1e-13 and abs(drift) < 1e-4
+    record(f'CONSERVE n={n}', f'outcrop {steps} steps ({days} d): per-layer volume, mass, tracer worst {fmt(worst)}; thinnest layer {low:.3f} m; '
+           f'exchange of {moved:.1%} of the lower layer: ' + ', '.join(f'{k} {fmt(v)}' for k, v in xch.items())
+           + f'; two-layer jet energy drift, no dissipation, {days} d: {fmt(drift)}',
+           '≤ 1e-13; ≥ floor (1 m); exchange ≤ 1e-13; energy drift < 1e-4', ok)
     assert ok
 
 
 @pytest.mark.xdist_group('grid4')
 def test_repro(record, tmp_path, monkeypatch):
     """REPRO Bit-reproducibility: repeat runs, graph vs direct, save/load, spin-up cache, layers; numbering independence"""
-    P = {'nu4': 1e14, 'drag': 1e-6}
+    P = {'visc4_U': 20.0, 'drag': 1e-6}
     out, ok = [], True
 
     # 1. Identical runs, and the CUDA-graph tick against direct ticks; repeated tree sums
@@ -61,13 +91,15 @@ def test_repro(record, tmp_path, monkeypatch):
     ok &= cache_ok
     out.append(f'spin-up cache {"miss→hit, identical" if cache_ok else "WRONG"}')
 
-    # 4. Layers: two identical layers stay bit-identical to each other and to a one-layer run
-    w2 = World(n=4, preset='galewsky', layers=2, params=P).step(100)
-    w1 = World(n=4, preset='galewsky', layers=1, params=P).step(100)
-    lay = all(getattr(w2, k)[0].get().tobytes() == getattr(w2, k)[1].get().tobytes() == getattr(w1, k)[0].get().tobytes()
-              for k in World.STATE)
+    # 4. Layers: a one-layer case split into two equal layers with g' = 0 moves exactly as one layer
+    w2 = World(4, 'galewsky', layers=2, params=dict(P)).step(100)
+    w1 = World(4, 'galewsky', params=dict(P)).step(100)
+    hb, ub, pb = w2.h.get(), w2.u.get(), w2.psi.get()
+    lay = (hb[0].tobytes() == hb[1].tobytes() and ub[0].tobytes() == ub[1].tobytes() and pb[0].tobytes() == pb[1].tobytes()
+           and (2 * hb[0]).tobytes() == w1.h.get()[0].tobytes() and ub[0].tobytes() == w1.u.get()[0].tobytes()
+           and pb[0].tobytes() == w1.psi.get()[0].tobytes())
     ok &= lay
-    out.append(f'2 layers = 1 layer {"bit for bit" if lay else "DIFFER"}')
+    out.append(f'2 equal layers = 1 layer {"bit for bit" if lay else "DIFFER"}')
 
     # 5. Numbering: the Hilbert-ordered grid against v1's numbering, 960 steps (Williamson 5 + bell, FCT3)
     h = World(n=4, preset='w5', params=P)

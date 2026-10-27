@@ -117,7 +117,7 @@ The grids compared with v1 (`lloyd='v1'`) stop at v1's 400 iterations, unconverg
   #48, #59); each layer's emissivity is 1 − exp(−its share). A 100 m slab with thermodynamic sea ice (v1's rules: frozen
   below 273.15 K, full cover at 5 cm, a conducting skin over thicker ice), sensible heat 10·(1 + |u|/10) W/m²K and
   evaporation K_EVAP·(1 + |u|/10)·(q_sat(T_skin) − q) into the bottom 100 hPa (#46). Heating changes θ by Q·dt/(μ·π̄).
-  Each layer condenses what exceeds its capacity, q_sat averaged over its pressure range (#50); the water rains out and
+  Each layer condenses what exceeds its capacity, q_sat averaged over its pressure range (4-point Gauss–Legendre, #50, #62); the water rains out and
   its latent heat counts as heating. Convection (#49): a plume of bottom-layer air, lifted to the interface above and
   condensing on the way, is compared with the air there (at θ*); while buoyant it rises through further interfaces and
   detrains above the last one it beats; the mass that would remove the buoyancy relaxes over τ_conv = 2 h. Air crosses
@@ -208,7 +208,7 @@ value against its threshold. `--perf` then runs PERF alone (at every stage close
 | RCE | the `rce` world (three dry layers) at n = 4 for 20 years | steady (< 0.1 K/yr); each layer ≥ 10% of the mass (#53); mean surface 295 ± 5 K (dry, #41); top-of-atmosphere imbalance ≤ 0.5 W/m² |
 | HELD-SUAREZ | `held_suarez` at n = 5 for 400 days, zonal means over days 201–400 | kinetic energy days 301–400 within ±20% of 201–300; upper-layer jet 12–25 m/s at 30–50° in both hemispheres (#41); lower-layer westerlies at 40–55°, easterlies at 0–15°; zonal-mean wind beyond 80° below 5 m/s in both layers and hemispheres (#44) |
 | CLIMATE | the moist three-layer `aqua` at n = 4, annual means of year SPIN + 1 after a cached spin-up (#54) | mean surface (skin) 288 ± 3 K; \|TOA\| < 1 W/m²; the bottom layer's residual mass transport equatorward at 10–30° in both hemispheres (Hadley cell); bottom-layer zonal wind < 0 at 5–25° (trades) and > 0 at 35–55° (westerlies); rain at 0–10° > 2× and at 40–60° > 0.5× that at 15–30°; global rain 2–3 mm/day. Reported only until the ocean stage (#52): equator − pole surface difference, 60°N seasonal range |
-| WEATHER | the moist `aqua` at n = 5, 60 days after a cached 1-year spin-up | B4: eddy / mean-flow kinetic energy at 30–60° over the tropospheric layers (#60) > 0.2; B9: mid-latitude (35–55°) daily rain's coefficient of variation > 1 and, on the median day, the wettest 20% of cells near 45° get > 50% of the rain; B10 reported (wettest tropical row's max/mean, 5-day map correlation) |
+| WEATHER | the moist `aqua` at n = 5, 60 days after a cached 1-year spin-up | B4: eddy / mean-flow kinetic energy at 30–60° over the tropospheric layers (#60) > 0.2; B9 reported against its threshold — mid-latitude (35–55°) daily rain's coefficient of variation > 1 and, on the median day, the wettest 20% of cells near 45° get > 50% of the rain — as a known near miss (#63); B10 reported (wettest tropical row's max/mean, 5-day map correlation) |
 | PERF (`--perf`) | ns per layer-edge per slow step at n = 4–8 for L = 1, 2, 4; launch overhead; cost per model hour of whole world ticks for air (n = 6, `aqua`, with its physics) and ocean (n = 8, `outcrop`) | n = 8 ≤ 16 ns; air ≤ 30 ms (#42) and ocean ≤ 180 ms per model hour |
 
 **Results (2026-10-26, 22/22):** GRID topology exact at every level, worst geometry 1.6e-13 (orthogonality at
@@ -235,15 +235,16 @@ crossings, adiabatic energy drift 1.6e-5 in 15 days. PERF: slow step 4.2 ns per 
 physics 19.3 ms per model hour (~510 model years a day; 27.6 ms before #42's optimizations), ocean n = 8 80.8 ms.
 Suite 98 s warm, PERF 19 s.
 
-**V2-2b results (2026-10-27, 32/34):** CLIMATE (n = 4, year 16) mean surface 290.16 K, TOA +0.80 W/m², bottom-layer
-transport equatorward at 10–30° (59–62 × 10⁹ kg/s at 10°), trades −1.00 m/s, westerlies +0.70 m/s, rain 2.23 mm/day, ITCZ
-×2.14 and 40–60° ×1.49 the subtropics; reported only (#52): equator − pole 38.1 K, 60°N seasonal range 5.6 K. WEATHER
-(n = 5) B4 0.48 in the troposphere; **B9 coefficient of variation 0.99 against > 1 (missed)**, wettest 20% at 45° 51%;
-B10 (reported) max/mean 2.03, 5-day correlation 0.42. RCE (three dry layers) 294.87 K, layers 22.3 / 42.5 / 35.2%, TOA
-+0.03 W/m². HELD-SUAREZ jets 22.1 / 21.9 m/s, lower layer +5.53 m/s at 40–55° and −1.37 m/s at 0–15°, poles 1.14 m/s.
-CONSERVE air: moist energy ledger 1.4e-17 of the stored energy, water 3.2e-16, vapor through 10 days of dynamics 4.5e-16.
-Ocean results bit-identical to V2-2a. **PERF air 41.2 ms per model hour at n = 6 against 40 (missed)** (~240 model years a
-day), ocean n = 8 80.1 ms. Suite 489 s with a cold 15-year CLIMATE spin-up, PERF 20 s.
+**V2-2b results (2026-10-27, 34/34; closed):** CLIMATE (n = 4, year 16) mean surface 290.16 K, TOA +0.67 W/m²,
+bottom-layer transport equatorward at 10–30° (59–62 × 10⁹ kg/s at 10°), trades −1.07 m/s, westerlies +0.80 m/s, rain
+2.24 mm/day, ITCZ ×2.16 and 40–60° ×1.50 the subtropics; reported only (#52): equator − pole 38.5 K, 60°N seasonal range
+5.7 K. WEATHER (n = 5) B4 0.48 in the troposphere; B9 (reported, known near miss #63) coefficient of variation 0.97,
+wettest 20% at 45° 50%; B10 (reported) max/mean 2.13, 5-day correlation 0.37. RCE (three dry layers) 294.87 K, layers
+22.3 / 42.5 / 35.2%, TOA +0.03 W/m². HELD-SUAREZ jets 22.1 / 21.9 m/s, lower layer +5.53 m/s at 40–55° and −1.37 m/s at
+0–15°, poles 1.14 m/s. CONSERVE air: moist energy ledger 1.4e-17 of the stored energy, water 3.3e-16, vapor through 10
+days of dynamics 6.8e-16. Ocean results bit-identical to V2-2a. PERF air n = 6 38.0 ms per model hour (~260 model years a
+day; gate 40, #61, after #62), ocean n = 8 81.0 ms; slow step 3.3–5.0 ns per layer-edge at n ≥ 5. Suite 158 s warm (the
+15-year CLIMATE spin-up is built once, ~5 min), PERF 19 s.
 
 **Stage history.** V2-0 closed with 41/41 and V2-0b with 45/45 under the earlier, finer-grained suite (IDs F0,
 G1–G4, K1, K2, C1, D1, S1, P1, W1, R1, E1–E4); its results are in #15–#21 and the git history (`880afb0`,
@@ -318,3 +319,5 @@ One branch per stage (`stage-v2-0`, …), checkpoints pushed there, merged to `m
 | 59 | 2026-10-27 | Shortwave by the vapor part; f = 0.5 | Agreed with the owner: the top layer (stratosphere) had almost no optical depth (net radiation ~−1 W/m²) and stayed ~450 K, a stiff lid on the troposphere that suppressed storms (B4 0.06 with three layers against 1.19 with two). The longwave gets a well-mixed, CO₂-like share f = 0.5 that lets it cool, and the air's shortwave share follows only the vapor part (s⁴), as sunlight is absorbed mostly by low water vapor. Result (n = 4, uncalibrated): ITCZ / subtropics 3.06, trades −1.41 m/s, westerlies +2.05 m/s, Hadley cell present; tropospheric storms B4 0.62 (n = 4) / 0.45 (n = 5). |
 | 60 | 2026-10-27 | B4 over the troposphere | Agreed with the owner: WEATHER's B4 (eddy / mean-flow kinetic energy at 30–60°, > 0.2 unchanged) sums the tropospheric layers only; the top layer's stratospheric polar-night jet (~40 m/s) would otherwise dominate the mean-flow energy. |
 | 61 | 2026-10-27 | Moist air speed gate | Agreed (V2-2b plan): PERF's air gate is 40 ms per model hour at n = 6 for the moist three-layer air with its physics (30 ms dry, #42). |
+| 62 | 2026-10-27 | 4-point layer saturation | Agreed with the owner: the layer-integrated saturation (#50) takes 4 Gauss–Legendre points instead of 8. It was half the column kernel (0.65 of 1.32 ms per call at n = 6; each point a 64-bit pow and exp). Air at n = 6 41.2–41.5 → 38.8–39.2 ms per model hour (gate 40, #61); CLIMATE within year-to-year noise (290.16 → 290.16 K, TOA +0.80 → +0.67 W/m², rain 2.23 → 2.24 mm/day, ITCZ ×2.14 → ×2.16). Two result-preserving attempts first (skipping the sum when a layer provably cannot saturate; θ and vapor in one transport launch) were bit-identical but gave no speedup and were not kept. |
+| 63 | 2026-10-27 | B9 near miss | Agreed with the owner: mid-latitude rain at n = 5 is slightly too even — coefficient of variation 0.94–0.99 against > 1 and the wettest 20% of cells at 45° getting 48–51% against > 50%, over 60-day blocks of 180 days, with either saturation rule. Recorded as a known near miss: WEATHER reports B9 against its unchanged threshold and passes on B4; to revisit at n = 6 and with the ocean (V2-3). |

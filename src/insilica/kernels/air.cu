@@ -66,16 +66,14 @@ __device__ real condense(real& th, real& q, real pib, real p, const Par& P) {
 }
 
 // Saturation adjustment of a layer of uniform theta spanning pressures [pt, pb] (Pa), against the layer's capacity: q_sat
-// averaged over its pressure range (8-point Gauss-Legendre; temperatures below 160 K hold no vapor worth counting), so
+// averaged over its pressure range (4-point Gauss-Legendre; temperatures below 160 K hold no vapor worth counting), so
 // a deep layer's warm bottom counts, as it does when its relative humidity is uniform with height. One Newton step with
 // d(q_sat)/d(theta) from Clausius-Clapeyron at each node. Updates theta and q; returns the condensate (kg/kg).
 __device__ real condense_layer(real& th, real& q, real pib, real pt, real pb, const Par& P) {
-  const real x[8] = {-0.9602898564975363, -0.7966664774136267, -0.5255324099163290, -0.1834346424956498,
-                     0.1834346424956498, 0.5255324099163290, 0.7966664774136267, 0.9602898564975363};
-  const real wq[8] = {0.1012285362903763, 0.2223810344533745, 0.3137066458778873, 0.3626837833783620,
-                      0.3626837833783620, 0.3137066458778873, 0.2223810344533745, 0.1012285362903763};
+  const real x[4] = {-0.8611363115940526, -0.3399810435848563, 0.3399810435848563, 0.8611363115940526};
+  const real wq[4] = {0.3478548451374538, 0.6521451548625461, 0.6521451548625461, 0.3478548451374538};
   real qs = 0, dqs = 0;
-  for (int j = 0; j < 8; j++) {
+  for (int j = 0; j < 4; j++) {
     const real p = (real)0.5 * (pt + pb) + (real)0.5 * (pb - pt) * x[j];
     const real ex = pow(p / P.p0, P.kappa), T = th * ex;
     if (T < 160) continue;

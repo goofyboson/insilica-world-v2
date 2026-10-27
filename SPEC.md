@@ -15,7 +15,8 @@ for the physics still to be ported.
 | `src/insilica/grid/__init__.py` | `Grid`, `get(n, order, lloyd)` with the disk cache `cache/grids/n{n}-{order}-{lloyd}-g{GRID_VERSION}.npz` (#31) |
 | `src/insilica/kernels/*.cu` | CUDA C kernels (ASCII only), compiled at run time by NVRTC through CuPy: `layers.cu` (the layered core), `fused.cu` (one-layer TRiSK and FCT transport), `trisk.cu` (the ∇⁴ operator, `mass_update`, `block_sum`) |
 | `src/insilica/gpu.py` | kernel loading, `DeviceGrid`, deterministic sums `dsum` |
-| `src/insilica/layers.py` | the layered core: stacked layers, time-split RK3 with the fast mode sub-stepped, floor, exchange hook (§3) |
+| `src/insilica/layers.py` | the layered core: stacked layers (Boussinesq or air), time-split RK3 with the fast mode sub-stepped, floor, exchange hook, interfacial stress (§3) |
+| `src/insilica/atmosphere.py`, `kernels/air.cu` | the air's column physics: v1's radiation, slab surface, sensible heat, heating as θ, the θ* crossing; Held–Suarez forcing (§3) |
 | `src/insilica/swe.py`, `transport.py` | v1's one-layer shallow water (kept for V1-ENGINE) and FCT tracer transport (ports of v1 `makeSolver`, `transportStep`), fused kernels |
 | `src/insilica/cases.py` | initial states: single-layer benchmarks and the layered cases, with their settings (`PRESETS`) |
 | `src/insilica/world.py` | the world: a case on the layered core with tracers; stepping, fields, save/load (§4) |
@@ -95,8 +96,26 @@ The grids compared with v1 (`lloyd='v1'`) stop at v1's 400 iterations, unconverg
   limiting fluxes adds no mass.
 - **Exchange** (#27): `Layers.exchange` moves thickness across interfaces with its tracer and momentum (upwind),
   conserving every total; the hook convection, entrainment and overturning will use.
-- A world tick (layer step + transport) allocates nothing and is captured once as a CUDA graph, then replayed with one
-  launch per tick (#18).
+- **Air layers** (V2-2a, #32): h_k is the layer's mass per area (kg/m²) and each layer carries a mean potential
+  temperature θ_k (transported like a tracer). Hydrostatics from p = 0 at the top gives M_{L−1} = g·b + θ_{L−1}·π(p_s)
+  and M_k = M_{k+1} + (θ_k − θ_{k+1})·π(p_k) (π = c_p (p/p₀)^κ); the pressure force is −∇M_k + π̄_k∇θ_k (π̄ the
+  layer's mass-mean Exner function). The fast mode runs on the column mass with each cell's own coefficient
+  Gc = R·T_s/μ, recomputed at every step (#37). Bottom friction is a stress c/h integrated exactly over each stage
+  (#36); layers are coupled by an interfacial stress τ = c·(u_k − u_{k+1}), solved exactly each step, its kinetic
+  energy returned as heat (#39); the potential-vorticity flux caps a neighbour's thickness at 2× the edge's own at
+  outcrop fronts (#38).
+- **Air column physics** (`atmosphere.AirPhysics`, #33–#35, #40): v1's shortwave (20% absorbed in the air at a full
+  column, split by mass; ocean albedo 0.06), gray two-layer longwave (optical depth TAU0 = 1.4 split by mass with
+  weights 1.4 / 0.6 for the lower / upper layer), a 100 m slab, sensible heat 10·(1 + |u|/10) W/m²K into the bottom
+  100 hPa; heating changes θ by Q·dt/(μ·π̄). Air crosses θ* only when heated or cooled across it: the convectively mixed
+  lower layer by its own mean heating, the stratified upper layer by the heating of its air at θ*; the mass crossing is
+  μ·|Δθ| / (2·|θ* − θ̄|), carrying θ*; a layer wholly beyond θ* crosses down to its floor, and floor air is kept on its
+  own side of θ*. Energy is exact: the crossing's rounding-level enthalpy residual is booked to the receiving layer.
+  Held–Suarez (1994) is the same with Newtonian relaxation of each layer toward the equilibrium θ at its mass-mean
+  pressure (the interface's heating from the formula at the interface) and HS friction as the bottom stress
+  c = k_f·0.15·μ_ref.
+- A world tick (layer step + transport + column physics + crossings) allocates nothing and is captured once as a CUDA
+  graph, then replayed with one launch per tick (#18); the sun's time is a device scalar advanced inside it.
 
 ## 4. The world
 
@@ -109,6 +128,9 @@ in every layer). A tick is one layer step plus one FCT step with its fluxes. Pre
 | `w2`, `w5`, `rh4`, `galewsky` | 1 | 450 s · 2^(4−n) (rh4 300 s) | Williamson 2, 5, 6 and the Galewsky jet |
 | `phillips` | 2 | 1200 s · 2^(5−n) | a balanced jet at 45°N over a lower layer at rest, 3× the critical shear: baroclinic instability |
 | `outcrop` | 2 | 1 h | two ocean layers flowing over a ridge where the lower layer thins to the floor; bottom stress 2.5e-4 m/s |
+| `aqua` | 2 air | 900 s · 2^(5−n) | two air layers at rest over a slab aquaplanet with v1's sun (diurnal and seasonal), θ* = 300 K |
+| `rce` | 2 air | 1 h | the same with the annual-mean sun and no dynamics: radiative–convective equilibrium |
+| `held_suarez` | 2 air | 900 s · 2^(5−n) | Held & Suarez's forcing from a uniform start; θ* = the area-mean equilibrium θ at 500 hPa (299.6 K) |
 
 `params` overrides a case's settings: `dt`, `gprime`, `floor`, `drag`, `stress`, `nu4` or `visc4_U`, `rotation`,
 `beta`, `div_damp`, `nfast` (fast sub-steps per step; by default 1.2 × what √(gH) of the deepest column needs, then
@@ -162,10 +184,12 @@ value against its threshold. `--perf` then runs PERF alone (at every stage close
 | ACCURACY | through the layered core: N1 Williamson 2, 5 days at n = 4, 5, 6; W5, 15 days at n = 4; W6 Rossby–Haurwitz, 7 days at n = 4 (v1 N4's phase fit); Galewsky at n = 5 and 6 against an unperturbed twin (v1 N3's metric); Williamson 2 for 30 days at n = 5 (v1 N5); N6 cosine bell at n = 4; Perot rebuild of solid-body rotation at n = 4, 5, 6 | N1 < 1e-3 at n = 4, falls ≥ ×3 per level; W5 energy drift < 1e-4; W6 phase speed within ±10%; Galewsky day 6 > 0.3, growth > ×20, max |u| < 200; 30-day wind error < 1 m/s; N6 ≥ 2× better, min > −1e-9, drift < 1e-12; Perot max ≥ ×1.8, rms ≥ ×3.5 per level |
 | WAVES | at n = 5 with long steps (fast mode sub-stepped): an external wave in air (300 m/s, 30-min steps) and ocean (200 m/s, 1-h steps), and a two-layer internal wave against the exact free-surface speed | external within 2%, internal within 3% |
 | BAROCLINIC | Phillips two-layer instability at n = 6: a balanced jet at 45°N over a lower layer at rest, at 3× and 0.3× the critical shear 2βL_d², disturbance energy against an unperturbed twin from day 1 to day 20 | ≥ ×100 at 3×; ≤ ×2 at 0.3× |
-| CONSERVE (n = 4, 6) | the outcrop case (15 days at n = 4, 1 day at n = 6): each layer's volume, mass and tracer, the thinnest layer; then an exchange of up to 40% of each donor: volume, tracer, momentum and M = h·A; and energy on the subcritical two-layer jet with no dissipation at all | ≤ 1e-13; never below the floor; exchange ≤ 1e-13; energy drift < 1e-4 |
+| CONSERVE (n = 4, 6) | for air (n = 4): the column ledger every step (absorbed sunlight − OLR = the change in enthalpy and slab heat), air mass and tracer through 10 days of `aqua`, and adiabatic air energy with the interfacial stress's heat booked; and the outcrop case (15 days at n = 4, 1 day at n = 6): each layer's volume, mass and tracer, the thinnest layer; then an exchange of up to 40% of each donor: volume, tracer, momentum and M = h·A; and energy on the subcritical two-layer jet with no dissipation at all | ≤ 1e-13; never below the floor; exchange ≤ 1e-13; energy drift < 1e-4 |
 | REPRO | repeat runs, graph against direct ticks and repeated tree sums; save → load → save bytes and save-at-T + continue against a straight run; spin-up cache miss then hit; a one-layer case split into two equal layers with g' = 0 against itself and the one-layer run; the Hilbert-ordered grid against v1's numbering after 960 steps | bit-identical; numbering ≤ 1e-12 |
 | VIEWER | the protocol with a Python client: grid, exact f8 bytes, f4 bytes, step +1/+5, play pushes, pause holds, error reply, page and three.js served | all correct |
-| PERF (`--perf`) | ns per layer-edge per slow step at n = 4–8 for L = 1, 2, 4; launch overhead; cost per model hour of whole world ticks for air (n = 6, `phillips`) and ocean (n = 8, `outcrop`) | n = 8 ≤ 16 ns; air ≤ 15 ms and ocean ≤ 180 ms per model hour (the plan's §5 estimates) |
+| RCE | the `rce` world at n = 4 for 20 years | steady (< 0.1 K/yr); each layer ≥ 20% of the mass; mean surface 295 ± 5 K (dry, #41); top-of-atmosphere imbalance ≤ 0.5 W/m² |
+| HELD-SUAREZ | `held_suarez` at n = 5 for 400 days, zonal means over days 201–400 | kinetic energy days 301–400 within ±20% of 201–300; upper-layer jet 12–25 m/s at 30–50° in both hemispheres (#41); lower-layer westerlies at 40–55°, easterlies at 0–15° |
+| PERF (`--perf`) | ns per layer-edge per slow step at n = 4–8 for L = 1, 2, 4; launch overhead; cost per model hour of whole world ticks for air (n = 6, `aqua`, with its physics) and ocean (n = 8, `outcrop`) | n = 8 ≤ 16 ns; air ≤ 30 ms (#42) and ocean ≤ 180 ms per model hour |
 
 **Results (2026-10-26, 22/22):** GRID topology exact at every level, worst geometry 1.6e-13 (orthogonality at
 n = 8), area ratio 1.33 at n = 4, cache identical. V1-GRID 1.2e-14 / 5.3e-14 / 2.3e-13 / 1.29e-12 against
@@ -182,6 +206,14 @@ sub-steps per 30-min step), ocean 200.9 vs 200 (+0.43%, 10 per hour), internal 3
 exchange ≤ 3.9e-16, energy drift with no dissipation 3.8e-10 (15 d). REPRO all bit-identical, numbering 1.5e-14.
 VIEWER correct. PERF slow step 5.0 ns per layer-edge at n = 8 (gate 16); air n = 6 11.1 ms and ocean n = 8 79 ms per
 model hour (gates 15 and 180). Suite 46 s warm with 5 processes, PERF 19 s.
+
+**V2-2a results (2026-10-26, 32/32; closed):** RCE (n = 4, 20 years) mean surface 294.8 K (equator 309, poles 258), last
+year +0.003 K, layers 78.5% / 21.5%, TOA +0.03 W/m². HELD-SUAREZ (n = 5, days 201–400) upper-layer jet 17.0 / 17.0 m/s,
+lower layer +3.4 m/s at 40–55° and −0.60 m/s at 0–15°, kinetic energy steady (×0.99), lower layer 20.8% of the mass.
+CONSERVE air: column ledger 5.8e-17 of the stored energy, air mass exact and tracer 3.8e-16 over 10 days with
+crossings, adiabatic energy drift 1.6e-5 in 15 days. PERF: slow step 4.2 ns per layer-edge at n = 8; air n = 6 with
+physics 19.3 ms per model hour (~510 model years a day; 27.6 ms before #42's optimizations), ocean n = 8 80.8 ms.
+Suite 98 s warm, PERF 19 s.
 
 **Stage history.** V2-0 closed with 41/41 and V2-0b with 45/45 under the earlier, finer-grained suite (IDs F0,
 G1–G4, K1, K2, C1, D1, S1, P1, W1, R1, E1–E4); its results are in #15–#21 and the git history (`880afb0`,
@@ -226,3 +258,14 @@ One branch per stage (`stage-v2-0`, …), checkpoints pushed there, merged to `m
 | 29 | 2026-10-26 | Bottom stress | A layer thinning to the floor over a ridge ran away (its wind 16 → 111 m/s in three days, then NaN), with or without ∇⁴ and at shorter steps: a fixed-rate drag cannot hold a nearly massless layer. Bottom friction now acts as a stress, decelerating a layer as c/h (the physical form; c = 2.5e-4 m/s, ocean-typical, on the outcrop case's lower layer): 30 days stable, the thin layer's fastest wind under 4.3 m/s. CONSERVE's energy check moved to a case with no dissipation (the subcritical jet), since the outcrop case now dissipates by design. Agreed with the owner. |
 | 30 | 2026-10-26 | Mesh smoothing | ACCURACY N1's convergence (×2.94 from n = 5 to 6, threshold ×3) is limited by the mesh: with v1's rule the Lloyd iteration stops at 400 iterations, unconverged from n = 5 up (area max/min 1.42 / 1.54 / 1.69 / 1.79 at n = 5–8). Iterated to its 1e-11 tolerance, N1 falls ×3.80 then ×3.08 (the n = 6 mesh after 4,000 iterations). Measured cost to the tolerance, once per level (grids are cached): n = 6 5,412 iterations, 106 s; n = 7 19,497, 388 s; n = 8 not reached after 18,000 iterations (979 s, last move 5e-8), about 55,000 (~50 min) projected. Proposal: iterate to the tolerance at every level for the engine's grids, keeping v1's 400-iteration rule only for the grids V1-GRID and V1-ENGINE compare with v1. Agreed with the owner: `grid.get(n, lloyd='converged')` (default, cap 200,000) or `lloyd='v1'`; a renumbered grid starts from the cached v1-numbered one, so Lloyd runs once per level. |
 | 31 | 2026-10-26 | Grid cache key | Agreed with the owner: grids are cached under a hand-maintained `GRID_VERSION` (now 1) instead of a hash of the generator's source, so a comment or refactor no longer forces a rebuild (n = 8 smoothed to tolerance takes about an hour). Bump it whenever a change alters the grids' numbers; GRID's n = 4 check (a fresh build equals the cached copy bit for bit) catches a forgotten bump. |
+| 32 | 2026-10-26 | Air layers | Agreed with the owner (V2-2a plan): two air layers on the layered core, each with its mass per area and a mean potential temperature that varies horizontally; the pressure force −∇M + π̄∇θ from hydrostatics (§3). |
+| 33 | 2026-10-26 | Air physics | Agreed: v1's gray radiation ported as is (optical depth split by mass, 1.4 / 0.6 weights for the lower / upper layer so an even split gives v1's 0.7 / 0.3), a 100 m slab aquaplanet, sensible heat into the bottom 100 hPa. |
+| 34 | 2026-10-26 | Crossing θ* | Physics alone moves air across θ*: mass crossing = μ·|Δθ|/(2|θ* − θ̄|) from heating or cooling across it; a layer wholly beyond θ* crosses to its floor; floor air stays on its side of θ* (its excess heat moves to the other layer, enthalpy for enthalpy). Energy exact. |
+| 35 | 2026-10-26 | Held–Suarez | Two-layer Held & Suarez: relaxation toward the equilibrium θ at each layer's mass-mean pressure with the HS rates averaged over the layer's σ range; HS friction as the lower layer's bottom stress; started as HS's protocol starts (uniform, at rest), since the equilibrium gradient at rest swung the interface by hundreds of hPa. |
+| 36 | 2026-10-26 | Stress over a stage | The bottom stress c/h is integrated as exact exponential decay over each RK3 stage (effective rate (1 − e^(−r·Δt))/Δt): explicitly, a layer at its floor (rate 3.2 per step) blew up. |
+| 37 | 2026-10-26 | Fast mode for air | The fast mode's coefficient is each cell's own R·T_s/μ, recomputed every step: one coefficient from a reference temperature left a part of the external wave in the slow step that had the wrong sign in cold columns and grew a grid-scale checkerboard in surface pressure. |
+| 38 | 2026-10-26 | Thin-layer PV flux | In the potential-vorticity flux a neighbour's thickness counts for at most 2× the edge's own: at outcrop fronts a floor-thin vertex's q times a thick neighbour's flux amplified the Coriolis force on the thin layer 50–80×. Smooth layers never reach the cap. |
+| 39 | 2026-10-26 | Interfacial stress | Agreed with the owner (option 1, before any hybrid layer): turbulent momentum exchange between the layers, τ = 0.01·(u_k − u_{k+1}) kg/m²/s, decelerating each layer as τ/h, solved exactly each step (column momentum exact), its kinetic energy returned as heat in proportion to mass. A full layer feels it over ~6 days; a layer at its floor is locked to the one above within minutes. With it, layers thinned to the ground by eddies stay stable. |
+| 40 | 2026-10-26 | Crossing by the heating at θ* | The stratified upper layer crosses down by the heating of its air at θ*, not its layer-mean heating: in Held–Suarez the polar upper layer (0–500 hPa) is heated on average (its stratosphere) while its air near θ* is cooled, so mass never came down and the lower layer drained (2,400 → 182 kg/m² in 120 days, v1's old failure). With the rule it settles at 21% of the mass. Gray radiation gives only layer means, so the radiative case keeps them. |
+| 41 | 2026-10-26 | Air step, RCE and HS thresholds | Agreed with the owner: the air's slow step is 15 minutes at n = 5 (900 s · 2^(5−n)); at 30 minutes Held–Suarez failed near day 38 once winds reached 50–80 m/s. RCE is judged against a dry planet, mean surface 295 ± 5 K (v1's 288 ± 3 K was moist, with evaporative cooling). HELD-SUAREZ's upper-jet bound is 12–25 m/s for the layer mean: the upper layer spans ~0–790 hPa, over which HS's 30 m/s peak at 250 hPa averages ~15–20 m/s. θ* is 300 K for the aquaplanet and the HS 500 hPa mean (299.6 K) for Held–Suarez; the rule "half the mass below θ*" put it near 400 K, not Earth-like. |
+| 42 | 2026-10-26 | Air speed | Agreed with the owner: PERF's air gate is 30 ms per model hour at n = 6 with the air physics and the approved 15-minute-at-n = 5 step (the 15 ms estimate was for dynamics alone at 12-minute steps). Optimized as well: the Exner function from one pow per interface (64-bit pow runs at 1/64 speed on this card; the air pressure term 184 → 79 µs), each edge's thickness and PV computed once per stage instead of per neighbour (identical arithmetic; the momentum tendency 247 → ~150 µs), and the demo tracer's transport off in the air presets (`tracer=False`; CONSERVE turns it on). The air tick went from 27.6 to 19.3 ms per model hour; the generic slow step from 4.55 to 4.18 ns per layer-edge at n = 8. |

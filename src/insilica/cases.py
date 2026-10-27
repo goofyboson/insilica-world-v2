@@ -194,3 +194,50 @@ PRESETS = {
                      visc4_U=20.0),
     'outcrop': dict(build=lambda g: outcrop(g), gprime=0.02, dt=lambda n: 3600.0, stress=[0.0, 2.5e-4], visc4_U=0.5),
 }
+
+
+# ---- Air (stage V2-2a) ----
+MU_REF = 1.0e5 / GRAV                       # kg/m², the column mass of 1000 hPa
+
+
+def aqua(g):
+    """Two air layers at rest over a slab aquaplanet: an even mass split, the lower layer's θ warm at the equator,
+    the upper layer's uniform, and v1's starting surface temperature 288 − 40 (sin²φ − 1/3) K."""
+    s2 = np.sin(g.lat) ** 2
+    h = np.full((2, g.N), MU_REF / 2)
+    theta = np.stack([np.full(g.N, 320.0), 290.0 - 30.0 * s2])
+    Ts = 288.0 - 40.0 * (s2 - 1.0 / 3.0)
+    return h, np.zeros(g.N), np.zeros((2, g.E)), dict(theta=theta, Ts=Ts)
+
+
+AIR = dict(t_ref=288.0)
+PRESETS['aqua'] = dict(build=aqua, dt=lambda n: 900.0 * 2.0 ** (5 - n), visc4_U=15.0, stress=[0.0, 0.05], vmix=0.01, tracer=False, air=AIR)
+PRESETS['rce'] = dict(build=aqua, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True), dynamics=False)
+
+
+def held_suarez(g, seed=1):
+    """Held & Suarez (1994) in two air layers, started as their protocol starts: at rest and horizontally uniform (each
+    layer at the area-mean equilibrium θ of its mass-mean pressure, the lower capped 1 K below θ*), with 0.1 K of
+    seeded noise; the relaxation then builds the pole-to-equator gradient over weeks. (Starting from the equilibrium
+    gradient itself at rest is far from balance: the adjustment swings the interface by hundreds of hPa.)"""
+    from .atmosphere import held_suarez_theta
+    h = np.full((2, g.N), MU_REF / 2)
+    A = g.areaCell / np.sum(g.areaCell)
+    p_mean = [0.25e5, 0.75e5]                                    # mass-mean pressures of the two halves (Pa), close enough
+    rng = np.random.default_rng(seed)
+    means = [float(np.sum(A * held_suarez_theta(p, g.lat))) for p in p_mean]
+    means[1] = min(means[1], held_suarez_theta_star(g) - 1.0)
+    theta = np.stack([np.full(g.N, m) for m in means]) + 0.1 * rng.standard_normal((2, g.N))
+    return h, np.zeros(g.N), np.zeros((2, g.E)), dict(theta=theta, Ts=np.zeros(g.N))
+
+
+def held_suarez_theta_star(g):
+    from .atmosphere import held_suarez_theta
+    return float(np.sum(g.areaCell * held_suarez_theta(0.5e5, g.lat)) / np.sum(g.areaCell))
+
+
+# HS friction k_f = 1/day over sigma > 0.7, ramping from 0 to 1 at the ground: its column integral is k_f·0.15·M, the
+# bottom stress c of the lower layer.
+PRESETS['held_suarez'] = dict(build=held_suarez, dt=lambda n: 900.0 * 2.0 ** (5 - n), visc4_U=15.0,
+                              stress=[0.0, 0.15 * MU_REF / 86400.0], vmix=0.01, tracer=False,
+                              air=dict(AIR, forcing='held_suarez', physics=dict(theta_star=held_suarez_theta_star)))

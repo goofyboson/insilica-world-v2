@@ -4,7 +4,7 @@
     {
       "name": "engine",
       "runtimeExecutable": ".venv/Scripts/python.exe",
-      "runtimeArgs": ["-m", "insilica.server", "--n", "6", "--preset", "phillips"],
+      "runtimeArgs": ["-m", "insilica.server", "--n", "5", "--preset", "aqua"],
       "port": 8765
     }
   ]

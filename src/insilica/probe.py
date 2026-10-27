@@ -3,7 +3,7 @@
 1. The slow step: ns per layer-edge per time-split RK3 step (one fast sub-step per stage), n = 4–8, L = 1, 2, 4,
    64-bit, CUDA graph, Hilbert-ordered cells.
 2. Cost per model hour of whole world ticks (layers, fast sub-steps and tracer transport) for the plan's two
-   showcase fluids: air at n = 6 (two layers, 10 km deep, the Phillips jet, 10-minute steps) and ocean at n = 8
+   showcase fluids: air at n = 6 (two air layers with radiation, a slab surface and θ* crossings, 7.5-minute steps) and ocean at n = 8
    (two layers over a ridge, 1-hour steps with the external mode sub-stepped at ~160 m/s).
 
   python -m insilica.probe [--levels 4 5 6 7 8] [--json out.json]
@@ -20,7 +20,7 @@ from .gpu import DeviceGrid
 from .layers import Layers
 from .world import World, default_dt, initial_state
 
-SHOWCASE = (('air', 6, 'phillips'), ('ocean', 8, 'outcrop'))
+SHOWCASE = (('air', 6, 'aqua'), ('ocean', 8, 'outcrop'))
 
 
 def time_steps(g, layers, steps=None):

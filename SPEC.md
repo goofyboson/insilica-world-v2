@@ -189,7 +189,7 @@ value against its threshold. `--perf` then runs PERF alone (at every stage close
 | VIEWER | the protocol with a Python client: grid, exact f8 bytes, f4 bytes, step +1/+5, play pushes, pause holds, error reply, page and three.js served | all correct |
 | RCE | the `rce` world at n = 4 for 20 years | steady (< 0.1 K/yr); each layer ≥ 20% of the mass; mean surface 295 ± 5 K (dry, #41); top-of-atmosphere imbalance ≤ 0.5 W/m² |
 | HELD-SUAREZ | `held_suarez` at n = 5 for 400 days, zonal means over days 201–400 | kinetic energy days 301–400 within ±20% of 201–300; upper-layer jet 12–25 m/s at 30–50° in both hemispheres (#41); lower-layer westerlies at 40–55°, easterlies at 0–15° |
-| PERF (`--perf`) | ns per layer-edge per slow step at n = 4–8 for L = 1, 2, 4; launch overhead; cost per model hour of whole world ticks for air (n = 6, `phillips`) and ocean (n = 8, `outcrop`) | n = 8 ≤ 16 ns; air ≤ 15 ms and ocean ≤ 180 ms per model hour (the plan's §5 estimates) |
+| PERF (`--perf`) | ns per layer-edge per slow step at n = 4–8 for L = 1, 2, 4; launch overhead; cost per model hour of whole world ticks for air (n = 6, `aqua`, with its physics) and ocean (n = 8, `outcrop`) | n = 8 ≤ 16 ns; air ≤ 30 ms (#42) and ocean ≤ 180 ms per model hour |
 
 **Results (2026-10-26, 22/22):** GRID topology exact at every level, worst geometry 1.6e-13 (orthogonality at
 n = 8), area ratio 1.33 at n = 4, cache identical. V1-GRID 1.2e-14 / 5.3e-14 / 2.3e-13 / 1.29e-12 against
@@ -206,6 +206,14 @@ sub-steps per 30-min step), ocean 200.9 vs 200 (+0.43%, 10 per hour), internal 3
 exchange ≤ 3.9e-16, energy drift with no dissipation 3.8e-10 (15 d). REPRO all bit-identical, numbering 1.5e-14.
 VIEWER correct. PERF slow step 5.0 ns per layer-edge at n = 8 (gate 16); air n = 6 11.1 ms and ocean n = 8 79 ms per
 model hour (gates 15 and 180). Suite 46 s warm with 5 processes, PERF 19 s.
+
+**V2-2a results (2026-10-26, 32/32; closed):** RCE (n = 4, 20 years) mean surface 294.8 K (equator 309, poles 258), last
+year +0.003 K, layers 78.5% / 21.5%, TOA +0.03 W/m². HELD-SUAREZ (n = 5, days 201–400) upper-layer jet 17.0 / 17.0 m/s,
+lower layer +3.4 m/s at 40–55° and −0.60 m/s at 0–15°, kinetic energy steady (×0.99), lower layer 20.8% of the mass.
+CONSERVE air: column ledger 5.8e-17 of the stored energy, air mass exact and tracer 3.8e-16 over 10 days with
+crossings, adiabatic energy drift 1.6e-5 in 15 days. PERF: slow step 4.2 ns per layer-edge at n = 8; air n = 6 with
+physics 19.3 ms per model hour (~510 model years a day; 27.6 ms before #42's optimizations), ocean n = 8 80.8 ms.
+Suite 98 s warm, PERF 19 s.
 
 **Stage history.** V2-0 closed with 41/41 and V2-0b with 45/45 under the earlier, finer-grained suite (IDs F0,
 G1–G4, K1, K2, C1, D1, S1, P1, W1, R1, E1–E4); its results are in #15–#21 and the git history (`880afb0`,
@@ -260,3 +268,4 @@ One branch per stage (`stage-v2-0`, …), checkpoints pushed there, merged to `m
 | 39 | 2026-10-26 | Interfacial stress | Agreed with the owner (option 1, before any hybrid layer): turbulent momentum exchange between the layers, τ = 0.01·(u_k − u_{k+1}) kg/m²/s, decelerating each layer as τ/h, solved exactly each step (column momentum exact), its kinetic energy returned as heat in proportion to mass. A full layer feels it over ~6 days; a layer at its floor is locked to the one above within minutes. With it, layers thinned to the ground by eddies stay stable. |
 | 40 | 2026-10-26 | Crossing by the heating at θ* | The stratified upper layer crosses down by the heating of its air at θ*, not its layer-mean heating: in Held–Suarez the polar upper layer (0–500 hPa) is heated on average (its stratosphere) while its air near θ* is cooled, so mass never came down and the lower layer drained (2,400 → 182 kg/m² in 120 days, v1's old failure). With the rule it settles at 21% of the mass. Gray radiation gives only layer means, so the radiative case keeps them. |
 | 41 | 2026-10-26 | Air step, RCE and HS thresholds | Agreed with the owner: the air's slow step is 15 minutes at n = 5 (900 s · 2^(5−n)); at 30 minutes Held–Suarez failed near day 38 once winds reached 50–80 m/s. RCE is judged against a dry planet, mean surface 295 ± 5 K (v1's 288 ± 3 K was moist, with evaporative cooling). HELD-SUAREZ's upper-jet bound is 12–25 m/s for the layer mean: the upper layer spans ~0–790 hPa, over which HS's 30 m/s peak at 250 hPa averages ~15–20 m/s. θ* is 300 K for the aquaplanet and the HS 500 hPa mean (299.6 K) for Held–Suarez; the rule "half the mass below θ*" put it near 400 K, not Earth-like. |
+| 42 | 2026-10-26 | Air speed | Agreed with the owner: PERF's air gate is 30 ms per model hour at n = 6 with the air physics and the approved 15-minute-at-n = 5 step (the 15 ms estimate was for dynamics alone at 12-minute steps). Optimized as well: the Exner function from one pow per interface (64-bit pow runs at 1/64 speed on this card; the air pressure term 184 → 79 µs), each edge's thickness and PV computed once per stage instead of per neighbour (identical arithmetic; the momentum tendency 247 → ~150 µs), and the demo tracer's transport off in the air presets (`tracer=False`; CONSERVE turns it on). The air tick went from 27.6 to 19.3 ms per model hour; the generic slow step from 4.55 to 4.18 ns per layer-edge at n = 8. |

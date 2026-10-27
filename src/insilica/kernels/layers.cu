@@ -69,22 +69,25 @@ extern "C" __global__ void air_bern(int N, int E, int L, const real* h, const re
                                     real grav, real cp, real kappa, real p0, const real* Gc, const int* cellEdge, const real* le,
                                     const real* de, const real* areaCell, real* B, real* pibar) {
   LOOP1(i, N)
-  real pb[LMAX];
-  real p = 0, mu = 0;
+  // one pow per interface: x_k = (p_k / p0)^kappa; then pi_k = cp x_k and p^(kappa+1) / p0^kappa = p x
+  real xb[LMAX];
+  real p = 0, mu = 0, xt = 0;
   for (int k = 0; k < L; k++) {
     const real hk = h[(size_t)k * N + i];
     const real pt = p;
     p = p + grav * hk;
     mu += hk;
-    pb[k] = p;
-    // mass-mean Exner over [pt, p]: cp p0^-kappa (p^(k+1) - pt^(k+1)) / ((k+1)(p - pt))
-    pibar[(size_t)k * N + i] = cp * (pow(p, kappa + 1) - pow(pt, kappa + 1)) / ((kappa + 1) * (p - pt) * pow(p0, kappa));
+    const real x = pow(p / p0, kappa);
+    xb[k] = x;
+    // mass-mean Exner over [pt, p]: cp (p x_p - pt x_pt) / ((kappa+1)(p - pt))
+    pibar[(size_t)k * N + i] = cp * (p * x - pt * xt) / ((kappa + 1) * (p - pt));
+    xt = x;
   }
-  real M = grav * b[i] + theta[(size_t)(L - 1) * N + i] * cp * pow(pb[L - 1] / p0, kappa);
+  real M = grav * b[i] + theta[(size_t)(L - 1) * N + i] * cp * xb[L - 1];
   real Mk[LMAX];
   Mk[L - 1] = M;
   for (int k = L - 2; k >= 0; k--) {
-    M = M + (theta[(size_t)k * N + i] - theta[(size_t)(k + 1) * N + i]) * cp * pow(pb[k] / p0, kappa);
+    M = M + (theta[(size_t)k * N + i] - theta[(size_t)(k + 1) * N + i]) * cp * xb[k];
     Mk[k] = M;
   }
   for (int k = 0; k < L; k++) {
@@ -114,11 +117,21 @@ extern "C" __global__ void air_gfast(int N, int L, const real* h, const real* th
   Gc[i] = rgas * Ts / mu;
 }
 
+// Per stage: each edge's layer thickness h_e and potential vorticity q_e (the mean of its two vertices), read by
+// lay_slow for every neighbour instead of being recomputed from cells and vertices there.
+extern "C" __global__ void lay_edge_hq(int N, int E, int NV, const real* h, const real* q, const int* eI, const int* eJ,
+                                       const int* ev1, const int* ev2, real* he, real* qe) {
+  LOOP(e, E)
+  const size_t o = (size_t)l * E + e;
+  he[o] = (real)0.5 * (h[(size_t)l * N + eI[e]] + h[(size_t)l * N + eJ[e]]);
+  qe[o] = (real)0.5 * (q[(size_t)l * NV + ev1[e]] + q[(size_t)l * NV + ev2[e]]);
+}
+
 // Slow momentum tendencies T_k = PV flux - grad(B_k) - (r_k + c_k / h_e,k) u_k - nu4 del4 u_k, their thickness-
 // weighted column mean G (the barotropic forcing), T'_k = T_k - G, and the stage input's edge thickness H_e and
 // barotropic wind. r_k is a drag rate (1/s); c_k a linear stress coefficient (m/s): a stress acting on the layer
 // decelerates it in proportion to 1/h, so a layer thinning toward the floor is braked hard (decision #29).
-extern "C" __global__ void lay_slow(int N, int E, int NV, int L, const real* h, const real* u, const real* q, const real* B,
+extern "C" __global__ void lay_slow(int N, int E, int NV, int L, const real* hedge, const real* u, const real* qedge, const real* B,
                                     const int* eoeStart, const int* eoe, const real* w, const int* eI, const int* eJ,
                                     const int* ev1, const int* ev2, const real* de, const real* drag, const real* stress,
                                     real floor_, real nu4, const real* lap4, const real* theta, const real* pibar,
@@ -127,12 +140,12 @@ extern "C" __global__ void lay_slow(int N, int E, int NV, int L, const real* h, 
   real T[LMAX], hev[LMAX];
   real H = 0, U = 0, GT = 0;
   for (int k = 0; k < L; k++) {
-    const real* hl = h + (size_t)k * N;
+    const real* hl = hedge + (size_t)k * E;
     const real* ul = u + (size_t)k * E;
-    const real* ql = q + (size_t)k * NV;
+    const real* ql = qedge + (size_t)k * E;
     const real* Bl = B + (size_t)k * N;
-    const real qa = (real)0.5 * (ql[ev1[e]] + ql[ev2[e]]);
-    const real he = (real)0.5 * (hl[eI[e]] + hl[eJ[e]]);
+    const real qa = ql[e];
+    const real he = hl[e];
     // PV flux. Where a layer thins out (an outcrop front), a neighbour's thickness counts for at most THIN_RATIO times
     // this edge's own: otherwise a floor-thin vertex's q = (zeta + f) / h_v times a thick neighbour's flux amplifies
     // the Coriolis force on the thin layer by their thickness ratio (decision #38). Smooth layers never reach the cap.
@@ -140,10 +153,10 @@ extern "C" __global__ void lay_slow(int N, int E, int NV, int L, const real* h, 
     real Q = 0;
     for (int m = eoeStart[e]; m < eoeStart[e + 1]; m++) {
       const int e2 = eoe[m];
-      real h2 = (real)0.5 * (hl[eI[e2]] + hl[eJ[e2]]);
+      real h2 = hl[e2];
       if (h2 > cap) h2 = cap;
       const real F2 = h2 * ul[e2];
-      Q += w[m] * F2 * (real)0.5 * (qa + (real)0.5 * (ql[ev1[e2]] + ql[ev2[e2]]));
+      Q += w[m] * F2 * (real)0.5 * (qa + ql[e2]);
     }
     real d = Q - (Bl[eJ[e]] - Bl[eI[e]]) / de[e] - drag[k] * ul[e];
     if (stress[k] != 0) {
@@ -343,11 +356,13 @@ extern "C" __global__ void vmix_heat(int N, int L, const real* h, const real* di
   q /= areaCell[i];
   real mu = 0;
   for (int k = 0; k < L; k++) mu += h[(size_t)k * N + i];
-  real p = 0;
+  real p = 0, xt = 0;
   for (int k = 0; k < L; k++) {
     const real pt = p;
     p = p + grav * h[(size_t)k * N + i];
-    const real pib = cp * (pow(p, kappa + 1) - pow(pt, kappa + 1)) / ((kappa + 1) * (p - pt) * pow(p0, kappa));
+    const real x = pow(p / p0, kappa);
+    const real pib = cp * (p * x - pt * xt) / ((kappa + 1) * (p - pt));
     theta[(size_t)k * N + i] += q / (mu * pib);
+    xt = x;
   }
 }

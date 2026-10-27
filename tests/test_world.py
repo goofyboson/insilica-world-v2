@@ -72,7 +72,7 @@ def conserve_air(record):
         stored = float(cp.sum(A * w.physics.stored))
         worst = max(worst, abs(stored - flux) / w.energy())          # relative to the energy stored (v1's ledger measure)
         per_step = max(per_step, abs(stored - flux) / (float(cp.sum(A * w.physics.sw_abs)) * w.dt))
-    a = World(4, 'aqua')
+    a = World(4, 'aqua', params={'tracer': True})
     m0 = a.totals()
     a.step(int(10 * 86400 / a.dt))
     m1 = a.totals()

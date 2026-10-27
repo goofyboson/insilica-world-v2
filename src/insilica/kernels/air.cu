@@ -27,12 +27,14 @@ __device__ Par unpack(const real* a) {
 __device__ __forceinline__ real exner(real p, const Par& P) { return P.cp * pow(p / P.p0, P.kappa); }
 
 __device__ void layer_exner(int L, const real* mu, const Par& P, real* pb, real* pib) {
-  real p = 0;
+  real p = 0, xt = 0;
   for (int k = 0; k < L; k++) {
     const real pt = p;
     p = p + P.grav * mu[k];
     pb[k] = p;
-    pib[k] = P.cp * (pow(p, P.kappa + 1) - pow(pt, P.kappa + 1)) / ((P.kappa + 1) * (p - pt) * pow(P.p0, P.kappa));
+    const real x = pow(p / P.p0, P.kappa);                       // one pow per interface
+    pib[k] = P.cp * (p * x - pt * xt) / ((P.kappa + 1) * (p - pt));
+    xt = x;
   }
 }
 

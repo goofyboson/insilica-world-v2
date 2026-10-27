@@ -61,10 +61,11 @@ class Layers:
         self.h1, self.h2, self.u1, self.u2 = z(L, N), z(L, N), z(L, E), z(L, E)
         self.D1, self.Z1, self.L1, self.L2 = z(L, N), z(L, NV), z(L, E), z(L, E)
         self.hold = z(L, N)
+        self.hedge, self.qedge = z(L, E), z(L, E)
         self.diss = z(E)
         k = lambda n, f='layers.cu': dg.kernel(n, f)
         self.k = {n: k(n) for n in ('lay_eta', 'lay_ubar', 'lay_bern', 'air_bern', 'air_gfast', 'lay_slow', 'bt_eta', 'bt_u', 'lay_flux', 'lay_scale',
-                                    'lay_limit', 'lay_h', 'lay_u', 'xch_cell', 'xch_edge', 'lay_vmix', 'vmix_heat')}
+                                    'lay_limit', 'lay_h', 'lay_u', 'xch_cell', 'xch_edge', 'lay_vmix', 'vmix_heat', 'lay_edge_hq')}
         self.k['swe_vertex'] = k('swe_vertex', 'fused.cu')
         self.k.update({n: k(n, 'trisk.cu') for n in ('cell_div', 'vertex_curl', 'edge_lap')})
         self.dmin = float(np.min(dg.host.de))
@@ -111,7 +112,8 @@ class Layers:
             k['lay_bern'](*c1, (N, E, i32(L), hs, us, self.b, self.gp, g.cellEdge, g.le, g.de, g.areaCell, self.B))
         k['swe_vertex'](*grid_dims(g.NV, L), (N, E, NV, hs, us, g.vCell, g.vSlot, g.kite, g.vEdge, g.vEdgeSign, g.de, g.areaV,
                                               self.fV, self.q))
-        k['lay_slow'](*e1, (N, E, NV, i32(L), hs, us, self.q, self.B, g.eoeStart, g.eoe, g.w, g.eI, g.eJ, g.ev1, g.ev2, g.de,
+        k['lay_edge_hq'](*grid_dims(g.E, L), (N, E, NV, hs, self.q, g.eI, g.eJ, g.ev1, g.ev2, self.hedge, self.qedge))
+        k['lay_slow'](*e1, (N, E, NV, i32(L), self.hedge, us, self.qedge, self.B, g.eoeStart, g.eoe, g.w, g.eI, g.eJ, g.ev1, g.ev2, g.de,
                             self.drag, self.stress, R(self.floor), R(self.nu4), self.L2 if self.nu4 else NULL,
                             theta if self.air else NULL, self.pibar if self.air else NULL, R(c * dt), self.Tp, self.G, self.He,
                             self.ubs))

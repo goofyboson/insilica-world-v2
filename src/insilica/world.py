@@ -72,6 +72,7 @@ class World:
                            air=dict(t_ref=self.air.get('t_ref', 288.0)) if self.air else None,
                            vmix=P.get('vmix', spec.get('vmix', 0.0)))
         self.dynamics = P.get('dynamics', spec.get('dynamics', True))
+        self.tracer = P.get('tracer', spec.get('tracer', True))   # transport the demo tracer psi (off for air: #42)
         if nu4:
             lam = self.core.lap_max()
             if nu4 * lam * lam * self.dt > 1.0:
@@ -110,7 +111,8 @@ class World:
         if self.dynamics:
             self.core.step(self.h, self.u, self.dt, self.nfast, self._Fm, theta=self.theta if self.air else None)
             self.tr.mass_after(self.M, self._Fm, self._M1)
-            self.tr.step(self.M, self._M1, self._Fm, self.psi, order=3)
+            if self.tracer:
+                self.tr.step(self.M, self._M1, self._Fm, self.psi, order=3)
             if self.air:
                 self.tr.step(self.M, self._M1, self._Fm, self.theta, order=3)
             cp.copyto(self.M, self._M1)

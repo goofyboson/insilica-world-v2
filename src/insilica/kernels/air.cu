@@ -257,7 +257,7 @@ __device__ __forceinline__ real tau_p(real p, real ps, const Par& P) {
 extern "C" __global__ void air_column(int N, int L, const real* par, int mode, const real* t, const real* insol, const real* pos,
                                       const real* uabs, real* mu_in, real* theta, real* qv, real* Ts, real* ice, real dt,
                                       real* wx, real* olr, real* sw_abs, real* stored, real* rain, real* evap, real* conv,
-                                      real* tsurf, real* rainp, real* dgo) {
+                                      real* tsurf, real* rainp, real* dgo, const real* cap, real* qocean) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= N) return;
   const Par P = unpack(par);
@@ -270,7 +270,9 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
   }
   layer_exner(L, mu, P, pb, pib);
   real m_ice = moist ? ice[i] : (real)0;
-  const real E0 = column_energy(L, mu, pib, th, q, P) + P.c_slab * Ts[i] - P.Lf * m_ice;
+  // the surface water's heat capacity (J/m^2/K): the ocean's mixed layer when coupled (cap), else the slab
+  const real Cw = cap ? cap[i] : P.c_slab;
+  const real E0 = column_energy(L, mu, pib, th, q, P) + Cw * Ts[i] - P.Lf * m_ice;
   for (int k = 0; k < L; k++) T[k] = pib[k] * th[k] / P.cp;
   const int top = 0, bot = L - 1;
 
@@ -388,14 +390,15 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
   real qS;
   if (skin) qS = -cond;
   else qS = swS + ldown - P.eps_s * P.sigma * ts * ts * ts * ts - H - P.Lv * E;
-  real Tn = ts + qS * dt / P.c_slab;
+  real Tn = ts + qS * dt / Cw;
+  if (qocean) qocean[i] = qS;                                    // W/m^2 into the surface water (before ice)
   if (moist) {
     m_ice -= melt_top * dt / P.Lf;
-    if (m_ice < 0) { Tn += -m_ice * P.Lf / P.c_slab; m_ice = 0; }   // more top melt than ice: the rest warms the slab
-    if (Tn < P.Tf) { m_ice += (P.Tf - Tn) * P.c_slab / P.Lf; Tn = P.Tf; }
+    if (m_ice < 0) { Tn += -m_ice * P.Lf / Cw; m_ice = 0; }   // more top melt than ice: the rest warms the slab
+    if (Tn < P.Tf) { m_ice += (P.Tf - Tn) * Cw / P.Lf; Tn = P.Tf; }
     else if (m_ice > 0) {
-      const real m = (Tn - P.Tf) * P.c_slab / P.Lf;
-      if (m <= m_ice) { m_ice -= m; Tn = P.Tf; } else { Tn = P.Tf + (m - m_ice) * P.Lf / P.c_slab; m_ice = 0; }
+      const real m = (Tn - P.Tf) * Cw / P.Lf;
+      if (m <= m_ice) { m_ice -= m; Tn = P.Tf; } else { Tn = P.Tf + (m - m_ice) * P.Lf / Cw; m_ice = 0; }
     }
     ice[i] = m_ice;
   }
@@ -472,7 +475,7 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
   }
   if (rainp) { rainp[i] = Rk[0] / dt; rainp[(size_t)N + i] = Rk[1] / dt; rainp[(size_t)2 * N + i] = Rc / dt; }
 
-  const real E1 = column_energy(L, mu, pib, th, q, P) + P.c_slab * Ts[i] - P.Lf * m_ice;
+  const real E1 = column_energy(L, mu, pib, th, q, P) + Cw * Ts[i] - P.Lf * m_ice;
   for (int k = 0; k < L; k++) { theta[(size_t)k * N + i] = th[k]; if (moist) qv[(size_t)k * N + i] = q[k]; }
   stored[i] = E1 - E0;
 }

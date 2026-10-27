@@ -75,10 +75,11 @@ class AirPhysics:
         self.rainp = z(3, N)               # rain by source: condensation above the bottom layer, in it, convection
         self._none = z(1)                                     # q and ice for a dry column (never read)
 
-    def column(self, mu, theta, Ts, u, t, dt, q=None, ice=None):
+    def column(self, mu, theta, Ts, u, t, dt, q=None, ice=None, cap=None, qocean=None):
         """Radiation, surface exchange, heating, (moist: evaporation, condensation, sea ice, convection) and the θ*
         crossing for one step; the masses moved up go to self.wx (moved with momentum and tracers by Layers.exchange),
-        rain and evaporation (kg/m²/s) to self.rain, self.evap."""
+        rain and evaporation (kg/m²/s) to self.rain, self.evap. cap: the surface water's heat capacity per cell (J/m²/K;
+        the ocean's mixed layer, V2-3), else the slab's; qocean receives the net flux into it (W/m²)."""
         g, k, i32, R = self.dg, self.k, np.int32, self.dg.dtype.type
         if self.forcing == 'held_suarez':
             k['hs_column'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.par, self.hs, self.lat, mu, theta, R(dt), self.wx, self.qnet,
@@ -89,7 +90,8 @@ class AirPhysics:
         k['air_column'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.par, i32(self.mode), t, self.insol, self.pos, self.uabs,
                                           mu, theta, q if q is not None else self._none, Ts, ice if ice is not None else self._none, R(dt),
                                           self.wx, self.olr, self.sw_abs, self.stored, self.rain, self.evap, self.conv,
-                                          self.tsurf, self.rainp, self.dgo if self.dgo is not None else NULL))
+                                          self.tsurf, self.rainp, self.dgo if self.dgo is not None else NULL,
+                                          cap if cap is not None else NULL, qocean if qocean is not None else NULL))
         k['advance_time']((1,), (1,), (t, R(dt)))
 
 

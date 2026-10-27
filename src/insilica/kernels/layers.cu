@@ -58,6 +58,37 @@ extern "C" __global__ void lay_bern(int N, int E, int L, const real* h, const re
   }
 }
 
+// Ocean layers whose density follows their temperature (decision #64): rho = rho0 (1 - alpha (T - T0)), buoyancy
+// b_k = g alpha T_k (up to a constant). Hydrostatics gives each layer's mean pressure force (Boussinesq)
+//   -grad M_k - (z_k - h_k / 2) grad b_k,   M_k = g eta + M'_k,   M'_{k+1} = M'_k + g'_k(i) z_{k+1},
+// with g'_k = b_k - b_{k+1} now per cell and z_k the top of layer k (the variable-density layer model's form; with
+// uniform T it is the constant-g' model above). The g eta part is the fast mode's. B_k = M'_k + K_k; the second term goes
+// through lay_slow's pibar * grad(theta) slot as zneg = -(z_k - h_k / 2) and buoy = b_k.
+extern "C" __global__ void ocn_bern(int N, int E, int L, const real* h, const real* u, const real* T, const real* b, real galpha,
+                                    const int* cellEdge, const real* le, const real* de, const real* areaCell, real* B, real* zneg,
+                                    real* buoy) {
+  LOOP1(i, N)
+  real z[LMAX];
+  real s = b[i];
+  for (int k = L - 1; k >= 0; k--) { s += h[(size_t)k * N + i]; z[k] = s; }
+  real Mp = 0;
+  for (int k = 0; k < L; k++) {
+    const real bk = galpha * T[(size_t)k * N + i];
+    if (k > 0) Mp += (galpha * T[(size_t)(k - 1) * N + i] - bk) * z[k];
+    const real* ul = u + (size_t)k * E;
+    real ke = 0;
+    for (int m = 0; m < 6; m++) {
+      const int e = cellEdge[i * 6 + m];
+      if (e < 0) break;
+      ke += le[e] * de[e] * (real)0.25 * ul[e] * ul[e];
+    }
+    const size_t o = (size_t)k * N + i;
+    B[o] = Mp + ke / areaCell[i];
+    zneg[o] = -(z[k] - (real)0.5 * h[o]);
+    buoy[o] = bk;
+  }
+}
+
 // Air layers (decision #32): h_k is the layer's mass per area (kg/m^2), theta_k its mean potential temperature.
 // Hydrostatics from p = 0 at the top: interface pressures p_k (bottom of layer k) = g sum_{j<=k} h_j; Exner
 // pi(p) = cp (p/p0)^kappa. Montgomery potential M = theta pi + Phi: M_{L-1} = g b + theta_{L-1} pi(p_s) and

@@ -34,10 +34,12 @@ DIV_DAMP = 0.1              # divergence damping of the fast mode (decision #28)
 
 class Layers:
     def __init__(self, dg, layers=1, b=None, grav=GRAV, gprime=(), drag=0.0, stress=0.0, nu4=0.0, floor=1.0, rotation=1.0,
-                 div_damp=DIV_DAMP, air=None, vmix=0.0):
+                 div_damp=DIV_DAMP, air=None, vmix=0.0, ocean=None):
         """air: None for Boussinesq (ocean-like) layers, h in m; or a dict for air layers, h the layer's mass per area
         (kg/m²) with a potential temperature θ per layer passed to step() (decision #32). The fast mode then runs on
-        the column mass with each cell's own coefficient Gc = R·T_s/μ (decision #37), at √(R·T_s)."""
+        the column mass with each cell's own coefficient Gc = R·T_s/μ (decision #37), at √(R·T_s). ocean: None, or
+        dict(alpha=…) for Boussinesq layers whose density follows a temperature T per layer passed to step() as theta
+        (decision #64): g' per cell from T, plus the variable-density pressure term."""
         assert 1 <= layers <= LMAX and len(gprime) == layers - 1
         self.dg, self.L = dg, layers
         self.real = dg.dtype.type
@@ -50,9 +52,13 @@ class Layers:
         self.stress = cp.asarray(np.broadcast_to(np.asarray(stress, dtype=float), (layers,)), dtype=dt)
         self.fV = dg.fV * rotation
         self.air = air
+        self.ocean = ocean
         self.vmix = vmix                    # interfacial stress coefficient c (decision #39), h-units/s
         self.zero = z(N)
         self.Gc = cp.full(N, float(grav))   # the fast mode's coefficient per cell: g, or for air R·T_s/μ
+        if ocean:
+            self.galpha = grav * ocean['alpha']
+            self.pibar, self.buoy = z(L, N), z(L, N)
         if air:
             self.pibar = z(L, N)
             # every gravity wave in the fast substeps (decision #55): the column's stiffness, each layer's mass and wind
@@ -69,7 +75,7 @@ class Layers:
         k = lambda n, f='layers.cu': dg.kernel(n, f)
         self.k = {n: k(n) for n in ('lay_eta', 'lay_ubar', 'lay_bern', 'air_bern', 'air_gfast', 'lay_slow', 'bt_eta', 'bt_u', 'lay_flux', 'lay_scale',
                                     'lay_limit', 'lay_h', 'lay_u', 'xch_cell', 'xch_edge', 'lay_vmix', 'vmix_heat', 'lay_edge_hq',
-                                    'air_stiff', 'af_mu', 'af_phi', 'af_u', 'af_flux')}
+                                    'air_stiff', 'af_mu', 'af_phi', 'af_u', 'af_flux', 'ocn_bern')}
         self.k['swe_vertex'] = k('swe_vertex', 'fused.cu')
         self.k.update({n: k(n, 'trisk.cu') for n in ('cell_div', 'vertex_curl', 'edge_lap')})
         self.dmin = float(np.min(dg.host.de))
@@ -112,6 +118,9 @@ class Layers:
         if self.air:
             k['air_bern'](*c1, (N, E, i32(L), hs, us, theta, self.b, R(self.grav), R(CP_DRY), R(KAPPA), R(P0), self.S,
                                 g.cellEdge, g.le, g.de, g.areaCell, self.B, self.pibar))
+        elif self.ocean:
+            k['ocn_bern'](*c1, (N, E, i32(L), hs, us, theta, self.b, R(self.galpha), g.cellEdge, g.le, g.de, g.areaCell, self.B,
+                                self.pibar, self.buoy))
         else:
             k['lay_bern'](*c1, (N, E, i32(L), hs, us, self.b, self.gp, g.cellEdge, g.le, g.de, g.areaCell, self.B))
         k['swe_vertex'](*grid_dims(g.NV, L), (N, E, NV, hs, us, g.vCell, g.vSlot, g.kite, g.vEdge, g.vEdgeSign, g.de, g.areaV,
@@ -119,7 +128,8 @@ class Layers:
         k['lay_edge_hq'](*grid_dims(g.E, L), (N, E, NV, hs, self.q, g.eI, g.eJ, g.ev1, g.ev2, self.hedge, self.qedge))
         k['lay_slow'](*e1, (N, E, NV, i32(L), self.hedge, us, self.qedge, self.B, g.eoeStart, g.eoe, g.w, g.eI, g.eJ, g.ev1, g.ev2, g.de,
                             self.drag, self.stress, R(self.floor), R(self.nu4), self.L2 if self.nu4 else NULL,
-                            theta if self.air else NULL, self.pibar if self.air else NULL, R(c * dt), self.Tp, self.G, self.He,
+                            theta if self.air else (self.buoy if self.ocean else NULL),
+                            self.pibar if (self.air or self.ocean) else NULL, R(c * dt), self.Tp, self.G, self.He,
                             self.ubs))
         n = max(1, math.ceil(c * nfast))
         tau = R(c * dt / n)

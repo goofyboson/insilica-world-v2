@@ -35,7 +35,7 @@ def test_rce(record):
 
 @pytest.mark.xdist_group('grid5')
 def test_held_suarez(record):
-    """HELD-SUAREZ Held & Suarez (1994) in two layers (n = 5, 400 days): steady, upper jet, surface westerlies and tropical easterlies"""
+    """HELD-SUAREZ Held & Suarez (1994) in two layers (n = 5, 400 days): steady, upper jet, surface westerlies and tropical easterlies, calm poles"""
     w = World(5, 'held_suarez')
     g = w.grid
     east = np.stack([-np.sin(g.lon), np.cos(g.lon), np.zeros(g.N)], 1)
@@ -53,11 +53,14 @@ def test_held_suarez(record):
     jet = max(float(np.mean(zm[0][(lat >= a) & (lat < a + 5)])) for a in range(30, 50, 5))
     jet_s = max(float(np.mean(zm[0][(lat >= -a - 5) & (lat < -a)])) for a in range(30, 50, 5))
     west, east_trop = band(1, 40, 55), band(1, 0, 15)
+    # polar calm (#44): the zonal-mean wind beyond 80° in each hemisphere and layer (a split error once spun a vortex there)
+    polar = max(abs(float(np.mean(zm[k][s * lat > 80]))) for k in range(2) for s in (1, -1))
     steady = np.mean(ke[100:]) / np.mean(ke[:100])
     h = w.h.get()
     finite = bool(np.isfinite(w.u.get()).all())
-    ok = (finite and abs(steady - 1) <= 0.2 and 12 <= min(jet, jet_s) and max(jet, jet_s) <= 25 and west > 0 and east_trop < 0)
+    ok = (finite and abs(steady - 1) <= 0.2 and 12 <= min(jet, jet_s) and max(jet, jet_s) <= 25 and west > 0 and east_trop < 0
+          and polar < 5)
     record('HELD-SUAREZ', f'days 201–400: upper-layer jet {jet:.1f} m/s (north) / {jet_s:.1f} (south) at 30–50°; lower layer 40–55° {west:+.2f} m/s, '
-           f'0–15° {east_trop:+.2f} m/s; kinetic energy days 301–400 / 201–300 ×{steady:.3f}; lower layer {h[1].sum() / h.sum() * 100:.1f}% of the mass; '
-           f'step {w.dt:.0f} s', 'steady (±20%); upper jet 12–25 m/s (#41); westerlies 40–55°; easterlies 0–15°', ok)
+           f'0–15° {east_trop:+.2f} m/s; poles (> 80°) worst {polar:.2f} m/s; kinetic energy days 301–400 / 201–300 ×{steady:.3f}; lower layer {h[1].sum() / h.sum() * 100:.1f}% of the mass; '
+           f'step {w.dt:.0f} s', 'steady (±20%); upper jet 12–25 m/s (#41); westerlies 40–55°; easterlies 0–15°; poles < 5 m/s (#44)', ok)
     assert ok

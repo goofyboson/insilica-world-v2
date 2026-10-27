@@ -1,4 +1,4 @@
-// Column physics of the two air layers over a slab surface (stages V2-2a and V2-2b, decisions #32-#35, #40, #44-#47):
+// Column physics of the two air layers over a slab surface (stages V2-2a and V2-2b, decisions #32-#35, #40, #45-#48):
 // v1's radiation and surface exchange, heating as potential temperature, air crossing the isentropic interface
 // theta* only when heated or cooled across it; with moisture (V2-2b) vapor in both layers, evaporation from open
 // water, condensation and rain, moist convection across theta*, and thermodynamic sea ice on the slab.
@@ -284,7 +284,7 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
   // ---- dry crossing of theta* ----
   const real dm = crossing(L, P, mu, th, q, dth, dth[top], pib);
 
-  // ---- moist convection (decision #44): a parcel of lower-layer air lifted to the interface, condensing on the way,
+  // ---- moist convection (decision #46): a parcel of lower-layer air lifted to the interface, condensing on the way,
   // compared with the air there, which is at theta*. Buoyant (theta_p > theta*), it rises into the upper layer with its
   // latent heat; its condensate rains. Removing lower air lowers the interface, where the parcel condenses less, so
   // the mass that would remove the buoyancy is d / (-d(theta_p)/dp) / g; a share 1 - exp(-dt/tau_conv) of it moves

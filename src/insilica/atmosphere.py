@@ -7,7 +7,7 @@ the air at a full column (ASW0), gray infrared optical depth TAU0 = 1.4 split 0.
 layer at an even split, surface emissivity 0.95, ocean albedo 0.06, sensible heat 10·(1 + |u|/10) W/m²K, a 100 m
 mixed-layer slab. Sensible heat goes into the bottom 100 hPa of the column (mu_bl).
 
-Moisture (stage V2-2b, decisions #44–#47; moist=1): vapor q in each layer, evaporation from open water
+Moisture (stage V2-2b, decisions #45–#48; moist=1): vapor q in each layer, evaporation from open water
 K_EVAP·(1 + |u|/10)·(q_sat(T_s) − q) kg/m²/s into the bottom 100 hPa (v1's form and K_EVAP 2e-3), saturation adjustment
 in each layer (the water rains out at once), moist convection across θ* relaxing the lower layer's θ_e excess over the
 upper layer's saturated θ_e in τ_conv = 2 h, and thermodynamic sea ice on the slab (v1's rules: freezing below 273.15 K,

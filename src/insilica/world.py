@@ -25,10 +25,10 @@ from .constants import CP_DRY, GRAV, KAPPA, P0
 from .layers import DIV_DAMP, Layers
 from .transport import BETA, Transport
 
-FIELDS = ('h', 'z', 'eta', 'psi', 'speed', 'vort', 'theta', 'T', 'Ts', 'ps', 'q', 'rh', 'rain', 'evap', 'ice')
+FIELDS = ('h', 'z', 'eta', 'psi', 'speed', 'vort', 'theta', 'T', 'Ts', 'Tsurf', 'ps', 'q', 'rh', 'rain', 'evap', 'ice')
 # z: height of the layer's top; eta: the free surface; theta, T, Ts, ps: air (potential temperature, temperature,
 # surface temperature, surface pressure in hPa); q, rh, rain, evap, ice: moist air (specific humidity in g/kg, relative
-# humidity, rain and evaporation in mm/day, sea ice in m)
+# humidity, rain and evaporation in mm/day, sea ice in m, Tsurf the radiating surface: the ice skin over ice)
 
 
 def visc4(g, U):
@@ -193,7 +193,7 @@ class World:
         base = ['h', 'z', 'eta', 'psi', 'speed', 'vort']
         if not self.air:
             return base
-        return base + ['theta', 'T', 'Ts', 'ps'] + (['q', 'rh', 'rain', 'evap', 'ice'] if self.moist else [])
+        return base + ['theta', 'T', 'Ts', 'ps'] + (['Tsurf', 'q', 'rh', 'rain', 'evap', 'ice'] if self.moist else [])
 
     def field(self, name, layer=0):
         """A cell field (CuPy, float64) for the viewer."""
@@ -211,6 +211,8 @@ class World:
             return self.Ts
         if name == 'q':
             return self.q[layer] * 1000.0                          # g/kg
+        if name == 'Tsurf':
+            return self.physics.tsurf
         if name == 'rain':
             return self.physics.rain * 86400.0                      # mm/day
         if name == 'evap':

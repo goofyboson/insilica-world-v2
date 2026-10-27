@@ -137,11 +137,13 @@ __device__ real crossing(int L, const Par& P, real* mu, real* th, real* q, const
 
 // mode 0: the sun at time t (diurnal and seasonal, v1's sunVector); mode 1: insol[i], a given mean insolation.
 // Outputs per cell: wx (mass moved up across theta*, dry crossing + moist convection), olr, sw_abs (W/m^2), stored (the
-// column's energy change, J/m^2), rain and evap (kg/m^2/s), conv (kg/m^2 moved up by moist convection this step).
+// column's energy change, J/m^2), rain and evap (kg/m^2/s), conv (kg/m^2 moved up by moist convection this step),
+// tsurf (K: the surface that radiates, the ice skin where the ice is thicker than ice_cover, else the slab).
 // qv and ice are read and written only when moist.
 extern "C" __global__ void air_column(int N, int L, const real* par, int mode, const real* t, const real* insol, const real* pos,
                                       const real* uabs, real* mu_in, real* theta, real* qv, real* Ts, real* ice, real dt,
-                                      real* wx, real* olr, real* sw_abs, real* stored, real* rain, real* evap, real* conv) {
+                                      real* wx, real* olr, real* sw_abs, real* stored, real* rain, real* evap, real* conv,
+                                      real* tsurf) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= N) return;
   const Par P = unpack(par);
@@ -246,6 +248,7 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
     for (int k = 0; k < L; k++) q[k] += E * dt * wbl[k] / mb / mu[k];
   }
   evap[i] = E;
+  tsurf[i] = tsk;
 
   // ---- heating as potential temperature ----
   real dth[LMAX];

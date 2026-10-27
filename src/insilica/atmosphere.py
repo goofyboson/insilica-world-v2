@@ -66,7 +66,7 @@ class AirPhysics:
         self.lat = cp.asarray(np.arcsin(np.clip(dg.host.pos[:, 2], -1, 1)))
         self.qnet = z(N)
         self.moist = bool(self.p['moist'])
-        self.rain, self.evap, self.conv = z(N), z(N), z(N)
+        self.rain, self.evap, self.conv, self.tsurf = z(N), z(N), z(N), z(N)
         self._none = z(1)                                     # q and ice for a dry column (never read)
 
     def column(self, mu, theta, Ts, u, t, dt, q=None, ice=None):
@@ -82,7 +82,8 @@ class AirPhysics:
         k['cell_speed'](*grid_dims(g.N), (i32(g.N), u[self.L - 1], g.cellEdge, g.le, g.de, g.areaCell, self.uabs))
         k['air_column'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.par, i32(self.mode), t, self.insol, self.pos, self.uabs,
                                           mu, theta, q if q is not None else self._none, Ts, ice if ice is not None else self._none, R(dt),
-                                          self.wx, self.olr, self.sw_abs, self.stored, self.rain, self.evap, self.conv))
+                                          self.wx, self.olr, self.sw_abs, self.stored, self.rain, self.evap, self.conv,
+                                          self.tsurf))
         k['advance_time']((1,), (1,), (t, R(dt)))
 
 

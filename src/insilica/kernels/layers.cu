@@ -63,10 +63,10 @@ extern "C" __global__ void lay_bern(int N, int E, int L, const real* h, const re
 // pi(p) = cp (p/p0)^kappa. Montgomery potential M = theta pi + Phi: M_{L-1} = g b + theta_{L-1} pi(p_s) and
 // M_k = M_{k+1} + (theta_k - theta_{k+1}) pi(p_k) (Hsu & Arakawa). The pressure force in a layer is
 // -grad M_k + pibar_k grad theta_k (pibar_k the layer's mass-mean Exner function; the second term is in
-// lay_slow). The fast external mode takes Gc_i * (column mass) out of every layer's M, so B_k = M_k - Gc mu + K_k,
-// with Gc the cell's own linearization (air_gfast; decision #37).
+// lay_slow). The fast substeps take the linear part Phi_k = sum_{m>=k} S_m P_m of every layer's M (air_stiff; P_m the mass
+// above interface m), so B_k = M_k - Phi_k + K_k (decision #55).
 extern "C" __global__ void air_bern(int N, int E, int L, const real* h, const real* u, const real* theta, const real* b,
-                                    real grav, real cp, real kappa, real p0, const real* Gc, const int* cellEdge, const real* le,
+                                    real grav, real cp, real kappa, real p0, const real* S, const int* cellEdge, const real* le,
                                     const real* de, const real* areaCell, real* B, real* pibar) {
   LOOP1(i, N)
   // one pow per interface: x_k = (p_k / p0)^kappa; then pi_k = cp x_k and p^(kappa+1) / p0^kappa = p x
@@ -90,6 +90,11 @@ extern "C" __global__ void air_bern(int N, int E, int L, const real* h, const re
     M = M + (theta[(size_t)k * N + i] - theta[(size_t)(k + 1) * N + i]) * cp * xb[k];
     Mk[k] = M;
   }
+  real P[LMAX], Phi[LMAX];
+  real a = 0;
+  for (int k = 0; k < L; k++) { a += h[(size_t)k * N + i]; P[k] = a; }
+  real ph = 0;
+  for (int k = L - 1; k >= 0; k--) { ph += S[(size_t)k * N + i] * P[k]; Phi[k] = ph; }
   for (int k = 0; k < L; k++) {
     const real* ul = u + (size_t)k * E;
     real ke = 0;
@@ -98,8 +103,75 @@ extern "C" __global__ void air_bern(int N, int E, int L, const real* h, const re
       if (e < 0) break;
       ke += le[e] * de[e] * (real)0.25 * ul[e] * ul[e];
     }
-    B[(size_t)k * N + i] = Mk[k] - Gc[i] * mu + ke / areaCell[i];
+    B[(size_t)k * N + i] = Mk[k] - Phi[k] + ke / areaCell[i];
   }
+}
+
+// The air column's linear stiffness for the fast substeps (decision #55): d M_k / d mu_j = sum_{m >= max(k, j)} S_m with
+// S_m = (theta_m - theta_m+1) g d pi / dp at interface m (the bottom's term theta_L-1 g d pi / dp at the surface), so the
+// linear Montgomery potential is Phi_k = sum_{m >= k} S_m P_m, P_m the mass above interface m. A statically unstable
+// interface (theta_m < theta_m+1) contributes nothing (its waves would grow; the slow step keeps that part). Computed from
+// the step's starting state and held through its stages.
+extern "C" __global__ void air_stiff(int N, int L, const real* h, const real* theta, real grav, real cp, real kappa, real p0,
+                                     real* S) {
+  LOOP1(i, N)
+  real p = 0;
+  for (int k = 0; k < L; k++) {
+    p += grav * h[(size_t)k * N + i];
+    const real dth = theta[(size_t)k * N + i] - (k + 1 < L ? theta[(size_t)(k + 1) * N + i] : (real)0);
+    const real dpi = kappa * cp * pow(p / p0, kappa) / p;
+    S[(size_t)k * N + i] = dth > 0 ? dth * grav * dpi : (real)0;
+  }
+}
+
+// ---- Air fast substeps (decision #55): every layer's mass and wind, forward-backward, from t^n over the stage. ----
+// mu_k <- mu_k - tau div(h_e,k u_k), h_e,k the stage's edge thickness; then u_k <- u_k + tau (-grad Phi*_k + T_k), with
+// Phi* from the forward-weighted masses mu + gamma (mu - mu_prev) (divergence damping of every layer, #28) and T_k the
+// stage's full slow tendency T'_k + G. acc sums the winds the mass steps used.
+extern "C" __global__ void af_mu(int N, int E, const real* hedge, const real* uf, const int* cellEdge, const signed char* cellSign,
+                                 const real* le, const real* areaCell, real tau, real* mu, real* mu_prev) {
+  LOOP(i, N)
+  const real* hl = hedge + (size_t)l * E;
+  const real* ul = uf + (size_t)l * E;
+  const size_t o = (size_t)l * N + i;
+  mu_prev[o] = mu[o];
+  real div = 0;
+  for (int m = 0; m < 6; m++) {
+    const int e = cellEdge[i * 6 + m];
+    if (e < 0) break;
+    div += (real)cellSign[i * 6 + m] * le[e] * hl[e] * ul[e];
+  }
+  mu[o] = mu[o] - tau * div / areaCell[i];
+}
+
+extern "C" __global__ void af_phi(int N, int L, const real* mu, const real* mu_prev, real gamma, const real* S, real* phi) {
+  LOOP1(i, N)
+  real P[LMAX];
+  real a = 0;
+  for (int k = 0; k < L; k++) {
+    const size_t o = (size_t)k * N + i;
+    a += mu[o] + gamma * (mu[o] - mu_prev[o]);
+    P[k] = a;
+  }
+  real ph = 0;
+  for (int k = L - 1; k >= 0; k--) { ph += S[(size_t)k * N + i] * P[k]; phi[(size_t)k * N + i] = ph; }
+}
+
+extern "C" __global__ void af_u(int N, int E, const real* phi, const real* Tp, const real* G, const int* eI, const int* eJ,
+                                const real* de, real tau, real* uf, real* acc) {
+  LOOP(e, E)
+  const size_t o = (size_t)l * E + e;
+  const real v = uf[o];
+  acc[o] += v;
+  const real* pl = phi + (size_t)l * N;
+  uf[o] = v + tau * (-(pl[eJ[e]] - pl[eI[e]]) / de[e] + Tp[o] + G[e]);
+}
+
+// The stage's layer fluxes: the stage's edge thickness times the mean wind of the substeps.
+extern "C" __global__ void af_flux(int E, const real* hedge, const real* acc, real inv_n, real* F) {
+  LOOP(e, E)
+  const size_t o = (size_t)l * E + e;
+  F[o] = hedge[o] * acc[o] * inv_n;
 }
 
 // The fast mode's coefficient per cell for air (decisions #37, #43): the column's external stiffness, the mass-weighted

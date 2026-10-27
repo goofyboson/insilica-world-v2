@@ -88,8 +88,10 @@ class Engine:
     def field_frame(self, name, layer=0, dtype='f4'):
         a = self.world.field(name, layer).get()
         a = a.astype('<f8' if dtype == 'f8' else '<f4')
+        ok = np.isfinite(a)                     # a blown-up run must not put NaN into the JSON header
+        lo, hi = (float(a[ok].min()), float(a[ok].max())) if ok.any() else (0.0, 0.0)
         return frame(dict(kind='field', name=name, layer=layer, tick=self.world.tick, dtype=dtype, count=a.size,
-                          min=float(a.min()), max=float(a.max())), [a])
+                          min=lo, max=hi, finite=bool(ok.all())), [a])
 
     async def push(self):
         for ws, sub in list(self.clients.items()):

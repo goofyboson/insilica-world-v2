@@ -211,8 +211,8 @@ class World:
             return self.Ts
         if name == 'q':
             return self.q[layer] * 1000.0                          # g/kg
-        if name == 'Tsurf':
-            return self.physics.tsurf
+        if name == 'Tsurf':                                        # before the first step: the slab
+            return self.physics.tsurf if self.tick > 0 else self.Ts
         if name == 'rain':
             return self.physics.rain * 86400.0                      # mm/day
         if name == 'evap':

@@ -5,56 +5,136 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>InSilica World V2</title>
 <style>
-  :root { --bg: #0d1117; --panel: rgba(22, 27, 34, 0.92); --text: #e6edf3; --muted: #8b949e; --line: #30363d; --accent: #58a6ff; }
+  :root { --bg: #05070b; --panel: rgba(16, 20, 27, 0.88); --text: #e6edf3; --muted: #8b949e; --line: #30363d; --accent: #58a6ff; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
   #globe { position: fixed; inset: 0; }
-  #panel { position: fixed; top: 12px; left: 12px; width: 250px; padding: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
-  #panel h1 { font-size: 14px; margin: 0 0 8px; }
+  .panel { position: fixed; top: 12px; bottom: 12px; width: 250px; padding: 12px; background: var(--panel); border: 1px solid var(--line);
+           border-radius: 8px; overflow-y: auto; box-sizing: border-box; }
+  #diag { left: 12px; }
+  #ctrl { right: 12px; }
+  .panel.collapsed { bottom: auto; overflow: hidden; width: auto; }
+  .panel.collapsed > :not(.head) { display: none !important; }
+  .panel.collapsed .head h1 { margin-right: 10px; }
+  .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .panel.collapsed .head { margin-bottom: 0; }
+  .head h1 { margin: 0; }
+  .fold { padding: 0 7px; line-height: 18px; }
+  .panel h1 { font-size: 14px; margin: 0 0 10px; }
+  .panel h2 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 14px 0 6px;
+              border-top: 1px solid var(--line); padding-top: 10px; }
+  .head + h2 { border-top: 0; padding-top: 0; margin-top: 0; }
   .row { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
-  .row label { width: 64px; color: var(--muted); }
+  .row label { width: 64px; color: var(--muted); flex: none; }
+  .row select { flex: 1; min-width: 0; }
   select, input, button { background: #161b22; color: var(--text); border: 1px solid var(--line); border-radius: 5px; padding: 3px 6px; font: inherit; }
   button { cursor: pointer; }
   button:hover { border-color: var(--accent); }
-  #status { color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 8px; white-space: pre-line; }
-  #legend { margin-top: 8px; }
+  .check { display: flex; gap: 6px; align-items: center; margin: 4px 0; color: var(--text); }
+  .row label.check { width: auto; margin: 0 6px 0 0; }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 0; font-variant-numeric: tabular-nums; }
+  dt { color: var(--muted); }
+  dd { margin: 0; text-align: right; }
+  #fieldname { margin-bottom: 6px; }
   #bar { height: 10px; border-radius: 3px; }
-  #range { display: flex; justify-content: space-between; color: var(--muted); font-variant-numeric: tabular-nums; }
-  #conn { position: fixed; bottom: 10px; left: 12px; color: var(--muted); }
+  #range { display: flex; justify-content: space-between; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 2px; }
+  #msg { color: #f0883e; margin-top: 8px; white-space: pre-line; }
+  #conn { color: var(--muted); }
 </style>
 </head>
 <body>
 <div id="globe"></div>
-<div id="panel">
-  <h1>InSilica World V2</h1>
-  <div class="row"><button id="play">Play</button><button id="step">Step</button>
-    <label for="tpf" style="width:auto">ticks/frame</label><input id="tpf" type="number" min="1" max="1000" value="4" style="width:56px"></div>
+
+<!-- Left: diagnostics -->
+<div id="diag" class="panel">
+  <div class="head"><h1>InSilica World V2</h1><button class="fold" data-panel="diag" title="Hide or show diagnostics">–</button></div>
+  <h2>World</h2>
+  <dl>
+    <dt>Preset</dt><dd id="d-preset">–</dd>
+    <dt>Grid</dt><dd id="d-grid">–</dd>
+    <dt>Step</dt><dd id="d-dt">–</dd>
+  </dl>
+  <h2>Time</h2>
+  <dl>
+    <dt>Tick</dt><dd id="d-tick">–</dd>
+    <dt>Model day</dt><dd id="d-day">–</dd>
+    <dt>Year, day</dt><dd id="d-date">–</dd>
+    <dt>Solar time at 0°</dt><dd id="d-clock">–</dd>
+    <dt>Speed</dt><dd id="d-speed">–</dd>
+  </dl>
+  <h2>Sun</h2>
+  <dl>
+    <dt>Declination</dt><dd id="d-dec">–</dd>
+    <dt>Overhead at</dt><dd id="d-sub">–</dd>
+  </dl>
+  <h2>Field</h2>
+  <div id="fieldname">–</div>
+  <div id="bar"></div>
+  <div id="range"><span id="lo"></span><span id="hi"></span></div>
+  <dl style="margin-top: 6px">
+    <dt>Mean (cells)</dt><dd id="d-mean">–</dd>
+  </dl>
+  <div id="msg"></div>
+  <h2>Connection</h2>
+  <div id="conn">connecting…</div>
+</div>
+
+<!-- Right: controls -->
+<div id="ctrl" class="panel">
+  <div class="head"><h1>Controls</h1><button class="fold" data-panel="ctrl" title="Hide or show controls">–</button></div>
+  <h2>Run</h2>
+  <div class="row"><button id="play">Play</button><button id="step">Step</button></div>
+  <div class="row"><label for="tpf">Ticks/frame</label><input id="tpf" type="number" min="1" max="1000" value="4" style="width: 64px"></div>
+  <h2>Show</h2>
   <div class="row"><label for="field">Field</label><select id="field"></select></div>
   <div class="row"><label for="layer">Layer</label><select id="layer"></select></div>
+  <h2>New world</h2>
   <div class="row"><label for="n">Grid n</label><select id="n"></select></div>
-  <div class="row"><label for="preset">Preset</label><select id="preset"></select><button id="new">New</button></div>
-  <div id="legend"><div id="bar"></div><div id="range"><span id="lo"></span><span id="hi"></span></div></div>
-  <div id="status">connecting…</div>
+  <div class="row"><label for="preset">Preset</label><select id="preset"></select></div>
+  <div class="row"><button id="new">Start new world</button></div>
+  <h2>View</h2>
+  <label class="check"><input type="checkbox" id="v-sun" checked> Sun (not to scale)</label>
+  <label class="check"><input type="checkbox" id="v-stars" checked> Bright stars</label>
+  <div class="row"><label>Hold fixed</label>
+    <label class="check"><input type="radio" name="hold" id="v-earth" checked> Earth</label>
+    <label class="check"><input type="radio" name="hold" id="v-sunfix"> Sun</label></div>
+  <div class="row"><button id="v-reset">Reset view</button></div>
+  <div style="color: var(--muted); margin-top: 8px">Drag to turn, wheel to zoom. Zoom out to see the sun.</div>
 </div>
-<div id="conn"></div>
+
 <script src="vendor/three.min.js"></script>
 <script>
 'use strict';
 // Viewer for the local engine (protocol: src/insilica/server/app.py). It draws each cell as a fan of
-// triangles (center plus Voronoi corners) colored by the subscribed field.
+// triangles (center plus Voronoi corners) colored by the subscribed field, with the sun and the bright stars around
+// it in the planet's own frame.
 const FIELD_NAMES = { h: 'layer thickness (m, or kg/m² for air)', z: 'height of the layer top (m)', eta: 'free surface (m)', psi: 'tracer', speed: 'wind speed (m/s)', vort: 'relative vorticity (1/s)', theta: 'potential temperature θ (K)', T: 'air temperature (K)', Ts: 'surface temperature (K)', Tsurf: 'surface skin temperature, ice skin over ice (K)', ps: 'surface pressure (hPa)', q: 'specific humidity (g/kg)', rh: 'relative humidity', rain: 'rain (mm/day)', evap: 'evaporation (mm/day)', ice: 'sea ice (m)' };
 const $ = (id) => document.getElementById(id);
-let ws, info, mesh, colors, cellDeg, playing = false, field = 'psi', layer = 0;
+let ws, info, info0 = false, mesh, colors, cellDeg, playing = false, field = 'psi', layer = 0;
+
+// The sun's clock, as the column physics computes it (kernels/air.cu, atmosphere.py): tilt 23.44°, a 365-day year
+// and a 24-hour day; at time 0 the sun stands over 0° longitude at the March equinox.
+const TILT = 23.44 * Math.PI / 180, DAY_S = 86400, YEAR_S = 365 * DAY_S;
+const SUN_DIST = 6, SKY_R = 60;                        // display distances in planet radii (the sun is not to scale)
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
 $('globe').appendChild(renderer.domElement);
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0d1117);
-const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 100);
+scene.background = new THREE.Color(0x05070b);
+const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 300);
 camera.position.set(0, 0, 4);
-const globe = new THREE.Group();
+const globe = new THREE.Group();                        // turned by dragging
 scene.add(globe);
 globe.rotation.x = 0.4;
+// Engine coordinates are z-up; three.js is y-up: everything planet-fixed lives in this frame.
+const frame = new THREE.Group();
+frame.rotation.x = -Math.PI / 2;
+globe.add(frame);
+// Everything planet-fixed (cells, sun, stars) turns together inside `planet`: still with the Earth held fixed, or by
+// the solar hour angle with the sun held fixed (the Earth then turns under it).
+const planet = new THREE.Group();
+frame.add(planet);
+let fixedSun = false, lastT = 0;
 function resize() { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
 addEventListener('resize', resize); resize();
 
@@ -68,8 +148,119 @@ addEventListener('pointermove', (e) => {
   globe.rotation.x = Math.max(-1.5, Math.min(1.5, globe.rotation.x + (e.clientY - drag[1]) * 0.005));
   drag = [e.clientX, e.clientY];
 });
-renderer.domElement.addEventListener('wheel', (e) => { camera.position.z = Math.max(1.6, Math.min(12, camera.position.z * Math.exp(e.deltaY * 0.001))); e.preventDefault(); }, { passive: false });
+renderer.domElement.addEventListener('wheel', (e) => { camera.position.z = Math.max(1.6, Math.min(40, camera.position.z * Math.exp(e.deltaY * 0.001))); e.preventDefault(); }, { passive: false });
 (function animate() { requestAnimationFrame(animate); renderer.render(scene, camera); })();
+
+// ---- Sun: a glowing disc far out along the model's sun direction, and a marker where it stands overhead ----
+function glowTexture(inner, outer) {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d'), r = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  r.addColorStop(0, inner); r.addColorStop(0.3, inner); r.addColorStop(0.5, outer); r.addColorStop(1, 'rgba(255,200,80,0)');
+  g.fillStyle = r; g.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(c);
+}
+const sun = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture('#fffbe8', 'rgba(255,200,90,0.55)'), depthWrite: false }));
+sun.scale.set(2.6, 2.6, 1);
+planet.add(sun);
+const subsolar = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture('#fff3b0', 'rgba(255,220,120,0.6)'), depthTest: true }));
+subsolar.scale.set(0.06, 0.06, 1);
+planet.add(subsolar);
+
+// ---- Stars: the brightest stars at their real positions (J2000 right ascension in hours, declination in degrees,
+// visual magnitude, color; rounded catalog values — a visual approximation, not an ephemeris) ----
+const STARS = [
+  ['Sirius', 6.752, -16.716, -1.46, '#cfdcff'], ['Canopus', 6.399, -52.696, -0.74, '#fff8f0'], ['Rigil Kentaurus', 14.660, -60.834, -0.27, '#fff4e0'],
+  ['Arcturus', 14.261, 19.182, -0.05, '#ffd2a1'], ['Vega', 18.616, 38.784, 0.03, '#cad8ff'], ['Capella', 5.278, 45.998, 0.08, '#fff1d0'],
+  ['Rigel', 5.242, -8.202, 0.13, '#c4d4ff'], ['Procyon', 7.655, 5.225, 0.34, '#fff6e8'], ['Achernar', 1.629, -57.237, 0.46, '#c8d6ff'],
+  ['Betelgeuse', 5.919, 7.407, 0.50, '#ffb07a'], ['Hadar', 14.064, -60.373, 0.61, '#cbd8ff'], ['Altair', 19.846, 8.868, 0.76, '#fafaff'],
+  ['Acrux', 12.443, -63.099, 0.76, '#c8d6ff'], ['Aldebaran', 4.599, 16.509, 0.86, '#ffc28a'], ['Antares', 16.490, -26.432, 0.96, '#ffa36e'],
+  ['Spica', 13.420, -11.161, 0.97, '#c4d2ff'], ['Pollux', 7.755, 28.026, 1.14, '#ffdcb0'], ['Fomalhaut', 22.961, -29.622, 1.16, '#f4f6ff'],
+  ['Deneb', 20.690, 45.280, 1.25, '#f0f4ff'], ['Mimosa', 12.795, -59.689, 1.25, '#c8d6ff'], ['Regulus', 10.140, 11.967, 1.35, '#d6e0ff'],
+  ['Adhara', 6.977, -28.972, 1.50, '#ccd8ff'], ['Castor', 7.577, 31.888, 1.58, '#e8eeff'], ['Shaula', 17.560, -37.104, 1.62, '#ccd8ff'],
+  ['Gacrux', 12.519, -57.113, 1.63, '#ffb27c'], ['Bellatrix', 5.419, 6.350, 1.64, '#ccd8ff'], ['Elnath', 5.438, 28.608, 1.65, '#d8e2ff'],
+  ['Miaplacidus', 9.220, -69.717, 1.68, '#f0f4ff'], ['Alnilam', 5.604, -1.202, 1.69, '#c8d6ff'], ['Alnair', 22.137, -46.961, 1.74, '#d0dcff'],
+  ['Alnitak', 5.679, -1.943, 1.77, '#c8d6ff'], ['Alioth', 12.900, 55.960, 1.77, '#eef2ff'], ['Dubhe', 11.062, 61.751, 1.79, '#ffd8a8'],
+  ['Mirfak', 3.405, 49.861, 1.80, '#fff4e0'], ['Wezen', 7.140, -26.393, 1.83, '#fff4e0'], ['Kaus Australis', 18.403, -34.385, 1.85, '#d8e2ff'],
+  ['Sargas', 17.622, -42.998, 1.86, '#fff4e8'], ['Avior', 8.375, -59.510, 1.86, '#ffcc99'], ['Alkaid', 13.792, 49.313, 1.86, '#c8d6ff'],
+  ['Menkalinan', 5.992, 44.947, 1.90, '#eef2ff'], ['Atria', 16.811, -69.028, 1.91, '#ffc28a'], ['Alhena', 6.629, 16.399, 1.92, '#eef2ff'],
+  ['Peacock', 20.427, -56.735, 1.94, '#ccd8ff'], ['Alsephina', 8.745, -54.709, 1.96, '#eef2ff'], ['Mirzam', 6.378, -17.956, 1.98, '#ccd8ff'],
+  ['Alphard', 9.460, -8.659, 1.98, '#ffc895'], ['Polaris', 2.530, 89.264, 1.98, '#fff4e0'], ['Hamal', 2.120, 23.462, 2.00, '#ffcc99'],
+  ['Diphda', 0.727, -17.987, 2.04, '#ffd8a8'], ['Nunki', 18.921, -26.297, 2.05, '#ccd8ff'], ['Menkent', 14.111, -36.370, 2.06, '#ffd2a1'],
+  ['Mirach', 1.162, 35.621, 2.07, '#ffb07a'], ['Alpheratz', 0.140, 29.091, 2.07, '#d8e2ff'], ['Tiaki', 22.711, -46.885, 2.07, '#ffb27c'],
+  ['Algieba', 10.333, 19.842, 2.08, '#ffd2a1'], ['Rasalhague', 17.582, 12.560, 2.08, '#f4f6ff'], ['Kochab', 14.845, 74.156, 2.08, '#ffc895'],
+  ['Saiph', 5.796, -9.670, 2.09, '#ccd8ff'], ['Algol', 3.136, 40.956, 2.12, '#d8e2ff'], ['Denebola', 11.818, 14.572, 2.14, '#f0f4ff'],
+  ['Muhlifain', 12.692, -48.960, 2.20, '#eef2ff'], ['Aspidiske', 9.285, -59.275, 2.21, '#f4f6ff'], ['Suhail', 9.133, -43.433, 2.21, '#ffc28a'],
+  ['Alphecca', 15.578, 26.715, 2.22, '#eef2ff'], ['Mizar', 13.399, 54.925, 2.23, '#eef2ff'], ['Sadr', 20.370, 40.257, 2.23, '#fff4e0'],
+  ['Schedar', 0.675, 56.537, 2.24, '#ffcc99'], ['Eltanin', 17.943, 51.489, 2.24, '#ffc895'], ['Naos', 8.060, -40.003, 2.25, '#b8c8ff'],
+  ['Mintaka', 5.533, -0.299, 2.25, '#ccd8ff'], ['Caph', 0.153, 59.150, 2.28, '#fff4e8'], ['Dschubba', 16.006, -22.622, 2.29, '#ccd8ff'],
+  ['Larawag', 16.836, -34.293, 2.29, '#ffcc99'], ['Merak', 11.031, 56.383, 2.37, '#eef2ff'], ['Izar', 14.750, 27.074, 2.37, '#ffd2a1'],
+  ['Enif', 21.736, 9.875, 2.39, '#ffb87e'], ['Ankaa', 0.438, -42.306, 2.40, '#ffd2a1'], ['Scheat', 23.063, 28.083, 2.42, '#ffb07a'],
+  ['Sabik', 17.173, -15.725, 2.43, '#f0f4ff'], ['Phecda', 11.897, 53.695, 2.44, '#eef2ff'], ['Aludra', 7.402, -29.303, 2.45, '#ccd8ff'],
+  ['Alderamin', 21.310, 62.586, 2.45, '#f4f6ff'], ['Gamma Cas', 0.945, 60.717, 2.47, '#ccd8ff'], ['Markab', 23.079, 15.205, 2.48, '#eef2ff'],
+  ['Gienah (Cyg)', 20.770, 33.970, 2.48, '#ffd8a8'], ['Zosma', 11.235, 20.524, 2.56, '#eef2ff'], ['Arneb', 5.546, -17.822, 2.58, '#fff4e0'],
+  ['Gienah (Crv)', 12.263, -17.542, 2.59, '#ccd8ff'], ['Ascella', 19.044, -29.880, 2.60, '#eef2ff'], ['Zubeneschamali', 15.283, -9.383, 2.61, '#ccd8ff'],
+  ['Acrab', 16.091, -19.806, 2.62, '#ccd8ff'], ['Unukalhai', 15.738, 6.426, 2.63, '#ffc895'], ['Ruchbah', 1.430, 60.235, 2.68, '#f4f6ff'],
+  ['Kaus Media', 18.350, -29.828, 2.70, '#ffc895'], ['Lesath', 17.513, -37.296, 2.70, '#ccd8ff'], ['Tarazed', 19.771, 10.613, 2.72, '#ffc28a'],
+  ['Zubenelgenubi', 14.848, -16.042, 2.75, '#f4f6ff'], ['Delta Cru', 12.252, -58.749, 2.79, '#ccd8ff'], ['Algenib', 0.221, 15.184, 2.83, '#ccd8ff'],
+  ['Alcyone', 3.791, 24.105, 2.87, '#ccd8ff'], ['Delta Cyg', 19.750, 45.131, 2.87, '#e8eeff'], ['Pherkad', 15.345, 71.834, 3.00, '#f0f4ff'],
+  ['Albireo', 19.512, 27.960, 3.08, '#ffd2a1'], ['Megrez', 12.257, 57.033, 3.31, '#eef2ff'], ['Segin', 1.907, 63.670, 3.37, '#ccd8ff'],
+];
+const sky = new THREE.Group();                          // the celestial sphere, turned by the sidereal angle
+planet.add(sky);
+(function buildStars() {
+  const dot = glowTexture('#ffffff', 'rgba(255,255,255,0.5)');
+  const bins = [[-2, 0.5, 9], [0.5, 1.5, 7], [1.5, 2.3, 5.5], [2.3, 9, 4.5]];       // magnitude range -> point size (px)
+  for (const [lo, hi, size] of bins) {
+    const sel = STARS.filter(s => s[3] >= lo && s[3] < hi);
+    const P = new Float32Array(sel.length * 3), C = new Float32Array(sel.length * 3);
+    sel.forEach(([, ra, dec, , col], i) => {
+      const a = ra * Math.PI / 12, d = dec * Math.PI / 180;
+      P.set([SKY_R * Math.cos(d) * Math.cos(a), SKY_R * Math.cos(d) * Math.sin(a), SKY_R * Math.sin(d)], 3 * i);
+      const c = new THREE.Color(col); C.set([c.r, c.g, c.b], 3 * i);
+    });
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(P, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(C, 3));
+    sky.add(new THREE.Points(geo, new THREE.PointsMaterial({ size: size * devicePixelRatio, sizeAttenuation: false, vertexColors: true,
+                                                              map: dot, transparent: true, depthWrite: false })));
+  }
+})();
+
+// Place the sun, the subsolar marker and the sky for model time t (s). The sun's ecliptic longitude is 2 pi t / year
+// from the March equinox; in the planet's frame it stands over longitude -2 pi (t mod day) / day at declination
+// asin(sin tilt sin lambda) (as the column physics has it). The stars keep their equatorial positions; the planet
+// turns under them by the sidereal angle theta_g = alpha_sun + 2 pi (t mod day) / day.
+function placeSky(t) {
+  lastT = t;
+  const lam = 2 * Math.PI * t / YEAR_S, rot = 2 * Math.PI * (((t % DAY_S) + DAY_S) % DAY_S) / DAY_S;
+  const dec = Math.asin(Math.sin(TILT) * Math.sin(lam));
+  const lon = -rot;
+  const s = [Math.cos(dec) * Math.cos(lon), Math.cos(dec) * Math.sin(lon), Math.sin(dec)];
+  sun.position.set(SUN_DIST * s[0], SUN_DIST * s[1], SUN_DIST * s[2]);
+  subsolar.position.set(1.004 * s[0], 1.004 * s[1], 1.004 * s[2]);
+  const alpha = Math.atan2(Math.cos(TILT) * Math.sin(lam), Math.cos(lam));
+  sky.rotation.z = -(alpha + rot);
+  planet.rotation.z = fixedSun ? rot : 0;
+  const deg = (r) => r * 180 / Math.PI, lonDeg = ((deg(lon) % 360) + 540) % 360 - 180;
+  $('d-dec').textContent = `${deg(dec).toFixed(2)}°`;
+  $('d-sub').textContent = `${Math.abs(deg(dec)).toFixed(1)}°${dec >= 0 ? 'N' : 'S'}, ${Math.abs(lonDeg).toFixed(1)}°${lonDeg >= 0 ? 'E' : 'W'}`;
+  const year = Math.floor(t / YEAR_S) + 1, doy = (t % YEAR_S) / DAY_S;
+  $('d-date').textContent = `year ${year}, day ${doy.toFixed(1)}`;
+  const hours = (12 + 24 * (((t % DAY_S) + DAY_S) % DAY_S) / DAY_S) % 24;     // local solar time at 0° longitude
+  $('d-clock').textContent = `${String(Math.floor(hours)).padStart(2, '0')}:${String(Math.floor((hours % 1) * 60)).padStart(2, '0')}`;
+}
+placeSky(0);
+$('v-sun').onchange = () => { sun.visible = subsolar.visible = $('v-sun').checked; };
+$('v-stars').onchange = () => { sky.visible = $('v-stars').checked; };
+$('v-earth').onchange = $('v-sunfix').onchange = () => { fixedSun = $('v-sunfix').checked; placeSky(lastT); };
+// Panels fold to their title; on a narrow window both start folded so the globe stays in view.
+for (const b of document.querySelectorAll('.fold')) {
+  const p = $(b.dataset.panel);
+  const set = (c) => { p.classList.toggle('collapsed', c); b.textContent = c ? '+' : '–'; };
+  b.onclick = () => set(!p.classList.contains('collapsed'));
+  if (innerWidth < 900) set(true);
+}
+$('v-reset').onclick = () => { globe.rotation.set(0.4, 0, 0); camera.position.set(0, 0, 4); };
 
 function parseFrame(buf) {
   const dv = new DataView(buf), hl = dv.getUint32(0, true);
@@ -86,7 +277,7 @@ function parseFrame(buf) {
 }
 
 function buildMesh(N, pos, corners, deg) {
-  if (mesh) { globe.remove(mesh); mesh.geometry.dispose(); }
+  if (mesh) { planet.remove(mesh); mesh.geometry.dispose(); }
   // Vertices: each cell's center and its corners (7 per cell); indices: a fan of deg triangles.
   const P = new Float32Array(N * 7 * 3), idx = new Uint32Array(N * 6 * 3);
   let t = 0;
@@ -101,10 +292,8 @@ function buildMesh(N, pos, corners, deg) {
   colors = new Float32Array(N * 7 * 3);
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.setIndex(new THREE.BufferAttribute(idx.subarray(0, t), 1));
-  // Engine coordinates are z-up; three.js is y-up.
   mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.FrontSide }));
-  mesh.rotation.x = -Math.PI / 2;
-  globe.add(mesh);
+  planet.add(mesh);
   cellDeg = deg;
 }
 
@@ -116,21 +305,27 @@ function ramp(R, x) {
   const k = Math.min(R.length - 2, Math.floor(x)), f = x - k;
   return [0, 1, 2].map(c => R[k][c] + f * (R[k + 1][c] - R[k][c]));
 }
+const fmt = (v) => Math.abs(v) >= 1e4 || (Math.abs(v) < 1e-2 && v !== 0) ? v.toExponential(2) : v.toFixed(2);
 function paint(h, a) {
   if (!mesh || a.length * 7 * 3 !== colors.length) return;
   const div = h.name === 'vort';
   let lo = h.min, hi = h.max;
   if (div) { const m = Math.max(Math.abs(lo), Math.abs(hi)) || 1; lo = -m; hi = m; }
   const span = hi - lo || 1;
+  let sum = 0;
   for (let i = 0; i < a.length; i++) {
+    sum += a[i];
     const c = ramp(div ? DIV : RAMP, (a[i] - lo) / span);
     for (let k = 0; k < 7; k++) colors.set(c, (i * 7 + k) * 3);
   }
   mesh.geometry.attributes.color.needsUpdate = true;
   const R = div ? DIV : RAMP;
   $('bar').style.background = `linear-gradient(90deg, ${R.map(c => `rgb(${c.map(v => Math.round(v * 255)).join(',')})`).join(',')})`;
-  const f = (v) => Math.abs(v) >= 1e4 || (Math.abs(v) < 1e-2 && v !== 0) ? v.toExponential(2) : v.toFixed(2);
-  $('lo').textContent = f(lo); $('hi').textContent = f(hi);
+  $('lo').textContent = fmt(lo); $('hi').textContent = fmt(hi);
+  $('d-mean').textContent = fmt(sum / a.length);
+  $('msg').textContent = h.finite === false ? 'This field has non-finite values: the run has blown up.' : '';
+  const nl = info ? info.layers : 1;
+  $('fieldname').textContent = `${FIELD_NAMES[h.name] || h.name}${nl > 1 ? `, layer ${h.layer}` : ''}`;
 }
 
 function send(m) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); }
@@ -144,15 +339,23 @@ function connect() {
       const m = JSON.parse(ev.data);
       if (m.type === 'info') {
         info = m;
-        if (!m.fields.includes(field)) field = m.fields.includes('Ts') ? 'Ts' : 'psi';
+        // air worlds open on the surface temperature (their demo tracer does not move); others on the tracer
+        const pick = ['Tsurf', 'Ts', 'psi'].find(f => m.fields.includes(f));
+        if (!m.fields.includes(field) || (!info0 && pick)) field = pick || m.fields[0];
+        info0 = true;
         fill($('field'), m.fields, field, (v) => FIELD_NAMES[v] || v);
         layer = Math.min(layer, m.layers - 1);
         fill($('layer'), [...Array(m.layers).keys()], layer, (k) => m.layers === 1 ? '0 (single layer)' : k === 0 ? '0 (top)' : k === m.layers - 1 ? `${k} (bottom)` : `${k}`);
         fill($('preset'), m.presets, m.preset);
         fill($('n'), [2, 3, 4, 5, 6, 7, 8], m.n);
+        $('d-preset').textContent = m.preset;
+        $('d-grid').textContent = `n = ${m.n}, ${m.N.toLocaleString()} cells, ${m.layers} layer${m.layers > 1 ? 's' : ''}`;
+        $('d-dt').textContent = `${m.dt} s`;
+        $('msg').textContent = '';
+        rate = null;
         status(m);
       } else if (m.type === 'status') status(m);
-      else if (m.type === 'error') $('status').textContent = m.message;
+      else if (m.type === 'error') $('msg').textContent = m.message;
       return;
     }
     const { header, arrays } = parseFrame(ev.data);
@@ -163,11 +366,21 @@ function connect() {
 function fill(sel, values, current, label = (v) => v) {
   sel.innerHTML = values.map(v => `<option value="${v}"${String(v) === String(current) ? ' selected' : ''}>${label(v)}</option>`).join('');
 }
+let rate = null;                                        // [wall time, model day] of an earlier status, for the speed
 function status(m) {
   playing = m.playing;
   $('play').textContent = playing ? 'Pause' : 'Play';
   const day = m.day !== undefined ? m.day : m.tick * info.dt / 86400;
-  $('status').textContent = `n = ${info.n} (${info.N.toLocaleString()} cells), ${info.preset}\ntick ${m.tick}, day ${day.toFixed(2)} (dt ${info.dt} s)`;
+  $('d-tick').textContent = m.tick.toLocaleString();
+  $('d-day').textContent = day.toFixed(2);
+  placeSky(day * DAY_S);
+  const now = performance.now();
+  if (playing && rate && now - rate[0] > 500) {
+    const dps = (day - rate[1]) / ((now - rate[0]) / 1000);
+    $('d-speed').textContent = dps >= 1 ? `${dps.toFixed(1)} model days/s` : `${(dps * 24).toFixed(2)} model h/s`;
+    rate = [now, day];
+  } else if (!playing) { $('d-speed').textContent = 'paused'; rate = null; }
+  if (playing && !rate) rate = [now, day];
 }
 $('play').onclick = () => send(playing ? { type: 'pause' } : { type: 'play', tpf: +$('tpf').value });
 $('tpf').onchange = () => { if (playing) send({ type: 'play', tpf: +$('tpf').value }); };

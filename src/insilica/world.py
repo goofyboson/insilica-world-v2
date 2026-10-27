@@ -26,12 +26,12 @@ from .layers import DIV_DAMP, Layers
 from .transport import BETA, Transport
 
 FIELDS = ('h', 'z', 'eta', 'psi', 'speed', 'vort', 'theta', 'T', 'Ts', 'Tsurf', 'ps', 'q', 'rh', 'rain', 'evap', 'ice',
-          'sst', 'mld', 'tdeep', 'current')
+          'sst', 'mld', 'tthermo', 'tdeep', 'current')
 # z: height of the layer's top; eta: the free surface; theta, T, Ts, ps: air (potential temperature, temperature,
 # surface temperature, surface pressure in hPa); q, rh, rain, evap, ice: moist air (specific humidity in g/kg, relative
 # humidity, rain and evaporation in mm/day, sea ice in m, Tsurf the radiating surface: the ice skin over ice);
-# sst, mld, tdeep, current: the ocean (V2-3; mixed-layer temperature in °C, its depth in m, the deep layer's temperature
-# in °C, the mixed layer's current speed in m/s)
+# sst, mld, tthermo, tdeep, current: the ocean (V2-3; mixed-layer temperature in °C, its depth in m, the thermocline
+# layer's and the abyss's temperatures in °C, the mixed layer's current speed in m/s)
 
 
 def visc4(g, U):
@@ -159,7 +159,8 @@ class World:
             self.physics.column(self.h, self.theta, self.Ts, self.u, self.time, self.dt,
                                 q=self.q if self.moist else None, ice=self.ice if self.moist else None,
                                 cap=self.sea.cap if self.sea is not None else None,
-                                qocean=self.sea.qocean if self.sea is not None else None)
+                                qocean=self.sea.qocean if self.sea is not None else None,
+                                qsw=self.sea.qsw if self.sea is not None else None)
             if self.sea is not None:
                 self.sea.accumulate(self.dt)
             if self.L > 1:
@@ -232,7 +233,7 @@ class World:
         if not self.air:
             return base
         return (base + ['theta', 'T', 'Ts', 'ps'] + (['Tsurf', 'q', 'rh', 'rain', 'evap', 'ice'] if self.moist else [])
-                + (['sst', 'mld', 'tdeep', 'current'] if self.sea is not None else []))
+                + (['sst', 'mld', 'tthermo', 'tdeep', 'current'] if self.sea is not None else []))
 
     def field(self, name, layer=0):
         """A cell field (CuPy, float64) for the viewer."""
@@ -252,8 +253,10 @@ class World:
             return self.q[layer] * 1000.0                          # g/kg
         if name == 'sst':
             return self.sea.T[0] - 273.15
-        if name == 'tdeep':
+        if name == 'tthermo':
             return self.sea.T[1] - 273.15
+        if name == 'tdeep':
+            return self.sea.T[-1] - 273.15
         if name == 'mld':
             return self.sea.h[0]
         if name == 'current':

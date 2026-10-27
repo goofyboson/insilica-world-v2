@@ -12,7 +12,6 @@
 
 typedef REAL real;
 #define LMAX 8
-#define THIN_RATIO 2.0
 
 #define LOOP1(i, n) const int i = blockIdx.x * blockDim.x + threadIdx.x; if (i >= (n)) return;
 #define LOOP(i, n) const int i = blockIdx.x * blockDim.x + threadIdx.x; if (i >= (n)) return; const int l = blockIdx.y;
@@ -249,7 +248,7 @@ extern "C" __global__ void lay_slow(int N, int E, int NV, int L, const real* hed
                                     const int* eoeStart, const int* eoe, const real* w, const int* eI, const int* eJ,
                                     const int* ev1, const int* ev2, const real* de, const real* drag, const real* stress,
                                     real floor_, real nu4, const real* lap4, const real* theta, const real* pibar,
-                                    real dts, real* Tp, real* G, real* He, real* ubs) {
+                                    real dts, real thin, real* Tp, real* G, real* He, real* ubs) {
   LOOP1(e, E)
   real T[LMAX], hev[LMAX];
   real H = 0, U = 0, GT = 0;
@@ -260,10 +259,10 @@ extern "C" __global__ void lay_slow(int N, int E, int NV, int L, const real* hed
     const real* Bl = B + (size_t)k * N;
     const real qa = ql[e];
     const real he = hl[e];
-    // PV flux. Where a layer thins out (an outcrop front), a neighbour's thickness counts for at most THIN_RATIO times
+    // PV flux. Where a layer thins out (an outcrop front), a neighbour's thickness counts for at most `thin` times
     // this edge's own: otherwise a floor-thin vertex's q = (zeta + f) / h_v times a thick neighbour's flux amplifies
     // the Coriolis force on the thin layer by their thickness ratio (decision #38). Smooth layers never reach the cap.
-    const real cap = THIN_RATIO * he;
+    const real cap = thin * he;
     real Q = 0;
     for (int m = eoeStart[e]; m < eoeStart[e + 1]; m++) {
       const int e2 = eoe[m];

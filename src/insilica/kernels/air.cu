@@ -257,7 +257,8 @@ __device__ __forceinline__ real tau_p(real p, real ps, const Par& P) {
 extern "C" __global__ void air_column(int N, int L, const real* par, int mode, const real* t, const real* insol, const real* pos,
                                       const real* uabs, real* mu_in, real* theta, real* qv, real* Ts, real* ice, real dt,
                                       real* wx, real* olr, real* sw_abs, real* stored, real* rain, real* evap, real* conv,
-                                      real* tsurf, real* rainp, real* dgo, const real* cap, real* qocean) {
+                                      real* tsurf, real* rainp, real* dgo, const real* cap, real* qocean,
+                                      real* qsw) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= N) return;
   const Par P = unpack(par);
@@ -392,6 +393,7 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
   else qS = swS + ldown - P.eps_s * P.sigma * ts * ts * ts * ts - H - P.Lv * E;
   real Tn = ts + qS * dt / Cw;
   if (qocean) qocean[i] = qS;                                    // W/m^2 into the surface water (before ice)
+  if (qsw) qsw[i] = skin ? (real)0 : swS;                      // its sunlight (open water), part of which passes below
   if (moist) {
     m_ice -= melt_top * dt / P.Lf;
     if (m_ice < 0) { Tn += -m_ice * P.Lf / Cw; m_ice = 0; }   // more top melt than ice: the rest warms the slab

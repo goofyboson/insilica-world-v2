@@ -34,16 +34,17 @@ DIV_DAMP = 0.1              # divergence damping of the fast mode (decision #28)
 
 class Layers:
     def __init__(self, dg, layers=1, b=None, grav=GRAV, gprime=(), drag=0.0, stress=0.0, nu4=0.0, floor=1.0, rotation=1.0,
-                 div_damp=DIV_DAMP, air=None, vmix=0.0, ocean=None):
+                 div_damp=DIV_DAMP, air=None, vmix=0.0, ocean=None, thin=2.0):
         """air: None for Boussinesq (ocean-like) layers, h in m; or a dict for air layers, h the layer's mass per area
         (kg/m²) with a potential temperature θ per layer passed to step() (decision #32). The fast mode then runs on
         the column mass with each cell's own coefficient Gc = R·T_s/μ (decision #37), at √(R·T_s). ocean: None, or
         dict(alpha=…) for Boussinesq layers whose density follows a temperature T per layer passed to step() as theta
-        (decision #64): g' per cell from T, plus the variable-density pressure term."""
+        (decision #64): g' per cell from T, plus the variable-density pressure term. thin: the PV flux's cap on a
+        neighbour's thickness, in multiples of the edge's own (decision #38; the ocean's, #72)."""
         assert 1 <= layers <= LMAX and len(gprime) == layers - 1
         self.dg, self.L = dg, layers
         self.real = dg.dtype.type
-        self.grav, self.nu4, self.floor, self.div_damp = grav, nu4, floor, div_damp
+        self.grav, self.nu4, self.floor, self.div_damp, self.thin = grav, nu4, floor, div_damp, thin
         N, E, NV, L, dt = dg.N, dg.E, dg.NV, layers, dg.dtype
         z = lambda *s: cp.zeros(s, dtype=dt)
         self.b = z(N) if b is None else cp.asarray(b, dtype=dt)
@@ -129,7 +130,7 @@ class Layers:
         k['lay_slow'](*e1, (N, E, NV, i32(L), self.hedge, us, self.qedge, self.B, g.eoeStart, g.eoe, g.w, g.eI, g.eJ, g.ev1, g.ev2, g.de,
                             self.drag, self.stress, R(self.floor), R(self.nu4), self.L2 if self.nu4 else NULL,
                             theta if self.air else (self.buoy if self.ocean else NULL),
-                            self.pibar if (self.air or self.ocean) else NULL, R(c * dt), self.Tp, self.G, self.He,
+                            self.pibar if (self.air or self.ocean) else NULL, R(c * dt), R(self.thin), self.Tp, self.G, self.He,
                             self.ubs))
         n = max(1, math.ceil(c * nfast))
         tau = R(c * dt / n)

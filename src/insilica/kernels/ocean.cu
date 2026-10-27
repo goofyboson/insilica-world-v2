@@ -4,6 +4,7 @@
 // rho0 (1 - alpha (T - T0))), on the same grid as the air (layer-major arrays, one thread per cell or edge).
 
 typedef REAL real;
+#define LMAX 8
 
 #define LOOP1(i, n) const int i = blockIdx.x * blockDim.x + threadIdx.x; if (i >= (n)) return;
 
@@ -31,28 +32,46 @@ extern "C" __global__ void couple_stress(int N, int E, int La, const real* ha, r
   tau_acc[e] += tau * tau * dt;
 }
 
-// The mixed layer over one ocean step (decisions #66, #67), per column:
-// 1. Overturning: a mixed layer colder (denser) than the deep layer mixes with it completely (heat conserved).
+// Convective adjustment (decisions #66, #71): wherever a layer is colder (denser) than the one below, the two mix
+// completely (heat conserved, interfaces unmoved); repeated until the column is stable (L - 1 passes suffice, as a
+// mixed pair is merged into a block that is mixed again with the next layer).
+__device__ void adjust(int N, int L, int i, const real* h, real* T) {
+  real hb[LMAX], Tb[LMAX];
+  int first[LMAX], nb = 0;
+  for (int k = 0; k < L; k++) {                                 // blocks of mixed layers, top down
+    hb[nb] = h[(size_t)k * N + i]; Tb[nb] = T[(size_t)k * N + i]; first[nb] = k; nb++;
+    while (nb > 1 && Tb[nb - 2] < Tb[nb - 1]) {                 // the block above is denser: merge
+      Tb[nb - 2] = (hb[nb - 2] * Tb[nb - 2] + hb[nb - 1] * Tb[nb - 1]) / (hb[nb - 2] + hb[nb - 1]);
+      hb[nb - 2] += hb[nb - 1];
+      nb--;
+    }
+  }
+  for (int j = 0; j < nb; j++) {
+    const int k1 = j + 1 < nb ? first[j + 1] : L;
+    for (int k = first[j]; k < k1; k++) T[(size_t)k * N + i] = Tb[j];
+  }
+}
+
+// The mixed layer over one mixing interval (decisions #66, #67, #71), per column:
+// 1. Convective adjustment (above).
 // 2. Entrainment (Kraus-Turner, as simplified by Gaspar 1988): the turbulent energy available at the layer's base,
 //    P = 2 m u*^3 - (h / 2) ((1 + n) B0 - (1 - n) |B0|), with B0 the surface buoyancy flux (g alpha Q / (rho c); heating
 //    > 0), deepens the layer at w_e = P / (h db) (db = g alpha (T0 - T1)) when P > 0; when P < 0 the layer shoals to the
 //    Monin-Obukhov depth 2 m u*^3 / B0 (detraining its own water). u*^3 = (tau / rho_w)^(3/2) from the step's mean stress.
-// wx (m, > 0 up into the mixed layer) is then applied with Layers.exchange (mass, temperature and momentum together);
-// each layer keeps at least hmin.
-// Entrainment needs a stratified base: below a jump of dTmin the layers are effectively mixed already (the overturning did
+// The mixed layer trades water with the thermocline layer below it only; the deeper interfaces move with the dynamics
+// (and the adjustment mixes their temperatures). wx (L - 1 rows, m, > 0 up into the layer above) is then applied with
+// Layers.exchange (mass, temperature and momentum together); each layer keeps at least hmin.
+// Entrainment needs a stratified base: below a jump of dTmin the layers are effectively mixed already (the adjustment did
 // it, by mixing T without moving the interface) and entraining would only move thickness; the mixed layer stays at most
-// hmax deep (Earth's deepest winter mixed layers), so the deep layer stays thick (decision #68).
-extern "C" __global__ void ocn_column(int N, real* h, real* T, const real* taum, const real* qmean, real galpha, real rho_w,
-                                      real cw, real m_kt, real n_kt, real hmin, real hmax, real dTmin, real dt, real* wx) {
+// hmax deep (Earth's deepest winter mixed layers) (decision #68).
+extern "C" __global__ void ocn_column(int N, int L, const real* h, real* T, const real* taum, const real* qmean, real galpha,
+                                      real rho_w, real cw, real m_kt, real n_kt, real hmin, real hmax, real dTmin, real dt,
+                                      real* wx) {
   LOOP1(i, N)
+  adjust(N, L, i, h, T);
   const real h0 = h[i], h1 = h[(size_t)N + i];
-  real T0 = T[i], T1 = T[(size_t)N + i];
-  if (T0 < T1) {                                                // overturning
-    const real Tm = (h0 * T0 + h1 * T1) / (h0 + h1);
-    T0 = Tm; T1 = Tm;
-    T[i] = Tm; T[(size_t)N + i] = Tm;
-  }
-  const real us = sqrt(taum[i] / rho_w);                        // u* from the step's rms stress (N/m^2)
+  const real T0 = T[i], T1 = T[(size_t)N + i];
+  const real us = sqrt(taum[i] / rho_w);                        // u* from the interval's rms stress (N/m^2)
   const real us3 = us * us * us;
   const real B0 = galpha * qmean[i] / (rho_w * cw);
   const real P = 2 * m_kt * us3 - (real)0.5 * h0 * ((1 + n_kt) * B0 - (1 - n_kt) * fabs(B0));
@@ -71,18 +90,35 @@ extern "C" __global__ void ocn_column(int N, real* h, real* T, const real* taum,
   if (dm > up_max) dm = up_max > 0 ? up_max : (real)0;
   if (-dm > dn_max) dm = dn_max > 0 ? -dn_max : (real)0;
   wx[i] = dm;
+  for (int k = 1; k < L - 1; k++) wx[(size_t)k * N + i] = 0;
 }
 
-// Overturning before every ocean step (decision #66): a mixed layer colder (denser) than the deep layer mixes with it
-// completely (heat conserved). Left for the daily mixing, the stratification's g' went negative between mixings and the
-// interface grew without bound (the layered model's Rayleigh-Taylor instability).
-extern "C" __global__ void ocn_overturn(int N, const real* h, real* T) {
+// Convective adjustment before every ocean step (decision #66): left for the daily mixing, the stratification's g' went
+// negative between mixings and the interface grew without bound (the layered model's Rayleigh-Taylor instability).
+extern "C" __global__ void ocn_overturn(int N, int L, const real* h, real* T) {
   LOOP1(i, N)
-  const real h0 = h[i], h1 = h[(size_t)N + i], T0 = T[i], T1 = T[(size_t)N + i];
-  if (T0 < T1) {
-    const real Tm = (h0 * T0 + h1 * T1) / (h0 + h1);
-    T[i] = Tm; T[(size_t)N + i] = Tm;
+  adjust(N, L, i, h, T);
+}
+
+// Sunlight below the mixed layer (decision #70), every air step: of the sunlight the air column put into the mixed layer,
+// the part passing depth z, f(z) = R exp(-z / z1) + (1 - R) exp(-z / z2) (Paulson & Simpson 1977, clear water), heats
+// the layers below instead, each the part absorbed within it. Heat is moved, not made. q_acc sums the rest (the mixed
+// layer's own flux) for the mixing.
+extern "C" __global__ void ocn_pen(int N, int L, const real* h, real* T, const real* qocean, const real* qsw, real rho_cw,
+                                   real R, real z1, real z2, real dt, real* q_acc) {
+  LOOP1(i, N)
+  real z = h[i];
+  real f = R * exp(-z / z1) + (1 - R) * exp(-z / z2);
+  const real pen = qsw[i] * f;
+  T[i] -= pen * dt / (rho_cw * h[i]);
+  for (int k = 1; k < L; k++) {
+    const real hk = h[(size_t)k * N + i];
+    z += hk;
+    const real fb = k < L - 1 ? R * exp(-z / z1) + (1 - R) * exp(-z / z2) : (real)0;
+    T[(size_t)k * N + i] += qsw[i] * (f - fb) * dt / (rho_cw * hk);
+    f = fb;
   }
+  q_acc[i] += (qocean[i] - pen) * dt;
 }
 
 // The mixed layer's heat capacity per cell for the air's surface physics: rho_w c_w h0 (J/m^2/K).

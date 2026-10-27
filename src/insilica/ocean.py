@@ -1,13 +1,15 @@
 """The ocean under the air (stage V2-3, kernels/ocean.cu; decisions #64–#69).
 
-Two Boussinesq layers on the air's grid — the mixed layer (k = 0) and the deep layer — over a flat bottom, each with a
-temperature T (K) that sets its density, ρ = ρ₀(1 − α(T − T₀)): the interface between them is the thermocline and moves
-freely (wind-driven Ekman pumping, upwelling, Kelvin and Rossby waves). The mixed layer's temperature is the surface
+Three Boussinesq layers on the air's grid — the mixed layer (k = 0), the thermocline's warm water below it and the
+abyss (decision #71) — over a flat bottom, each with a temperature T (K) that sets its density, ρ = ρ₀(1 − α(T − T₀)):
+the interfaces move freely (wind-driven Ekman pumping, upwelling, Kelvin and Rossby waves). With two layers the mixed
+layer sat on a 4 km abyss at 4 °C: upwelling brought abyssal water to the surface and the tropics cooled to 14–21 °C. The mixed layer's temperature is the surface
 the air sees: the air's column physics heats it (sunlight, longwave, sensible heat, evaporation) and freezes or melts
 sea ice over it with its heat capacity ρ_w c_w h₀. The ocean steps on its own interval (1 h; the air's fluxes are summed
 over it, nothing is lost): its layers move (the same time-split RK3 core as the air), T is carried by FCT transport, and
-the mixed layer then overturns when denser than the deep water, entrains deep water by wind stirring and surface
-cooling, or shoals in calm, warm weather (Kraus–Turner). The wind stress joins the air's bottom layer to the mixed layer
+the column then mixes wherever a layer is denser than the one below, and the mixed layer entrains thermocline water by
+wind stirring and surface cooling, or shoals in calm, warm weather (Kraus–Turner). Sunlight passing the mixed layer's base
+heats the layers below (decision #70). The wind stress joins the air's bottom layer to the mixed layer
 every air step, exactly (`couple`). Salinity is not modelled yet (density from T only); the water the air evaporates
 and rains is a budget only (V2-4).
 """
@@ -21,9 +23,9 @@ from .gpu import grid_dims
 from .layers import Layers
 from .transport import Transport
 
-OCEAN = dict(depth=4000.0, h_mixed=100.0, T_deep=277.15, alpha=2.0e-4, rho=1025.0, cw=3990.0, dt=3600.0, mix_dt=86400.0,
+OCEAN = dict(depth=4000.0, h_mixed=100.0, h_thermo=600.0, T_thermo=285.15, T_deep=277.15, alpha=2.0e-4, rho=1025.0, cw=3990.0, dt=3600.0, mix_dt=86400.0,
              hmin=10.0, hmax=1000.0, dTmin=0.1, m_kt=0.5, n_kt=0.2, visc4_U=0.5, bottom_stress=2.5e-4,
-             interface_stress=5.0e-4)
+             interface_stress=5.0e-4, thin=2.0, sw_R=0.58, sw_z1=0.35, sw_z2=23.0)
 
 
 class Ocean:
@@ -39,27 +41,31 @@ class Ocean:
         self.b = cp.full(N, -c['depth'])
         # the thermocline's turbulent stress carries the wind's momentum down (decision #69): c ~ C_d |du| ~ 1e-3 x 0.5
         # m/s; without it a mixed layer thinned to its floor by equatorial upwelling ran away toward the wind's speed
-        self.core = Layers(dg, 2, b=self.b, gprime=[0.0], stress=[0.0, c['bottom_stress']], nu4=nu4, floor=c['hmin'],
-                           ocean=dict(alpha=c['alpha']), vmix=c['interface_stress'])
+        L = self.L = 3
+        self.core = Layers(dg, L, b=self.b, gprime=[0.0] * (L - 1), stress=[0.0] * (L - 1) + [c['bottom_stress']], nu4=nu4, floor=c['hmin'],
+                           ocean=dict(alpha=c['alpha']), vmix=c['interface_stress'], thin=c['thin'])
         if nu4:
             lam = self.core.lap_max()
             assert nu4 * lam * lam * c['dt'] <= 1.0, 'ocean nu4 unstable at its step'
-        self.tr = Transport(dg, layers=2)
+        self.tr = Transport(dg, layers=L)
         if state is None:
-            h = np.stack([np.full(N, c['h_mixed']), np.full(N, c['depth'] - c['h_mixed'])])
-            u = np.zeros((2, E))
-            T = np.stack([np.asarray(Tsurf, dtype=float), np.full(N, c['T_deep'])])
+            # the thermocline water at T_thermo, no warmer than the surface above it nor colder than the abyss
+            Ts = np.asarray(Tsurf, dtype=float)
+            h = np.stack([np.full(N, c['h_mixed']), np.full(N, c['h_thermo']), np.full(N, c['depth'] - c['h_mixed'] - c['h_thermo'])])
+            u = np.zeros((L, E))
+            T = np.stack([Ts, np.clip(Ts, c['T_deep'], c['T_thermo']), np.full(N, c['T_deep'])])
         else:
             h, u, T = state
         self.h, self.u, self.T = cp.asarray(h, dtype=float), cp.asarray(u, dtype=float), cp.asarray(T, dtype=float)
         self.M = self.h * cp.asarray(g.areaCell)[None, :]
         self.nfast = int(math.ceil(1.2 * self.core.substeps(self.h, c['dt'])))
         z = lambda *s: cp.zeros(s)
-        self._Fm, self._M1 = z(2, E), z(2, N)
+        self._Fm, self._M1 = z(L, E), z(L, N)
         self.cap = z(N)                                         # ρ_w c_w h₀, for the air's surface physics
         self.qocean, self.q_acc = z(N), z(N)                    # W/m² into the mixed layer; its sum over the ocean step (J/m²)
+        self.qsw = z(N)                                         # its sunlight (W/m²)
         self.tau_acc, self.taum, self.diss = z(E), z(N), z(E)   # Σ τ² dt on edges; the step's rms stress at cells
-        self.wx = z(1, N)
+        self.wx = z(L - 1, N)
         self.galpha = GRAV * c['alpha']
         # The mixed layer is mixed on daily-mean forcing (decision #67): mixed hourly, the day's sunshine shoaled it at
         # once to the Monin-Obukhov depth and folded its warm water into the deep layer, and the night's slow
@@ -68,7 +74,7 @@ class Ocean:
         assert abs(ratio - round(ratio)) < 1e-9 and round(ratio) >= 1, 'mix_dt must be a whole number of ocean steps'
         self.mix_every = int(round(ratio))
         k = lambda n: dg.kernel(n, 'ocean.cu')
-        self.k = {n: k(n) for n in ('couple_stress', 'ocn_column', 'ocn_cap', 'ocn_overturn')}
+        self.k = {n: k(n) for n in ('couple_stress', 'ocn_column', 'ocn_cap', 'ocn_overturn', 'ocn_pen')}
         self.k['cell_speed'] = dg.kernel('cell_speed', 'air.cu')
         self.update_cap()
 
@@ -84,14 +90,17 @@ class Ocean:
                                                   g.eI, g.eJ, R(c), R(self.cfg['rho']), R(dt), self.diss, self.tau_acc))
 
     def accumulate(self, dt):
-        """Add the air step's flux into the mixed layer to the ocean step's sum."""
-        self.q_acc += self.qocean * dt
+        """Pass the air step's sunlight below the mixed layer's base to the deep layer, and add the flux the mixed layer
+        keeps to the mixing's sum."""
+        g, c, R = self.dg, self.cfg, self.dg.dtype.type
+        self.k['ocn_pen'](*grid_dims(g.N), (np.int32(g.N), np.int32(self.L), self.h, self.T, self.qocean, self.qsw, R(c['rho'] * c['cw']),
+                                           R(c['sw_R']), R(c['sw_z1']), R(c['sw_z2']), R(dt), self.q_acc))
 
     def step(self, mix=True):
         """One ocean step: the layers move and T is carried; with mix, the mixed layer then overturns / entrains /
         shoals on the forcing summed since the last mixing (mix_dt)."""
         g, c, i32, R = self.dg, self.cfg, np.int32, self.dg.dtype.type
-        self.k['ocn_overturn'](*grid_dims(g.N), (i32(g.N), self.h, self.T))
+        self.k['ocn_overturn'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.T))
         self.core.step(self.h, self.u, c['dt'], self.nfast, self._Fm, theta=self.T)
         self.tr.mass_after(self.M, self._Fm, self._M1)
         self.tr.step(self.M, self._M1, self._Fm, self.T, order=3)
@@ -105,7 +114,7 @@ class Ocean:
         cp.sqrt(self.tau_acc, out=self.tau_acc)
         self.k['cell_speed'](*grid_dims(g.N), (i32(g.N), self.tau_acc, g.cellEdge, g.le, g.de, g.areaCell, self.taum))
         self.q_acc /= dt
-        self.k['ocn_column'](*grid_dims(g.N), (i32(g.N), self.h, self.T, self.taum, self.q_acc, R(self.galpha), R(c['rho']),
+        self.k['ocn_column'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.T, self.taum, self.q_acc, R(self.galpha), R(c['rho']),
                                                R(c['cw']), R(c['m_kt']), R(c['n_kt']), R(c['hmin']), R(c['hmax']), R(c['dTmin']), R(dt), self.wx))
         self.core.exchange(self.wx, self.h, self.u, self.M, self.T)
         self.tau_acc.fill(0)

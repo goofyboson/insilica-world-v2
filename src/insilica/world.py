@@ -69,7 +69,8 @@ class World:
                            stress=P.get('stress', spec.get('stress', 0.0)),
                            nu4=nu4, floor=floor, rotation=P.get('rotation', 1.0),
                            div_damp=P.get('div_damp', DIV_DAMP),
-                           air=dict(t_ref=self.air.get('t_ref', 288.0)) if self.air else None)
+                           air=dict(t_ref=self.air.get('t_ref', 288.0)) if self.air else None,
+                           vmix=P.get('vmix', spec.get('vmix', 0.0)))
         self.dynamics = P.get('dynamics', spec.get('dynamics', True))
         if nu4:
             lam = self.core.lap_max()

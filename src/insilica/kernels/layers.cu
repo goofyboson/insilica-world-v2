@@ -301,3 +301,28 @@ extern "C" __global__ void xch_edge(int N, int E, int L, const real* wx, const r
   }
   for (int k = 0; k < L; k++) u[(size_t)k * E + e] = mom[k] / hn[k];
 }
+
+// ---- Interfacial stress (decision #39): turbulent momentum exchange between neighbouring layers. ----
+// The stress across the interface below layer k is tau = c (u_k - u_{k+1}); it decelerates each layer as tau / h,
+// so a thick layer barely feels it while a layer thinning toward its floor is locked to the layer next to it. Over a
+// step the pair's difference decays exactly as exp(-c (1/h_k + 1/h_{k+1}) dt) and their thickness-weighted mean
+// (the column's momentum) is unchanged. Interfaces are taken from the top down. The kinetic energy removed,
+// 0.5 h_k h_{k+1} / (h_k + h_{k+1}) (du0^2 - du1^2) per unit area at the edge, is returned in diss (J/m^2).
+extern "C" __global__ void lay_vmix(int N, int E, int L, const real* h, const int* eI, const int* eJ, real c, real dt,
+                                    real* u, real* diss) {
+  LOOP1(e, E)
+  real d = 0;
+  for (int k = 0; k + 1 < L; k++) {
+    const real ha = (real)0.5 * (h[(size_t)k * N + eI[e]] + h[(size_t)k * N + eJ[e]]);
+    const real hb = (real)0.5 * (h[(size_t)(k + 1) * N + eI[e]] + h[(size_t)(k + 1) * N + eJ[e]]);
+    real* ua = u + (size_t)k * E + e;
+    real* ub = u + (size_t)(k + 1) * E + e;
+    const real mean = (ha * *ua + hb * *ub) / (ha + hb);
+    const real du0 = *ua - *ub;
+    const real du1 = du0 * exp(-c * (1 / ha + 1 / hb) * dt);
+    *ua = mean + hb / (ha + hb) * du1;
+    *ub = mean - ha / (ha + hb) * du1;
+    d += (real)0.5 * ha * hb / (ha + hb) * (du0 * du0 - du1 * du1);
+  }
+  diss[e] = d;
+}

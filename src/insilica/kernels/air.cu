@@ -42,7 +42,11 @@ __device__ void layer_exner(int L, const real* mu, const Par& P, real* pb, real*
 // step's heating; a layer entirely on the wrong side of theta* crosses whole, down to the floor. Crossing air carries
 // theta* (or its whole layer's theta). The enthalpy residual of re-dividing the column (rounding level) is booked
 // into the receiving layer, so energy is exact. Updates mu, th, pib in place; returns the mass moved up (kg/m^2).
-__device__ real crossing(int L, const Par& P, real* mu, real* th, const real* dth, real* pib) {
+// dth_up: the theta change this step of the upper layer's air at theta* (its bottom). The lower layer is convectively
+// mixed, so its own mean change drives its crossing; the upper layer is stably stratified, so the air at theta*
+// responds to the heating at theta*, not to the layer's mean (decision #40). Callers without that information pass
+// the upper layer's mean change.
+__device__ real crossing(int L, const Par& P, real* mu, real* th, const real* dth, real dth_up, real* pib) {
   if (L != 2 || P.theta_star <= 0) return 0;          // theta_star <= 0: no crossing (diagnostics)
   const int top = 0, bot = 1;
   const real ts_ = P.theta_star;
@@ -51,10 +55,10 @@ __device__ real crossing(int L, const Par& P, real* mu, real* th, const real* dt
     if (th[bot] >= ts_) { dm = mu[bot] - P.floor_; thc = th[bot]; }
     else dm = mu[bot] * dth[bot] / (2 * (ts_ - (th[bot] - dth[bot])));
   }
-  if (dth[top] < 0) {
+  if (dth_up < 0) {
     real down;
     if (th[top] <= ts_) { down = mu[top] - P.floor_; thc = th[top]; }
-    else down = mu[top] * (-dth[top]) / (2 * ((th[top] - dth[top]) - ts_));
+    else down = mu[top] * (-dth_up) / (2 * ((th[top] - dth[top]) - ts_));
     dm -= down;
   }
   const real maxup = mu[bot] - P.floor_, maxdn = mu[top] - P.floor_;
@@ -161,7 +165,7 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
   Ts[i] = ts + qS * dt / P.c_slab;
   sw_abs[i] = toAir + swS;
 
-  wx[i] = crossing(L, P, mu, th, dth, pib);
+  wx[i] = crossing(L, P, mu, th, dth, dth[0], pib);
   real E1 = P.c_slab * Ts[i];
   for (int k = 0; k < L; k++) { theta[(size_t)k * N + i] = th[k]; E1 += mu[k] * pib[k] * th[k]; }
   stored[i] = E1 - E0;                                          // the column's energy change, J/m^2
@@ -218,7 +222,17 @@ extern "C" __global__ void hs_column(int N, int L, const real* par, const real* 
     Q += mu[k] * pib[k] * d / dt;
     pt = pb[k];
   }
-  wx[i] = crossing(L, P, mu, th, dth, pib);
+  // the heating of the air at theta*, at the interface's pressure p_i (sigma_i = p_i / p_s)
+  real dth_up = dth[0];
+  if (L == 2) {
+    const real pi_ = pb[0], si = pi_ / ps;
+    real Ti = (315 - 60 * s2 - 10 * log(pi_ / P.p0) * c2) * pow(pi_ / P.p0, P.kappa);
+    if (Ti < 200) Ti = 200;
+    const real thi = Ti * pow(P.p0 / pi_, P.kappa);
+    const real ki = hs[0] + (hs[1] - hs[0]) * (si > 0.7 ? (si - 0.7) / 0.3 : (real)0) * c2 * c2;
+    dth_up = (thi - P.theta_star) * (1 - exp(-ki * dt));
+  }
+  wx[i] = crossing(L, P, mu, th, dth, dth_up, pib);
   real E1 = 0;
   for (int k = 0; k < L; k++) { theta[(size_t)k * N + i] = th[k]; E1 += mu[k] * pib[k] * th[k]; }
   qnet[i] = Q;

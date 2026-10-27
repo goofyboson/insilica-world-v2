@@ -141,6 +141,41 @@ Each stage keeps v1's rules: restate tests and plan, pause for go, commit as we 
 | **V2-4 Land and coasts** | Land masks, no-flow coastlines, v1 surface water, soil, ice sheets, terrain | Western intensification in a closed basin (gyres, boundary currents); rain shadow (v1 T3.6) |
 | **V2-5 Two resolutions** | Air n = 6 / ocean n = 8 with conservative remap coupling | Coupled conservation exact; speed target ~5–10 ticks/s |
 | **V2-6 Ports and polish** | Moon and tides, geology (v1 4b/4c plans), UI | v1's tidal tests T1–T6; viewer controls |
+| **V2-7 Optimization and speedup** | Once the full air–ocean–land model exists, with the 64-bit model as the reference truth (§7.1): ensembles in one launch, 32-bit where safe, mixed time steps, faster spin-up, step engineering; then approximations (a reduced-complexity companion, a learned emulator) | Every climate and weather test passes within agreed tolerances of the 64-bit reference; speed per model year and per ensemble member against targets set at planning (~100× from speedups, more from approximations) |
+
+### 7.1 Speed: the method as we go, and the V2-7 stage
+
+**As we go (owner's rule, 2026-10-27):** take easy speedups now that don't sacrifice any of the phenomena the model is
+meant to show — kernel fusion, CUDA graphs, fewer host round-trips, cached and restartable spin-ups, cheaper
+equivalent arithmetic (one pow per interface, #42), measured with PERF broken out by component. Defer anything that
+changes results (32-bit, mixed time steps, approximations) to V2-7, so the accuracy work is done once on the finished
+model rather than repeated every stage. Keep the code ready for V2-7: column-local physics with no hidden host
+round-trips (batchable), every kernel behind the `REAL` precision switch, and equilibrated states kept for restarts.
+
+**Where the time goes (2026-10-27).** n = 4 moist three-layer air: ~2 min per model year per process, the GPU mostly
+idle (2,562 cells; kernel launch overhead dominates). n = 6: 43 ms per model hour (~6 min per model year). The largest
+wait in practice is spin-up: a 100 m slab takes about a decade of model time to settle.
+
+**V2-7 levers, in order of payoff (estimates):**
+
+1. **Ensembles in one launch** (~10–100× throughput at n = 4): many worlds (calibration members, sweeps, spin-ups) in
+   the same kernels, since the GPU is idle at small grids. Same per-world speed, far more worlds.
+2. **32-bit where safe** (~5–20× on compute-bound parts at n ≥ 6): the 4070 runs 64-bit at 1/64 rate, and the physics'
+   pow/exp/saturation integrals are bound by it. Ledgers that need 1e-15 closure stay 64-bit (or compensated sums);
+   an accuracy study against the 64-bit model decides each component.
+3. **Mixed time steps** (~2–5×): radiation every 1–3 h, slab and ocean on longer steps than the air, only the dynamics
+   at the short step.
+4. **Faster spin-up** (~5–20× on time to equilibrium): spin up at n = 3–4 and interpolate up; accelerate the slow
+   components during spin-up only (e.g. reduced slab or ocean heat capacity); or solve for the equilibrium directly.
+   None of these touch the measured years.
+5. **Step engineering** (~1.5–3×): fuse the column physics with neighbouring kernels, many ticks per graph launch, no
+   host synchronization inside loops.
+6. **Two resolutions** (V2-5): the fine grid only where it is needed.
+
+Together ~100× for climate-length runs at n = 4–5. **1000× and beyond needs approximation:** a reduced-complexity
+companion (energy balance with parameterized transports) calibrated against the full model for quick what-ifs, and a
+learned emulator trained on the full model's output (NeuralGCM / ACE style; 100–1000×+ within the climates it was
+trained on). The full model stays the reference truth.
 
 ## 8. Risks
 

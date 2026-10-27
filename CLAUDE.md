@@ -15,6 +15,10 @@ are in [docs/v2-plan.md](docs/v2-plan.md). Read it first.
   integrity chain, each as strong as possible; nothing a stronger test already implies. A new stage extends an
   existing test where it can, adds one only for what no test can see, and retires checks it supersedes. The default
   suite stays fast (seconds warm); the speed probe runs with `--perf` at every stage close.
+- **Speed as we go** (docs/v2-plan.md §7.1): take easy speedups that keep every phenomenon the model should show
+  (fusion, CUDA graphs, fewer host round-trips, cached spin-ups, cheaper equivalent arithmetic); defer anything that
+  changes results (32-bit, mixed time steps, approximations, emulators) to stage V2-7, done once against the 64-bit
+  reference. Keep code batchable (column-local physics, no hidden host syncs) and behind the `REAL` switch.
 - **Never change test thresholds or spec rules without asking.** Record every agreed change, with date and reason,
   in the decision log (SPEC §18 in v1; this project's equivalent once its SPEC exists).
 - **Report with numbers:** measured values against thresholds, not just pass/fail.

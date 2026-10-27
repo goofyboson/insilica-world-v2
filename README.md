@@ -1,6 +1,6 @@
 # InSilica World V2
 
-A planet simulator with two moving ocean layers and two moving air layers, run by one 64-bit GPU fluid engine
+A planet simulator with two moving ocean layers and three moving air layers, run by one 64-bit GPU fluid engine
 (CUDA kernels driven from Python through CuPy). A browser page connects to the local engine as the viewer.
 
 - **Plan:** [docs/v2-plan.md](docs/v2-plan.md) — goals, physics, time stepping, resolution and cost, architecture,
@@ -12,7 +12,13 @@ A planet simulator with two moving ocean layers and two moving air layers, run b
 
 ## Current status
 
-**V2-2a Dry atmosphere closed 2026-10-26 (32/32), merged to `main`. Next: V2-2b Moist atmosphere.** Two air layers
+**V2-2b Moist atmosphere closed 2026-10-27 (34/34), merged to `main`. Next: V2-3 Ocean.** Three moist air layers
+(isentropic interfaces at 305 and 380 K) over a slab aquaplanet with sea ice: an ITCZ (2.2× the subtropics), a Hadley
+cell, trades and surface westerlies, mid-latitude storms, 2.2 mm/day of rain at 290 K; every gravity wave runs in the
+fast substeps. Air at n = 6 costs 38 ms per model hour (~260 model years a day). Known near miss: mid-latitude rain is
+slightly too even (B9, to revisit at n = 6 and with the ocean). Ice-dependent targets wait for the ocean (SPEC #43–#63).
+Earlier:
+**V2-2a Dry atmosphere closed 2026-10-26 (32/32).** Two air layers
 with an isentropic interface that only heating and cooling move air across: radiative–convective equilibrium settles
 (TOA +0.03 W/m², dry surface 294.8 K) and the Held–Suarez benchmark runs stably with jets and surface westerlies. Air at
 n = 6 with its physics costs 19 ms per model hour (~510 model years a day) (SPEC §9 #32–#42). Earlier: **V2-1 Fluid core closed 2026-10-26 (29/29).** Stacked layers that each move freely, with the fast
@@ -28,11 +34,12 @@ bug carried over from v1; V2-0 ported v1's grid and solver to 64-bit CUDA.
 | V2-0b | Engine refinements: Voronoi-edge midpoint for wind rebuild, fused kernels + CUDA graph, Hilbert cell order, v1 transport fix | ✅ Done (45/45) |
 | V2-1 | Fluid core: stacked layers, real-speed fast waves (time-split RK3), thickness floor, bottom stress, exchange hook | ✅ Done (29/29) |
 | V2-2a | Dry atmosphere: two air layers with an isentropic interface, radiation, slab surface, RCE and Held–Suarez | ✅ Done (32/32) |
-| V2-2b | Moist atmosphere: vapor, evaporation, condensation, moist convection, rain; v1 climate tests | ⏳ Next |
-| V2-3 | Ocean: two layers, wind stress, thermocline, entrainment, sea ice; aquaplanet first | ⏳ Planned |
+| V2-2b | Moist atmosphere: three air layers, vapor, evaporation, condensation, moist convection, rain, sea ice; climate and weather tests | ✅ Done (34/34) |
+| V2-3 | Ocean: two layers, wind stress, thermocline, entrainment, sea ice; aquaplanet first | ⏳ Next |
 | V2-4 | Land and coasts: gyres and boundary currents, surface water, soil, ice sheets, terrain | ⏳ Planned |
 | V2-5 | Two resolutions: air n = 6 coupled to ocean n = 8 | ⏳ Planned |
 | V2-6 | Moon and tides, geology, UI polish | ⏳ Planned |
+| V2-7 | Optimization and speedup: ensembles in one launch, 32-bit where safe, mixed time steps, faster spin-up; then approximations (reduced model, learned emulator) against the 64-bit reference ([plan §7.1](docs/v2-plan.md)) | ⏳ Planned |
 
 ## Running it
 
@@ -51,7 +58,7 @@ Engine and viewer (then open http://127.0.0.1:8765/):
 .venv/Scripts/python -m insilica.server --n 5 --preset aqua
 ```
 
-Tests (eleven tests in up to 5 processes, about 2 minutes warm; prints every measured value against its threshold; add
+Tests (thirteen tests in up to 5 processes, about 2 minutes warm, longer the first time while spin-ups are cached; prints every measured value against its threshold; add
 `--perf` for the speed probe):
 
 ```bash

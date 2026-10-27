@@ -8,7 +8,7 @@ import math
 
 import numpy as np
 
-from .constants import GRAV, OMEGA, R_PLANET
+from .constants import GRAV, KAPPA, OMEGA, P0, R_PLANET
 
 
 def edge_east_north(g):
@@ -200,19 +200,41 @@ PRESETS = {
 MU_REF = 1.0e5 / GRAV                       # kg/m², the column mass of 1000 hPa
 
 
+AQUA_P = (0.22e5, 0.60e5)                  # Pa, the starting interfaces of the three air layers (decision #45)
+
+
 def aqua(g):
-    """Two air layers at rest over a slab aquaplanet: an even mass split, the lower layer's θ warm at the equator,
-    the upper layer's uniform, and v1's starting surface temperature 288 − 40 (sin²φ − 1/3) K."""
+    """Three air layers at rest over a slab aquaplanet (decision #45): interfaces at 220 and 600 hPa, the top layer's θ
+    415 K and the middle's 342.5 K (between θ*₂ = 380 and θ* = 305 K), the bottom layer's 290 − 30 sin²φ K, and v1's
+    starting surface temperature 288 − 40 (sin²φ − 1/3) K, for moist air no colder than 274 K (so the run doesn't start
+    under metres of ice). Vapor: 10% / 50% / 70% of saturation in the top / middle / bottom layer at its mid-pressure."""
     s2 = np.sin(g.lat) ** 2
-    h = np.full((2, g.N), MU_REF / 2)
-    theta = np.stack([np.full(g.N, 320.0), 290.0 - 30.0 * s2])
-    Ts = 288.0 - 40.0 * (s2 - 1.0 / 3.0)
-    return h, np.zeros(g.N), np.zeros((2, g.E)), dict(theta=theta, Ts=Ts)
+    edges = np.array([0.0, *AQUA_P, MU_REF * GRAV])
+    h = np.repeat((np.diff(edges) / GRAV)[:, None], g.N, axis=1)
+    theta = np.stack([np.full(g.N, 415.0), np.full(g.N, 342.5), 290.0 - 30.0 * s2])
+    Ts = np.maximum(288.0 - 40.0 * (s2 - 1.0 / 3.0), 274.0)
+    pm = (0.5 * (edges[:-1] + edges[1:]))[:, None]
+    T = theta * (pm / P0) ** KAPPA
+    qs = 0.622 * 611.0 * np.exp(17.27 * (T - 273.15) / (T - 35.85)) / pm
+    q = np.array([0.1, 0.5, 0.7])[:, None] * qs
+    return h, np.zeros(g.N), np.zeros((3, g.E)), dict(theta=theta, Ts=Ts, q=q, ice=np.zeros(g.N))
+
+
+def aqua_dry(g):
+    """The aquaplanet's dry start: v1's surface temperature 288 − 40 (sin²φ − 1/3) K, no vapor."""
+    h, b, u, x = aqua(g)
+    return h, b, u, dict(theta=x['theta'], Ts=288.0 - 40.0 * (np.sin(g.lat) ** 2 - 1.0 / 3.0))
 
 
 AIR = dict(t_ref=288.0)
-PRESETS['aqua'] = dict(build=aqua, dt=lambda n: 900.0 * 2.0 ** (5 - n), visc4_U=15.0, stress=[0.0, 0.05], vmix=0.01, tracer=False, air=AIR)
-PRESETS['rce'] = dict(build=aqua, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True), dynamics=False)
+AIR3 = dict(theta_star=305.0, theta_star2=380.0)             # the three-layer air's interfaces (decisions #45, #51)
+# Surface drag on the bottom layer: Held & Suarez's k_f = 1/day over sigma > 0.7, integrated, c = 0.15 M / day ~ 0.017
+# kg/m^2/s, close to an Earth-like rho C_D |U| (decision #57). No interfacial stress (#56).
+SURFACE_DRAG = 0.15 * MU_REF / 86400.0
+PRESETS['aqua'] = dict(build=aqua, dt=lambda n: 900.0 * 2.0 ** (5 - n), visc4_U=15.0, stress=[0.0, 0.0, SURFACE_DRAG],
+                       tracer=False, air=dict(AIR, physics=dict(AIR3, moist=1.0)))
+PRESETS['aqua_dry'] = dict(PRESETS['aqua'], build=aqua_dry, air=dict(AIR, physics=AIR3))
+PRESETS['rce'] = dict(build=aqua_dry, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True, physics=AIR3), dynamics=False)
 
 
 def held_suarez(g, seed=1):
@@ -239,5 +261,5 @@ def held_suarez_theta_star(g):
 # HS friction k_f = 1/day over sigma > 0.7, ramping from 0 to 1 at the ground: its column integral is k_f·0.15·M, the
 # bottom stress c of the lower layer.
 PRESETS['held_suarez'] = dict(build=held_suarez, dt=lambda n: 900.0 * 2.0 ** (5 - n), visc4_U=15.0,
-                              stress=[0.0, 0.15 * MU_REF / 86400.0], vmix=0.01, tracer=False,
+                              stress=[0.0, SURFACE_DRAG], tracer=False,
                               air=dict(AIR, forcing='held_suarez', physics=dict(theta_star=held_suarez_theta_star)))

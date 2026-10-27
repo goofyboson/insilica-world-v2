@@ -55,6 +55,9 @@ class Layers:
         self.Gc = cp.full(N, float(grav))   # the fast mode's coefficient per cell: g, or for air R·T_s/μ
         if air:
             self.pibar = z(L, N)
+            # every gravity wave in the fast substeps (decision #55): the column's stiffness, each layer's mass and wind
+            self.S, self.muf, self.mup, self.phi = z(L, N), z(L, N), z(L, N), z(L, N)
+            self.uf, self.accL = z(L, E), z(L, E)
         self.B, self.q, self.Tp, self.F, self.scale = z(L, N), z(L, NV), z(L, E), z(L, E), z(L, N)
         self.G, self.He, self.ubs, self.ub0, self.ub, self.acc = z(E), z(E), z(E), z(E), z(E), z(E)
         self.eta0, self.eta, self.eta_prev = z(N), z(N), z(N)
@@ -65,7 +68,8 @@ class Layers:
         self.diss = z(E)
         k = lambda n, f='layers.cu': dg.kernel(n, f)
         self.k = {n: k(n) for n in ('lay_eta', 'lay_ubar', 'lay_bern', 'air_bern', 'air_gfast', 'lay_slow', 'bt_eta', 'bt_u', 'lay_flux', 'lay_scale',
-                                    'lay_limit', 'lay_h', 'lay_u', 'xch_cell', 'xch_edge', 'lay_vmix', 'vmix_heat', 'lay_edge_hq')}
+                                    'lay_limit', 'lay_h', 'lay_u', 'xch_cell', 'xch_edge', 'lay_vmix', 'vmix_heat', 'lay_edge_hq',
+                                    'air_stiff', 'af_mu', 'af_phi', 'af_u', 'af_flux')}
         self.k['swe_vertex'] = k('swe_vertex', 'fused.cu')
         self.k.update({n: k(n, 'trisk.cu') for n in ('cell_div', 'vertex_curl', 'edge_lap')})
         self.dmin = float(np.min(dg.host.de))
@@ -106,7 +110,7 @@ class Layers:
         c1, e1 = grid_dims(g.N), grid_dims(g.E)
         cL, eL = grid_dims(g.N, L), grid_dims(g.E, L)
         if self.air:
-            k['air_bern'](*c1, (N, E, i32(L), hs, us, theta, self.b, R(self.grav), R(CP_DRY), R(KAPPA), R(P0), self.Gc,
+            k['air_bern'](*c1, (N, E, i32(L), hs, us, theta, self.b, R(self.grav), R(CP_DRY), R(KAPPA), R(P0), self.S,
                                 g.cellEdge, g.le, g.de, g.areaCell, self.B, self.pibar))
         else:
             k['lay_bern'](*c1, (N, E, i32(L), hs, us, self.b, self.gp, g.cellEdge, g.le, g.de, g.areaCell, self.B))
@@ -117,9 +121,24 @@ class Layers:
                             self.drag, self.stress, R(self.floor), R(self.nu4), self.L2 if self.nu4 else NULL,
                             theta if self.air else NULL, self.pibar if self.air else NULL, R(c * dt), self.Tp, self.G, self.He,
                             self.ubs))
-        # fast mode from t^n over c·dt
         n = max(1, math.ceil(c * nfast))
         tau = R(c * dt / n)
+        if self.air:
+            # every layer's mass and wind sub-stepped from t^n over c·dt (decision #55)
+            cp.copyto(self.muf, h0)
+            cp.copyto(self.uf, u0)
+            self.accL.fill(0)
+            for _ in range(n):
+                k['af_mu'](*cL, (N, E, self.hedge, self.uf, g.cellEdge, g.cellSign, g.le, g.areaCell, tau, self.muf, self.mup))
+                k['af_phi'](*c1, (N, i32(L), self.muf, self.mup, R(self.div_damp), self.S, self.phi))
+                k['af_u'](*eL, (N, E, self.phi, self.Tp, self.G, g.eI, g.eJ, g.de, tau, self.uf, self.accL))
+            k['af_flux'](*eL, (E, self.hedge, self.accL, R(1.0 / n), self.F))
+            k['lay_scale'](*cL, (N, E, h0, self.F, g.cellEdgeAsc, g.eI, g.le, g.areaCell, R(c * dt), R(self.floor), self.scale))
+            k['lay_limit'](*eL, (N, E, g.eI, g.eJ, self.scale, g.le, R(dt), self.F, Fm if Fm is not None else NULL))
+            k['lay_h'](*cL, (N, E, h0, self.F, g.cellEdge, g.cellSign, g.le, g.areaCell, R(c * dt), hn))
+            cp.copyto(un, self.uf)
+            return
+        # fast mode from t^n over c·dt
         cp.copyto(self.eta, self.eta0)
         cp.copyto(self.ub, self.ub0)
         self.acc.fill(0)
@@ -137,9 +156,12 @@ class Layers:
         """One time-split RK3 step in place on h (L, N), u (L, E), with nfast fast sub-steps per full step (stage s
         takes ⌈c_s·nfast⌉). Fm, if given, receives each layer's final-stage volume flux l·dt·F (m³)."""
         g, k, i32, L = self.dg, self.k, np.int32, self.L
-        self.update_gfast(h, theta)
-        k['lay_eta'](*grid_dims(g.N), (i32(g.N), i32(L), h, self.zero if self.air else self.b, self.eta0))
-        k['lay_ubar'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(L), h, u, g.eI, g.eJ, self.ub0))
+        if self.air:
+            R = self.real
+            k['air_stiff'](*grid_dims(g.N), (i32(g.N), i32(L), h, theta, R(self.grav), R(CP_DRY), R(KAPPA), R(P0), self.S))
+        else:
+            k['lay_eta'](*grid_dims(g.N), (i32(g.N), i32(L), h, self.b, self.eta0))
+            k['lay_ubar'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(L), h, u, g.eI, g.eJ, self.ub0))
         if self.nu4:
             self._lap(u, self.L1)
             self._lap(self.L1, self.L2)

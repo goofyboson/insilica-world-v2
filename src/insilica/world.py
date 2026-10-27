@@ -25,9 +25,10 @@ from .constants import CP_DRY, GRAV, KAPPA, P0
 from .layers import DIV_DAMP, Layers
 from .transport import BETA, Transport
 
-FIELDS = ('h', 'z', 'eta', 'psi', 'speed', 'vort', 'theta', 'T', 'Ts', 'ps')
+FIELDS = ('h', 'z', 'eta', 'psi', 'speed', 'vort', 'theta', 'T', 'Ts', 'Tsurf', 'ps', 'q', 'rh', 'rain', 'evap', 'ice')
 # z: height of the layer's top; eta: the free surface; theta, T, Ts, ps: air (potential temperature, temperature,
-# surface temperature, surface pressure in hPa)
+# surface temperature, surface pressure in hPa); q, rh, rain, evap, ice: moist air (specific humidity in g/kg, relative
+# humidity, rain and evaporation in mm/day, sea ice in m, Tsurf the radiating surface: the ice skin over ice)
 
 
 def visc4(g, U):
@@ -92,6 +93,13 @@ class World:
             self.Ts = cp.asarray(np.asarray(extra['Ts'], dtype=float))
             self.time = cp.zeros(1)
             self.STATE = World.STATE + ('theta', 'Ts', 'time')
+            self.moist = self.physics.moist
+            if self.moist:                                # vapor per layer (kg/kg) and sea ice (kg/m²): V2-2b
+                self.q = cp.asarray(np.asarray(extra['q'], dtype=float))
+                self.ice = cp.asarray(np.asarray(extra.get('ice', np.zeros(self.grid.N)), dtype=float))
+                self.STATE = self.STATE + ('q', 'ice')
+        else:
+            self.moist = False
         if self.air:
             self.core.update_gfast(self.h, self.theta)
         # fast sub-steps per step: from the fastest column, with 20% room
@@ -115,9 +123,12 @@ class World:
                 self.tr.step(self.M, self._M1, self._Fm, self.psi, order=3)
             if self.air:
                 self.tr.step(self.M, self._M1, self._Fm, self.theta, order=3)
+            if self.moist:
+                self.tr.step(self.M, self._M1, self._Fm, self.q, order=3)
             cp.copyto(self.M, self._M1)
         if self.air:
-            self.physics.column(self.h, self.theta, self.Ts, self.u, self.time, self.dt)
+            self.physics.column(self.h, self.theta, self.Ts, self.u, self.time, self.dt,
+                                q=self.q if self.moist else None, ice=self.ice if self.moist else None)
             if self.L > 1:
                 self.core.exchange(self.physics.wx, self.h, self.u, self.M, self.psi)
 
@@ -161,16 +172,28 @@ class World:
         out['momentum'] = dsum(cp.sum(he * self.u, axis=0) * cp.asarray(g.le * g.de))
         return out
 
+    def water(self):
+        """The air's vapor (kg): Σ A Σ_k μ_k q_k."""
+        return dsum(cp.sum(self.h * self.q, axis=0), cp.asarray(self.grid.areaCell))
+
     def energy(self):
-        """Total energy (J): kinetic + potential (+ for air the enthalpy and the slab's heat C·Ts)."""
+        """Total energy (J): kinetic + potential (+ for air the enthalpy and the slab's heat C·Ts; for moist air the
+        vapor's latent energy L_v·μq and the ice's −L_f·m)."""
         if self.air:
-            return self.core.energy(self.h, self.u, self.theta) + float(cp.sum(self.Ts * cp.asarray(self.grid.areaCell))) * self.physics.p['c_slab']
+            A = cp.asarray(self.grid.areaCell)
+            e = self.core.energy(self.h, self.u, self.theta) + float(cp.sum(self.Ts * A)) * self.physics.p['c_slab']
+            if self.moist:
+                e += (self.physics.p['Lv'] * float(cp.sum(A * cp.sum(self.h * self.q, axis=0)))
+                      - self.physics.p['Lf'] * float(cp.sum(A * self.ice)))
+            return e
         return self.core.energy(self.h, self.u)
 
     def fields(self):
         """The fields this world can show: air worlds add θ, T, the surface temperature and the surface pressure."""
         base = ['h', 'z', 'eta', 'psi', 'speed', 'vort']
-        return base + ['theta', 'T', 'Ts', 'ps'] if self.air else base
+        if not self.air:
+            return base
+        return base + ['theta', 'T', 'Ts', 'ps'] + (['Tsurf', 'q', 'rh', 'rain', 'evap', 'ice'] if self.moist else [])
 
     def field(self, name, layer=0):
         """A cell field (CuPy, float64) for the viewer."""
@@ -186,6 +209,24 @@ class World:
             return self.theta[layer]
         if name == 'Ts':
             return self.Ts
+        if name == 'q':
+            return self.q[layer] * 1000.0                          # g/kg
+        if name == 'Tsurf':                                        # before the first step: the slab
+            return self.physics.tsurf if self.tick > 0 else self.Ts
+        if name == 'rain':
+            return self.physics.rain * 86400.0                      # mm/day
+        if name == 'evap':
+            return self.physics.evap * 86400.0
+        if name == 'ice':
+            return self.ice / self.physics.p['rho_ice']             # m
+        if name == 'rh':
+            T = self.field('T', layer)
+            p = GRAV * cp.cumsum(self.h, axis=0)
+            pt = p - GRAV * self.h
+            pk = CP_DRY * (p ** (KAPPA + 1) - pt ** (KAPPA + 1)) / ((KAPPA + 1) * (p - pt) * P0 ** KAPPA)
+            pm = P0 * (pk[layer] / CP_DRY) ** (1 / KAPPA)           # the layer's pressure, as the column physics uses it
+            qs = 0.622 * 611.0 * cp.exp(17.27 * (T - 273.15) / (T - 35.85)) / pm
+            return self.q[layer] / qs
         if name == 'ps':
             return GRAV * cp.sum(self.h, axis=0) / 100.0          # hPa
         if name == 'T':
@@ -226,7 +267,7 @@ class World:
         meta, arrays = savefile.read(path)
         if meta.get('gridHash') != gridmod.generator_hash() or meta.get('order') != gridmod.DEFAULT_ORDER:
             raise ValueError('save file was made with a different grid generator or cell order')
-        extra = {k: arrays[k] for k in ('theta', 'Ts') if k in arrays}
+        extra = {k: arrays[k] for k in ('theta', 'Ts', 'q', 'ice') if k in arrays}
         w = cls(n=meta['n'], preset=meta['preset'], params=meta['params'],
                 state=(arrays['h'], arrays['b'], arrays['u'], extra))
         for k in w.STATE:

@@ -1,11 +1,21 @@
-"""Column physics of the air layers (stage V2-2a, kernels/air.cu): v1's radiation and surface exchange over a slab
-ocean, heating as potential temperature, and mass crossing the isentropic interface θ* only when heated or cooled
-across it (decisions #33–#35).
+"""Column physics of the air layers (stages V2-2a and V2-2b, kernels/air.cu): radiation and surface exchange over a slab
+ocean, heating as potential temperature, and mass crossing each isentropic interface θ*_j only when heated or cooled
+across it (decisions #33–#35, #47). Two layers (Held–Suarez) or three (the aquaplanet, #45: θ* = 305 K and θ*₂ = 380 K).
 
-Defaults are v1's (SPEC §16 of v1, as calibrated through its Stage 3c): S0 1361 W/m², 20% of the sunlight absorbed in
-the air at a full column (ASW0), gray infrared optical depth TAU0 = 1.4 split 0.7 / 0.3 between the lower and upper
-layer at an even split, surface emissivity 0.95, ocean albedo 0.06, sensible heat 10·(1 + |u|/10) W/m²K, a 100 m
-mixed-layer slab. Sensible heat goes into the bottom 100 hPa of the column (mu_bl).
+Defaults are v1's where v1 had them (SPEC §16 of v1, as calibrated through its Stage 3c): S0 1361 W/m², 20% of the
+sunlight absorbed in the air at a full column (ASW0), split between the layers like the vapor part (s⁴) of the
+longwave profile (#51, #59; sw_tau 2; 1 splits like the whole profile, 0 by mass), surface emissivity 0.95, ocean albedo 0.06,
+sensible heat 10·(1 + |u|/10) W/m²K, a 100 m mixed-layer slab; sensible heat goes into the bottom 100 hPa of the column
+(mu_bl). The gray longwave's optical depth above pressure p is TAU0·[f·s + (1 − f)·s⁴], s = p/p_s (Frierson et al. 2006;
+vapor-independent; #48): a vapor part (s⁴) and a well-mixed, CO₂-like part (f = 0.5, #59) that lets the top layer cool;
+each layer's emissivity is 1 − exp(−its share).
+
+Moisture (stage V2-2b, #46–#50; moist=1): vapor q in each layer, evaporation from open water
+K_EVAP·(1 + |u|/10)·(q_sat(T_s) − q) kg/m²/s into the bottom 100 hPa (v1's form; K_EVAP 4e-3 and TAU0 0.9 calibrated
+on the moist aquaplanet, #54), saturation adjustment in each layer
+against its pressure-integrated capacity (the water rains out at once; #50), moist convection by plumes from the bottom
+layer that detrain where they stop being buoyant (relaxed over τ_conv = 2 h; #46, #49), and thermodynamic sea ice on the
+slab (v1's rules: freezing below 273.15 K, albedo 0.6 at full cover 0.05 m, a conducting skin over thicker ice).
 """
 import math
 
@@ -13,17 +23,20 @@ import cupy as cp
 import numpy as np
 
 from .constants import CP_DRY, GRAV, KAPPA, P0
-from .gpu import grid_dims
+from .gpu import NULL, grid_dims
 
 SIGMA = 5.670e-8
 DAY_S, YEAR_S = 86400.0, 365 * 86400.0
 TILT = math.radians(23.44)
 
-DEFAULTS = dict(S0=1361.0, asw=0.2, tau0=1.4, mu_ref=P0 / GRAV, eps_s=0.95, h_sens=10.0, u0=10.0, alb=0.06,
+DEFAULTS = dict(S0=1361.0, asw=0.2, tau0=0.9, mu_ref=P0 / GRAV, eps_s=0.95, h_sens=10.0, u0=10.0, alb=0.06,
                 c_slab=1000.0 * 4186.0 * 100.0, mu_bl=1.0e4 / GRAV, theta_star=300.0, floor_=10.0, sigma=SIGMA,
-                grav=GRAV, cp=CP_DRY, kappa=KAPPA, p0=P0, tilt=TILT, year_s=YEAR_S, day_s=DAY_S, tw_top=0.6, tw_bottom=1.4)
+                grav=GRAV, cp=CP_DRY, kappa=KAPPA, p0=P0, tilt=TILT, year_s=YEAR_S, day_s=DAY_S, tau_lin=0.5, theta_star2=380.0,
+                moist=0.0, Lv=2.5e6, Lf=3.34e5, Tf=273.15, k_evap=4.0e-3, tau_conv=7200.0, alb_ice=0.6, rho_ice=917.0,
+                ice_cover=0.05, k_ice=2.2, Rv=461.5, sat_layer=1.0, sw_tau=2.0)
 PAR_ORDER = ('S0', 'asw', 'tau0', 'mu_ref', 'eps_s', 'h_sens', 'u0', 'alb', 'c_slab', 'mu_bl', 'theta_star', 'floor_', 'sigma',
-             'grav', 'cp', 'kappa', 'p0', 'tilt', 'year_s', 'day_s', 'tw_top', 'tw_bottom')
+             'grav', 'cp', 'kappa', 'p0', 'tilt', 'year_s', 'day_s', 'tau_lin', 'theta_star2',
+             'moist', 'Lv', 'Lf', 'Tf', 'k_evap', 'tau_conv', 'alb_ice', 'rho_ice', 'ice_cover', 'k_ice', 'Rv', 'sat_layer', 'sw_tau')
 
 
 def annual_mean_insolation(lat, S0=1361.0, tilt=TILT, days=365):
@@ -56,10 +69,16 @@ class AirPhysics:
         self.hs = cp.asarray([1.0 / (40 * DAY_S), 1.0 / (4 * DAY_S)])
         self.lat = cp.asarray(np.arcsin(np.clip(dg.host.pos[:, 2], -1, 1)))
         self.qnet = z(N)
+        self.moist = bool(self.p['moist'])
+        self.rain, self.evap, self.conv, self.tsurf = z(N), z(N), z(N), z(N)
+        self.dgo = None                     # optional diagnostics array (rows x N; air_column), set by a caller
+        self.rainp = z(3, N)               # rain by source: condensation above the bottom layer, in it, convection
+        self._none = z(1)                                     # q and ice for a dry column (never read)
 
-    def column(self, mu, theta, Ts, u, t, dt):
-        """Radiation, surface exchange, heating and the θ* crossing for one step; the crossing masses go to self.wx
-        (moved with momentum and tracers by Layers.exchange)."""
+    def column(self, mu, theta, Ts, u, t, dt, q=None, ice=None):
+        """Radiation, surface exchange, heating, (moist: evaporation, condensation, sea ice, convection) and the θ*
+        crossing for one step; the masses moved up go to self.wx (moved with momentum and tracers by Layers.exchange),
+        rain and evaporation (kg/m²/s) to self.rain, self.evap."""
         g, k, i32, R = self.dg, self.k, np.int32, self.dg.dtype.type
         if self.forcing == 'held_suarez':
             k['hs_column'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.par, self.hs, self.lat, mu, theta, R(dt), self.wx, self.qnet,
@@ -68,7 +87,9 @@ class AirPhysics:
             return
         k['cell_speed'](*grid_dims(g.N), (i32(g.N), u[self.L - 1], g.cellEdge, g.le, g.de, g.areaCell, self.uabs))
         k['air_column'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.par, i32(self.mode), t, self.insol, self.pos, self.uabs,
-                                          mu, theta, Ts, R(dt), self.wx, self.olr, self.sw_abs, self.stored))
+                                          mu, theta, q if q is not None else self._none, Ts, ice if ice is not None else self._none, R(dt),
+                                          self.wx, self.olr, self.sw_abs, self.stored, self.rain, self.evap, self.conv,
+                                          self.tsurf, self.rainp, self.dgo if self.dgo is not None else NULL))
         k['advance_time']((1,), (1,), (t, R(dt)))
 
 

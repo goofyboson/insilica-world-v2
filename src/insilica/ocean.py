@@ -28,7 +28,7 @@ from .layers import Layers
 from .transport import Transport
 
 ALPHA_REF = 2.0e-4                                              # 1/K: dTmin's buoyancy (decision #68)
-OCEAN = dict(depth=4000.0, h_mixed=100.0, h_thermo=600.0, T_thermo=293.15, T_deep=277.15, h_season=0.0, T_season=297.15, alpha=0.52e-4, alpha2=1.0e-5, beta=7.6e-4, S_ref=35.0, rho=1025.0, cw=3990.0, dt=3600.0, mix_dt=86400.0,
+OCEAN = dict(depth=4000.0, h_mixed=100.0, h_thermo=600.0, T_thermo=293.15, T_deep=273.15, h_season=0.0, T_season=297.15, alpha=0.52e-4, alpha2=1.0e-5, beta=7.6e-4, S_ref=35.0, rho=1025.0, cw=3990.0, dt=3600.0, mix_dt=86400.0,
              gprime=(0.016, 0.016),
              hmin=10.0, hmax=1000.0, dTmin=0.1, m_kt=0.5, n_kt=0.2, visc4_U=0.5, bottom_stress=2.5e-4,
              interface_stress=5.0e-4, thin=2.0, sw_R=0.58, sw_z1=0.35, sw_z2=23.0)
@@ -59,7 +59,8 @@ class Ocean:
         self.tr = Transport(dg, layers=L)
         if state is None:
             # the thermocline water at T_thermo, no warmer than the surface above it nor colder than the abyss: started warm,
-            # near where the subtropics' mixing pumps it (decision #75), its drift stays slow (~0.05 K/yr)
+            # near where the subtropics' mixing pumps it (decision #75), its drift stays slow (~0.05 K/yr); the abyss at the
+            # freezing point, where polar winters would take it over centuries, so polar ice can form (decision #77)
             Ts = np.asarray(Tsurf, dtype=float)
             hs = [c['h_mixed']] + ([c['h_season']] if L == 4 else []) + [c['h_thermo']]
             h = np.stack([np.full(N, x) for x in hs] + [np.full(N, c['depth'] - sum(hs))])

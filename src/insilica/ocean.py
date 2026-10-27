@@ -1,17 +1,18 @@
-"""The ocean under the air (stage V2-3, kernels/ocean.cu; decisions #64–#69).
+"""The ocean under the air (stage V2-3, kernels/ocean.cu; decisions #64–#71).
 
-Three Boussinesq layers on the air's grid — the mixed layer (k = 0), the thermocline's warm water below it and the
-abyss (decision #71) — over a flat bottom, each with a temperature T (K) that sets its density, ρ = ρ₀(1 − α(T − T₀)):
-the interfaces move freely (wind-driven Ekman pumping, upwelling, Kelvin and Rossby waves). With two layers the mixed
-layer sat on a 4 km abyss at 4 °C: upwelling brought abyssal water to the surface and the tropics cooled to 14–21 °C. The mixed layer's temperature is the surface
-the air sees: the air's column physics heats it (sunlight, longwave, sensible heat, evaporation) and freezes or melts
-sea ice over it with its heat capacity ρ_w c_w h₀. The ocean steps on its own interval (1 h; the air's fluxes are summed
-over it, nothing is lost): its layers move (the same time-split RK3 core as the air), T is carried by FCT transport, and
-the column then mixes wherever a layer is denser than the one below, and the mixed layer entrains thermocline water by
-wind stirring and surface cooling, or shoals in calm, warm weather (Kraus–Turner). Sunlight passing the mixed layer's base
-heats the layers below (decision #70). The wind stress joins the air's bottom layer to the mixed layer
-every air step, exactly (`couple`). Salinity is not modelled yet (density from T only); the water the air evaporates
-and rains is a budget only (V2-4).
+Three Boussinesq layers on the air's grid — the mixed layer (k = 0), the thermocline's water below it and the abyss
+(decision #71) — over a flat bottom. Each interface has a fixed density step, g' (decision #64): the interfaces move
+freely (wind-driven Ekman pumping, upwelling, Kelvin and Rossby waves), and each layer's temperature T (K) is heat only,
+carried with the water. (Density following T within a layer, tried first, grew a spurious instability in thick, weakly
+stratified convective columns: the inhomogeneous-layer model's known weakness.) The mixed layer's temperature is the
+surface the air sees: the air's column physics heats it (sunlight, longwave, sensible heat, evaporation) and freezes or
+melts sea ice over it with its heat capacity ρ_w c_w h₀. The ocean steps on its own interval (1 h; the air's fluxes are
+summed over it, nothing is lost): its layers move (the same time-split RK3 core as the air), T is carried by FCT
+transport, and the column then mixes heat wherever a layer is colder than the one below (convection; the interfaces stay),
+and the mixed layer entrains thermocline water by wind stirring and surface cooling, or shoals in calm, warm weather
+(Kraus–Turner, on the temperature jump). Sunlight passing the mixed layer's base heats the layers below (decision #70).
+The wind stress joins the air's bottom layer to the mixed layer every air step, exactly (`couple`). Salinity is not
+modelled yet; the water the air evaporates and rains is a budget only (V2-4).
 """
 import math
 
@@ -24,6 +25,7 @@ from .layers import Layers
 from .transport import Transport
 
 OCEAN = dict(depth=4000.0, h_mixed=100.0, h_thermo=600.0, T_thermo=285.15, T_deep=277.15, alpha=2.0e-4, rho=1025.0, cw=3990.0, dt=3600.0, mix_dt=86400.0,
+             gprime=(0.016, 0.016),
              hmin=10.0, hmax=1000.0, dTmin=0.1, m_kt=0.5, n_kt=0.2, visc4_U=0.5, bottom_stress=2.5e-4,
              interface_stress=5.0e-4, thin=2.0, sw_R=0.58, sw_z1=0.35, sw_z2=23.0)
 
@@ -41,9 +43,11 @@ class Ocean:
         self.b = cp.full(N, -c['depth'])
         # the thermocline's turbulent stress carries the wind's momentum down (decision #69): c ~ C_d |du| ~ 1e-3 x 0.5
         # m/s; without it a mixed layer thinned to its floor by equatorial upwelling ran away toward the wind's speed
+        # g' per interface (decision #64): g α ΔT for 8 K steps (≈ 20 → 12 → 4 °C), baroclinic gravity waves 3.1 and 1.2 m/s
         L = self.L = 3
-        self.core = Layers(dg, L, b=self.b, gprime=[0.0] * (L - 1), stress=[0.0] * (L - 1) + [c['bottom_stress']], nu4=nu4, floor=c['hmin'],
-                           ocean=dict(alpha=c['alpha']), vmix=c['interface_stress'], thin=c['thin'])
+        assert len(c['gprime']) == L - 1
+        self.core = Layers(dg, L, b=self.b, gprime=list(c['gprime']), stress=[0.0] * (L - 1) + [c['bottom_stress']], nu4=nu4,
+                           floor=c['hmin'], vmix=c['interface_stress'], thin=c['thin'])
         if nu4:
             lam = self.core.lap_max()
             assert nu4 * lam * lam * c['dt'] <= 1.0, 'ocean nu4 unstable at its step'
@@ -101,7 +105,7 @@ class Ocean:
         shoals on the forcing summed since the last mixing (mix_dt)."""
         g, c, i32, R = self.dg, self.cfg, np.int32, self.dg.dtype.type
         self.k['ocn_overturn'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.T))
-        self.core.step(self.h, self.u, c['dt'], self.nfast, self._Fm, theta=self.T)
+        self.core.step(self.h, self.u, c['dt'], self.nfast, self._Fm)
         self.tr.mass_after(self.M, self._Fm, self._M1)
         self.tr.step(self.M, self._M1, self._Fm, self.T, order=3)
         cp.copyto(self.M, self._M1)

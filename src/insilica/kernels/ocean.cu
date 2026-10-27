@@ -1,7 +1,7 @@
-// The ocean's coupling to the air and its mixed layer (stage V2-3, decisions #64-#69).
+// The ocean's coupling to the air and its mixed layer (stage V2-3, decisions #64-#71).
 //
-// Ocean layers k = 0 (the mixed layer) and 1 (the deep layer), thickness h (m), temperature T (K, its density
-// rho0 (1 - alpha (T - T0))), on the same grid as the air (layer-major arrays, one thread per cell or edge).
+// Ocean layers k = 0 (the mixed layer) to L - 1 (the abyss), thickness h (m) and temperature T (K; heat only, the layers'
+// density steps g' are fixed, decision #64), on the same grid as the air (layer-major arrays, one thread per cell or edge).
 
 typedef REAL real;
 #define LMAX 8
@@ -32,8 +32,8 @@ extern "C" __global__ void couple_stress(int N, int E, int La, const real* ha, r
   tau_acc[e] += tau * tau * dt;
 }
 
-// Convective adjustment (decisions #66, #71): wherever a layer is colder (denser) than the one below, the two mix
-// completely (heat conserved, interfaces unmoved); repeated until the column is stable (L - 1 passes suffice, as a
+// Convective adjustment (decisions #66, #71): wherever a layer is colder than the one below, the two mix their heat
+// completely (heat conserved, interfaces unmoved: with fixed g' the layers' density never inverts, so convection is heat); repeated until the column is stable (L - 1 passes suffice, as a
 // mixed pair is merged into a block that is mixed again with the next layer).
 __device__ void adjust(int N, int L, int i, const real* h, real* T) {
   real hb[LMAX], Tb[LMAX];
@@ -93,8 +93,8 @@ extern "C" __global__ void ocn_column(int N, int L, const real* h, real* T, cons
   for (int k = 1; k < L - 1; k++) wx[(size_t)k * N + i] = 0;
 }
 
-// Convective adjustment before every ocean step (decision #66): left for the daily mixing, the stratification's g' went
-// negative between mixings and the interface grew without bound (the layered model's Rayleigh-Taylor instability).
+// Convective adjustment before every ocean step (decision #66): heat mixed downward wherever surface cooling made a layer
+// colder than the one below (with T-dependent density, left for the daily mixing, g' went negative between mixings).
 extern "C" __global__ void ocn_overturn(int N, int L, const real* h, real* T) {
   LOOP1(i, N)
   adjust(N, L, i, h, T);

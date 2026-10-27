@@ -171,6 +171,12 @@ wait in practice is spin-up: a 100 m slab takes about a decade of model time to 
 5. **Step engineering** (~1.5–3×): fuse the column physics with neighbouring kernels, many ticks per graph launch, no
    host synchronization inside loops.
 6. **Two resolutions** (V2-5): the fine grid only where it is needed.
+7. **CPU and GPU together** (owner's question, 2026-10-27): not by splitting one tick (the physics needs the dynamics'
+   output and vice versa, so overlap needs the physics lagged a step, and hides at most its ~25% share: ≤ ~1.3×; six
+   Ryzen cores and the 4070 have similar 64-bit peaks, ~0.4 TFLOPS, and the state crosses PCIe in ~0.1 ms at n = 6).
+   Better: the CPU runs independent work beside the GPU (small-grid ensemble members, spin-ups, sweeps), the slow
+   components on long steps (land, ice sheets, geology, perhaps the deep ocean) coupled every few hours or days, and
+   everything around the model (viewer, diagnostics, saves) off the GPU's critical path with asynchronous copies.
 
 Together ~100× for climate-length runs at n = 4–5. **1000× and beyond needs approximation:** a reduced-complexity
 companion (energy balance with parameterized transports) calibrated against the full model for quick what-ifs, and a

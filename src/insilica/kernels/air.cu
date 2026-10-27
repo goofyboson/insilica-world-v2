@@ -243,7 +243,7 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
   const real fice = moist ? fmin((real)1, dice / P.ice_cover) : (real)0;
   const real alb = fice * P.alb_ice + (1 - fice) * P.alb;
   const real toAir = P.asw * (mt / P.mu_ref) * I;
-  if (P.sw_tau > 0)                                  // split like the longwave optical depth (where the vapor is)
+  if (P.sw_tau > 0)                    // split like the longwave optical depth, where the vapor is (decision #51)
     for (int k = 0; k < L; k++)
       Q[k] += toAir * (tau_p(pb[k], pb[bot], P) - tau_p(k ? pb[k - 1] : (real)0, pb[bot], P)) / P.tau0;
   else

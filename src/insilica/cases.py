@@ -205,13 +205,13 @@ AQUA_P = (0.22e5, 0.60e5)                  # Pa, the starting interfaces of the 
 
 def aqua(g):
     """Three air layers at rest over a slab aquaplanet (decision #45): interfaces at 220 and 600 hPa, the top layer's θ
-    380 K and the middle's 325 K (between θ*₂ = 345 and θ* = 305 K), the bottom layer's 290 − 30 sin²φ K, and v1's
+    415 K and the middle's 342.5 K (between θ*₂ = 380 and θ* = 305 K), the bottom layer's 290 − 30 sin²φ K, and v1's
     starting surface temperature 288 − 40 (sin²φ − 1/3) K, for moist air no colder than 274 K (so the run doesn't start
     under metres of ice). Vapor: 10% / 50% / 70% of saturation in the top / middle / bottom layer at its mid-pressure."""
     s2 = np.sin(g.lat) ** 2
     edges = np.array([0.0, *AQUA_P, MU_REF * GRAV])
     h = np.repeat((np.diff(edges) / GRAV)[:, None], g.N, axis=1)
-    theta = np.stack([np.full(g.N, 380.0), np.full(g.N, 325.0), 290.0 - 30.0 * s2])
+    theta = np.stack([np.full(g.N, 415.0), np.full(g.N, 342.5), 290.0 - 30.0 * s2])
     Ts = np.maximum(288.0 - 40.0 * (s2 - 1.0 / 3.0), 274.0)
     pm = (0.5 * (edges[:-1] + edges[1:]))[:, None]
     T = theta * (pm / P0) ** KAPPA
@@ -227,7 +227,7 @@ def aqua_dry(g):
 
 
 AIR = dict(t_ref=288.0)
-AIR3 = dict(theta_star=305.0, theta_star2=345.0)             # the three-layer air's interfaces (decision #45)
+AIR3 = dict(theta_star=305.0, theta_star2=380.0)             # the three-layer air's interfaces (decisions #45, #51)
 PRESETS['aqua'] = dict(build=aqua, dt=lambda n: 900.0 * 2.0 ** (5 - n), visc4_U=15.0, stress=[0.0, 0.0, 0.05], vmix=0.01,
                        tracer=False, air=dict(AIR, physics=dict(AIR3, moist=1.0)))
 PRESETS['aqua_dry'] = dict(PRESETS['aqua'], build=aqua_dry, air=dict(AIR, physics=AIR3))

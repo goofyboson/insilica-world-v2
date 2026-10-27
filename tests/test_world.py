@@ -60,24 +60,33 @@ def test_conserve(record, n, days):
 
 
 def conserve_air(record):
-    """The air's budgets (V2-2a): the column physics' energy ledger (sunlight absorbed − OLR = the change in enthalpy and
-    slab heat, every step, crossings included); air mass and the tracer through dynamics, physics and crossings; and the
-    energy of adiabatic air dynamics with the interfacial stress's dissipation booked as heat."""
-    w = World(4, 'rce')
+    """The air's budgets (V2-2a, V2-2b): the column physics' energy ledger with latent heat and sea ice (sunlight absorbed
+    − OLR = the change in enthalpy, vapor's latent energy, slab heat and ice, every step, crossings, condensation and
+    convection included) and its water ledger (vapor change = evaporation − rain); air mass, the tracer and the vapor
+    through dynamics, physics and crossings of the moist three-layer aquaplanet; and the energy of adiabatic air dynamics
+    with the interfacial stress's dissipation booked as heat."""
+    w = World(4, 'rce', params={'physics': {'moist': 1.0}}, state=cases.aqua(gridmod.get(4)))
     A = cp.asarray(w.grid.areaCell)
-    worst = per_step = 0.0
+    worst = per_step = water = 0.0
     for _ in range(48):
+        W0 = w.water()
         w.step(1)
         flux = float(cp.sum(A * (w.physics.sw_abs - w.physics.olr))) * w.dt
         stored = float(cp.sum(A * w.physics.stored))
         worst = max(worst, abs(stored - flux) / w.energy())          # relative to the energy stored (v1's ledger measure)
         per_step = max(per_step, abs(stored - flux) / (float(cp.sum(A * w.physics.sw_abs)) * w.dt))
+        water = max(water, abs(w.water() - W0 - float(cp.sum(A * (w.physics.evap - w.physics.rain))) * w.dt) / w.water())
     a = World(4, 'aqua', params={'tracer': True})
-    m0 = a.totals()
-    a.step(int(10 * 86400 / a.dt))
+    m0, W0, src = a.totals(), a.water(), 0.0
+    for _ in range(int(10 * 86400 / a.dt)):
+        a.step(1)
+        src += float(cp.sum(A * (a.physics.evap - a.physics.rain))) * a.dt
     m1 = a.totals()
-    mass = abs((m1['volume0'] + m1['volume1']) - (m0['volume0'] + m0['volume1'])) / (m0['volume0'] + m0['volume1'])
-    tracer = abs((m1['tracer0'] + m1['tracer1']) - (m0['tracer0'] + m0['tracer1'])) / (m0['tracer0'] + m0['tracer1'])
+    vol = lambda m: sum(m[f'volume{k}'] for k in range(a.L))
+    trc = lambda m: sum(m[f'tracer{k}'] for k in range(a.L))
+    mass = abs(vol(m1) - vol(m0)) / vol(m0)
+    tracer = abs(trc(m1) - trc(m0)) / trc(m0)
+    vapor = abs(a.water() - W0 - src) / W0
     crossed = float(cp.sum(cp.abs(a.physics.wx) * A) / cp.sum(A))
     g = a.grid
     s2 = np.sin(g.lat) ** 2
@@ -89,9 +98,10 @@ def conserve_air(record):
     e0 = j.energy()
     j.step(int(15 * 86400 / j.dt))
     drift = (j.energy() - e0) / e0
-    ok = worst <= 1e-13 and mass <= 1e-13 and tracer <= 1e-13 and abs(drift) < 1e-4
-    record('CONSERVE air', f'column ledger, 48 steps: worst {fmt(worst)} of the energy stored ({fmt(per_step)} of one step of sunlight); aqua 10 d (dynamics, radiation, '
-           f'crossings ~{crossed:.2f} kg/m² per step): air mass {fmt(mass)}, tracer {fmt(tracer)}; adiabatic air with the interfacial stress, '
+    ok = worst <= 1e-13 and water <= 1e-13 and mass <= 1e-13 and tracer <= 1e-13 and vapor <= 1e-13 and abs(drift) < 1e-4
+    record('CONSERVE air', f'moist column ledgers, 48 steps: energy worst {fmt(worst)} of the energy stored ({fmt(per_step)} of one step of sunlight), '
+           f'water {fmt(water)}; moist aqua 10 d (3 layers; dynamics, radiation, crossings ~{crossed:.2f} kg/m² per step, convection, rain): '
+           f'air mass {fmt(mass)}, tracer {fmt(tracer)}, vapor against evaporation − rain {fmt(vapor)}; adiabatic air with the interfacial stress, '
            f'15 d: energy drift {fmt(drift)}', '≤ 1e-13; ≤ 1e-13; drift < 1e-4', ok)
     return ok
 

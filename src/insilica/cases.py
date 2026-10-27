@@ -211,7 +211,7 @@ def aqua(g):
 
 
 AIR = dict(t_ref=288.0)
-PRESETS['aqua'] = dict(build=aqua, dt=lambda n: 1800.0 * 2.0 ** (5 - n), visc4_U=15.0, stress=[0.0, 0.05], vmix=0.01, air=AIR)
+PRESETS['aqua'] = dict(build=aqua, dt=lambda n: 900.0 * 2.0 ** (5 - n), visc4_U=15.0, stress=[0.0, 0.05], vmix=0.01, air=AIR)
 PRESETS['rce'] = dict(build=aqua, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True), dynamics=False)
 
 
@@ -238,6 +238,6 @@ def held_suarez_theta_star(g):
 
 # HS friction k_f = 1/day over sigma > 0.7, ramping from 0 to 1 at the ground: its column integral is k_f·0.15·M, the
 # bottom stress c of the lower layer.
-PRESETS['held_suarez'] = dict(build=held_suarez, dt=lambda n: 1800.0 * 2.0 ** (5 - n), visc4_U=15.0,
+PRESETS['held_suarez'] = dict(build=held_suarez, dt=lambda n: 900.0 * 2.0 ** (5 - n), visc4_U=15.0,
                               stress=[0.0, 0.15 * MU_REF / 86400.0], vmix=0.01,
                               air=dict(AIR, forcing='held_suarez', physics=dict(theta_star=held_suarez_theta_star)))

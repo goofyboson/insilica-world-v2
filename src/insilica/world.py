@@ -165,6 +165,11 @@ class World:
             return self.core.energy(self.h, self.u, self.theta) + float(cp.sum(self.Ts * cp.asarray(self.grid.areaCell))) * self.physics.p['c_slab']
         return self.core.energy(self.h, self.u)
 
+    def fields(self):
+        """The fields this world can show: air worlds add θ, T, the surface temperature and the surface pressure."""
+        base = ['h', 'z', 'eta', 'psi', 'speed', 'vort']
+        return base + ['theta', 'T', 'Ts', 'ps'] if self.air else base
+
     def field(self, name, layer=0):
         """A cell field (CuPy, float64) for the viewer."""
         g = self.grid

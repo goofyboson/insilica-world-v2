@@ -326,3 +326,28 @@ extern "C" __global__ void lay_vmix(int N, int E, int L, const real* h, const in
   }
   diss[e] = d;
 }
+
+// The kinetic energy the interfacial stress removed, back as heat (air; decision #39): each edge's loss
+// l_e d_e diss_e (J) goes half to each of its cells, spread over the column's layers in proportion to their mass, so
+// every layer warms by the same amount per kilogram: d theta_k = Q / (mu_col pibar_k).
+extern "C" __global__ void vmix_heat(int N, int L, const real* h, const real* diss, const int* cellEdge, const real* le,
+                                     const real* de, const real* areaCell, real grav, real cp, real kappa, real p0, real* theta) {
+  LOOP1(i, N)
+  real q = 0;
+  for (int m = 0; m < 6; m++) {
+    const int e = cellEdge[i * 6 + m];
+    if (e < 0) break;
+    q += (real)0.5 * le[e] * de[e] * diss[e];
+  }
+  if (q == 0) return;
+  q /= areaCell[i];
+  real mu = 0;
+  for (int k = 0; k < L; k++) mu += h[(size_t)k * N + i];
+  real p = 0;
+  for (int k = 0; k < L; k++) {
+    const real pt = p;
+    p = p + grav * h[(size_t)k * N + i];
+    const real pib = cp * (pow(p, kappa + 1) - pow(pt, kappa + 1)) / ((kappa + 1) * (p - pt) * pow(p0, kappa));
+    theta[(size_t)k * N + i] += q / (mu * pib);
+  }
+}

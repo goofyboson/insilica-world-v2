@@ -73,7 +73,7 @@ class Engine:
     def info(self):
         w = self.world
         return dict(type='info', n=w.n, N=w.grid.N, E=w.grid.E, preset=w.preset, layers=w.L, dt=w.dt, tick=w.tick,
-                    playing=self.playing, tpf=self.tpf, fields=list(FIELDS), presets=list(PRESETS))
+                    playing=self.playing, tpf=self.tpf, fields=w.fields(), presets=list(PRESETS))
 
     def status(self):
         return dict(type='status', tick=self.world.tick, playing=self.playing, tpf=self.tpf, day=self.world.tick * self.world.dt / 86400)

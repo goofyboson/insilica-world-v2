@@ -53,7 +53,47 @@ def test_conserve(record, n, days):
            f'exchange of {moved:.1%} of the lower layer: ' + ', '.join(f'{k} {fmt(v)}' for k, v in xch.items())
            + f'; two-layer jet energy drift, no dissipation, {days} d: {fmt(drift)}',
            '≤ 1e-13; ≥ floor (1 m); exchange ≤ 1e-13; energy drift < 1e-4', ok)
-    assert ok
+    air_ok = True
+    if n == 4:
+        air_ok = conserve_air(record)
+    assert ok and air_ok
+
+
+def conserve_air(record):
+    """The air's budgets (V2-2a): the column physics' energy ledger (sunlight absorbed − OLR = the change in enthalpy and
+    slab heat, every step, crossings included); air mass and the tracer through dynamics, physics and crossings; and the
+    energy of adiabatic air dynamics with the interfacial stress's dissipation booked as heat."""
+    w = World(4, 'rce')
+    A = cp.asarray(w.grid.areaCell)
+    worst = per_step = 0.0
+    for _ in range(48):
+        w.step(1)
+        flux = float(cp.sum(A * (w.physics.sw_abs - w.physics.olr))) * w.dt
+        stored = float(cp.sum(A * w.physics.stored))
+        worst = max(worst, abs(stored - flux) / w.energy())          # relative to the energy stored (v1's ledger measure)
+        per_step = max(per_step, abs(stored - flux) / (float(cp.sum(A * w.physics.sw_abs)) * w.dt))
+    a = World(4, 'aqua')
+    m0 = a.totals()
+    a.step(int(10 * 86400 / a.dt))
+    m1 = a.totals()
+    mass = abs((m1['volume0'] + m1['volume1']) - (m0['volume0'] + m0['volume1'])) / (m0['volume0'] + m0['volume1'])
+    tracer = abs((m1['tracer0'] + m1['tracer1']) - (m0['tracer0'] + m0['tracer1'])) / (m0['tracer0'] + m0['tracer1'])
+    crossed = float(cp.sum(cp.abs(a.physics.wx) * A) / cp.sum(A))
+    g = a.grid
+    s2 = np.sin(g.lat) ** 2
+    h = np.full((2, g.N), cases.MU_REF / 2)
+    th = np.stack([320 - 15 * s2, 300 - 30 * s2])
+    j = World(4, 'held_suarez', params=dict(physics={'theta_star': -1.0}, stress=[0.0, 0.0], visc4_U=0.0),
+              state=(h, np.zeros(g.N), np.zeros((2, g.E)), dict(theta=th, Ts=np.zeros(g.N))))
+    j.physics.hs[...] = 0
+    e0 = j.energy()
+    j.step(int(15 * 86400 / j.dt))
+    drift = (j.energy() - e0) / e0
+    ok = worst <= 1e-13 and mass <= 1e-13 and tracer <= 1e-13 and abs(drift) < 1e-4
+    record('CONSERVE air', f'column ledger, 48 steps: worst {fmt(worst)} of the energy stored ({fmt(per_step)} of one step of sunlight); aqua 10 d (dynamics, radiation, '
+           f'crossings ~{crossed:.2f} kg/m² per step): air mass {fmt(mass)}, tracer {fmt(tracer)}; adiabatic air with the interfacial stress, '
+           f'15 d: energy drift {fmt(drift)}', '≤ 1e-13; ≤ 1e-13; drift < 1e-4', ok)
+    return ok
 
 
 @pytest.mark.xdist_group('grid4')
@@ -63,9 +103,9 @@ def test_repro(record, tmp_path, monkeypatch):
     out, ok = [], True
 
     # 1. Identical runs, and the CUDA-graph tick against direct ticks; repeated tree sums
-    a = World(n=4, preset='galewsky', params=P).step(200)
-    b = World(n=4, preset='galewsky', params=P).step(200)
-    c = World(n=4, preset='galewsky', params=P).step(200, graph=False)
+    a = World(n=4, preset='aqua').step(200)              # the air world: dynamics, radiation, crossings, θ, slab, time
+    b = World(n=4, preset='aqua').step(200)
+    c = World(n=4, preset='aqua').step(200, graph=False)
     x = cp.random.default_rng(1).random(10 ** 6)
     same = a.state_hash() == b.state_hash() == c.state_hash() and a.totals() == b.totals() and len({dsum(x) for _ in range(3)}) == 1
     ok &= same
@@ -79,7 +119,7 @@ def test_repro(record, tmp_path, monkeypatch):
     same_file = p1.read_bytes() == p2.read_bytes()
     r.step(100)
     a.step(100)
-    same_run = r.state_hash() == a.state_hash() == World(n=4, preset='galewsky', params=P).step(300).state_hash()
+    same_run = r.state_hash() == a.state_hash() == World(n=4, preset='aqua').step(300).state_hash()
     ok &= same_file and same_run
     out.append(f'save/load file {"identical" if same_file else "DIFFERS"}, continuation {"identical" if same_run else "DIFFERS"}')
 

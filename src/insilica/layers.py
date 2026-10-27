@@ -64,7 +64,7 @@ class Layers:
         self.diss = z(E)
         k = lambda n, f='layers.cu': dg.kernel(n, f)
         self.k = {n: k(n) for n in ('lay_eta', 'lay_ubar', 'lay_bern', 'air_bern', 'air_gfast', 'lay_slow', 'bt_eta', 'bt_u', 'lay_flux', 'lay_scale',
-                                    'lay_limit', 'lay_h', 'lay_u', 'xch_cell', 'xch_edge', 'lay_vmix')}
+                                    'lay_limit', 'lay_h', 'lay_u', 'xch_cell', 'xch_edge', 'lay_vmix', 'vmix_heat')}
         self.k['swe_vertex'] = k('swe_vertex', 'fused.cu')
         self.k.update({n: k(n, 'trisk.cu') for n in ('cell_div', 'vertex_curl', 'edge_lap')})
         self.dmin = float(np.min(dg.host.de))
@@ -146,6 +146,10 @@ class Layers:
         self._stage(self.h2, self.u2, h, u, 1.0, dt, nfast, h, u, Fm, theta=theta)
         if self.vmix and L > 1:
             k['lay_vmix'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(L), h, g.eI, g.eJ, self.real(self.vmix), self.real(dt), u, self.diss))
+            if self.air:
+                R = self.real
+                k['vmix_heat'](*grid_dims(g.N), (i32(g.N), i32(L), h, self.diss, g.cellEdge, g.le, g.de, g.areaCell, R(self.grav),
+                                                 R(CP_DRY), R(KAPPA), R(P0), theta))
 
     def exchange(self, wx, h, u, M, psi):
         """Move thickness wx (L−1, N; m, positive upward across the interface below layer k) between layers with

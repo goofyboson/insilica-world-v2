@@ -1,4 +1,4 @@
-"""The ocean under the air (stage V2-3, kernels/ocean.cu; decisions #64–#71).
+"""The ocean under the air (stage V2-3, kernels/ocean.cu; decisions #64–#74).
 
 Three Boussinesq layers on the air's grid — the mixed layer (k = 0), the thermocline's water below it and the abyss
 (decision #71) — over a flat bottom. Each interface has a fixed density step, g' (decision #64): the interfaces move
@@ -10,7 +10,8 @@ melts sea ice over it with its heat capacity ρ_w c_w h₀. The ocean steps on i
 summed over it, nothing is lost): its layers move (the same time-split RK3 core as the air), T is carried by FCT
 transport, and the column then mixes heat wherever a layer is colder than the one below (convection; the interfaces stay),
 and the mixed layer entrains thermocline water by wind stirring and surface cooling, or shoals in calm, warm weather
-(Kraus–Turner, on the temperature jump). Sunlight passing the mixed layer's base heats the layers below (decision #70).
+(Kraus–Turner, on the temperature jump, with the sunlight counted where it is absorbed, decision #74). Sunlight passing
+the mixed layer's base heats the layers below (decision #70).
 The wind stress joins the air's bottom layer to the mixed layer every air step, exactly (`couple`). Salinity is not
 modelled yet; the water the air evaporates and rains is a budget only (V2-4).
 """
@@ -66,8 +67,8 @@ class Ocean:
         z = lambda *s: cp.zeros(s)
         self._Fm, self._M1 = z(L, E), z(L, N)
         self.cap = z(N)                                         # ρ_w c_w h₀, for the air's surface physics
-        self.qocean, self.q_acc = z(N), z(N)                    # W/m² into the mixed layer; its sum over the ocean step (J/m²)
-        self.qsw = z(N)                                         # its sunlight (W/m²)
+        self.qocean, self.qsw = z(N), z(N)                      # W/m² into the mixed layer, and its sunlight
+        self.q_acc, self.sun_acc = z(N), z(N)                   # their non-solar part and the sunlight, summed for the mixing (J/m²)
         self.tau_acc, self.taum, self.diss = z(E), z(N), z(E)   # Σ τ² dt on edges; the step's rms stress at cells
         self.wx = z(L - 1, N)
         self.galpha = GRAV * c['alpha']
@@ -98,7 +99,7 @@ class Ocean:
         keeps to the mixing's sum."""
         g, c, R = self.dg, self.cfg, self.dg.dtype.type
         self.k['ocn_pen'](*grid_dims(g.N), (np.int32(g.N), np.int32(self.L), self.h, self.T, self.qocean, self.qsw, R(c['rho'] * c['cw']),
-                                           R(c['sw_R']), R(c['sw_z1']), R(c['sw_z2']), R(dt), self.q_acc))
+                                           R(c['sw_R']), R(c['sw_z1']), R(c['sw_z2']), R(dt), self.q_acc, self.sun_acc))
 
     def step(self, mix=True):
         """One ocean step: the layers move and T is carried; with mix, the mixed layer then overturns / entrains /
@@ -118,11 +119,14 @@ class Ocean:
         cp.sqrt(self.tau_acc, out=self.tau_acc)
         self.k['cell_speed'](*grid_dims(g.N), (i32(g.N), self.tau_acc, g.cellEdge, g.le, g.de, g.areaCell, self.taum))
         self.q_acc /= dt
-        self.k['ocn_column'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.T, self.taum, self.q_acc, R(self.galpha), R(c['rho']),
-                                               R(c['cw']), R(c['m_kt']), R(c['n_kt']), R(c['hmin']), R(c['hmax']), R(c['dTmin']), R(dt), self.wx))
+        self.sun_acc /= dt
+        self.k['ocn_column'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.T, self.taum, self.q_acc, self.sun_acc, R(self.galpha),
+                                               R(c['rho']), R(c['cw']), R(c['m_kt']), R(c['n_kt']), R(c['hmin']), R(c['hmax']), R(c['dTmin']),
+                                               R(c['sw_R']), R(c['sw_z1']), R(c['sw_z2']), R(dt), self.wx))
         self.core.exchange(self.wx, self.h, self.u, self.M, self.T)
         self.tau_acc.fill(0)
         self.q_acc.fill(0)
+        self.sun_acc.fill(0)
         self.update_cap()
 
     def heat(self):

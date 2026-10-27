@@ -25,7 +25,7 @@ from .gpu import grid_dims
 from .layers import Layers
 from .transport import Transport
 
-OCEAN = dict(depth=4000.0, h_mixed=100.0, h_thermo=600.0, T_thermo=285.15, T_deep=277.15, alpha=2.0e-4, rho=1025.0, cw=3990.0, dt=3600.0, mix_dt=86400.0,
+OCEAN = dict(depth=4000.0, h_mixed=100.0, h_thermo=600.0, T_thermo=293.15, T_deep=277.15, alpha=2.0e-4, rho=1025.0, cw=3990.0, dt=3600.0, mix_dt=86400.0,
              gprime=(0.016, 0.016),
              hmin=10.0, hmax=1000.0, dTmin=0.1, m_kt=0.5, n_kt=0.2, visc4_U=0.5, bottom_stress=2.5e-4,
              interface_stress=5.0e-4, thin=2.0, sw_R=0.58, sw_z1=0.35, sw_z2=23.0)
@@ -54,7 +54,8 @@ class Ocean:
             assert nu4 * lam * lam * c['dt'] <= 1.0, 'ocean nu4 unstable at its step'
         self.tr = Transport(dg, layers=L)
         if state is None:
-            # the thermocline water at T_thermo, no warmer than the surface above it nor colder than the abyss
+            # the thermocline water at T_thermo, no warmer than the surface above it nor colder than the abyss: started warm,
+            # near where the subtropics' mixing pumps it (decision #75), its drift stays slow (~0.05 K/yr)
             Ts = np.asarray(Tsurf, dtype=float)
             h = np.stack([np.full(N, c['h_mixed']), np.full(N, c['h_thermo']), np.full(N, c['depth'] - c['h_mixed'] - c['h_thermo'])])
             u = np.zeros((L, E))

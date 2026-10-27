@@ -1,8 +1,11 @@
-// Column physics of the two air layers over a slab surface (stages V2-2a and V2-2b, decisions #32-#35, #40, #45-#48):
-// v1's radiation and surface exchange, heating as potential temperature, air crossing the isentropic interface
-// theta* only when heated or cooled across it; with moisture (V2-2b) vapor in both layers, evaporation from open
-// water, condensation and rain, moist convection across theta*, and thermodynamic sea ice on the slab.
-// One thread per cell; layers k = 0 (top) .. L-1 (bottom), mass mu_k (kg/m^2), specific humidity q_k (kg/kg).
+// Column physics of the air layers over a slab surface (stages V2-2a and V2-2b, decisions #32-#35, #40, #45-#50):
+// radiation (v1's shortwave, a gray longwave with a fixed optical-depth profile in pressure) and surface exchange,
+// heating as potential temperature, air crossing each isentropic interface theta*_j only when heated or cooled across
+// it; with moisture (V2-2b) vapor in every layer, evaporation from open water, condensation and rain, moist convection
+// (plumes from the bottom layer detraining where they stop being buoyant), and thermodynamic sea ice on the slab.
+// One thread per cell; layers k = 0 (top) .. L-1 (bottom), L = 2 or 3, mass mu_k (kg/m^2), specific humidity q_k
+// (kg/kg). Interface j lies between layers j and j+1 at pressure p_j = g (mu_0 + .. + mu_j); its theta* is theta_star
+// for the lowest interface (j = L-2) and theta_star2 for the one above it (L = 3).
 //
 // Energy (J/m^2): a layer's enthalpy mu_k pibar_k theta_k (pibar the mass-mean Exner function, cp T = pibar theta), its
 // latent energy Lv mu_k q_k, the slab's C Ts, and the ice's -Lf m_ice (relative to water at Tf). Every process moves
@@ -16,8 +19,8 @@ typedef REAL real;
 
 struct Par {
   real S0, asw, tau0, mu_ref, eps_s, h_sens, u0, alb, c_slab, mu_bl, theta_star, floor_, sigma, grav, cp, kappa, p0;
-  real tilt, year_s, day_s, tw_top, tw_bottom;
-  real moist, Lv, Lf, Tf, k_evap, tau_conv, alb_ice, rho_ice, ice_cover, k_ice, Rv, sat_layer;
+  real tilt, year_s, day_s, tau_lin, theta_star2;
+  real moist, Lv, Lf, Tf, k_evap, tau_conv, alb_ice, rho_ice, ice_cover, k_ice, Rv, sat_layer, sw_tau;
 };
 
 // The parameters arrive as an array in this order (atmosphere.PAR_ORDER).
@@ -25,9 +28,9 @@ __device__ Par unpack(const real* a) {
   Par P;
   P.S0 = a[0]; P.asw = a[1]; P.tau0 = a[2]; P.mu_ref = a[3]; P.eps_s = a[4]; P.h_sens = a[5]; P.u0 = a[6]; P.alb = a[7];
   P.c_slab = a[8]; P.mu_bl = a[9]; P.theta_star = a[10]; P.floor_ = a[11]; P.sigma = a[12]; P.grav = a[13]; P.cp = a[14];
-  P.kappa = a[15]; P.p0 = a[16]; P.tilt = a[17]; P.year_s = a[18]; P.day_s = a[19]; P.tw_top = a[20]; P.tw_bottom = a[21];
+  P.kappa = a[15]; P.p0 = a[16]; P.tilt = a[17]; P.year_s = a[18]; P.day_s = a[19]; P.tau_lin = a[20]; P.theta_star2 = a[21];
   P.moist = a[22]; P.Lv = a[23]; P.Lf = a[24]; P.Tf = a[25]; P.k_evap = a[26]; P.tau_conv = a[27]; P.alb_ice = a[28];
-  P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32]; P.sat_layer = a[33];
+  P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32]; P.sat_layer = a[33]; P.sw_tau = a[34];
   return P;
 }
 
@@ -110,16 +113,16 @@ __device__ real column_energy(int L, const real* mu, const real* pib, const real
   return E;
 }
 
-// Re-divide the column after moving mass dm (kg/m^2, > 0 up) between the two layers. The air leaves its layer with
-// theta th_leave and vapor q_leave per kilogram and arrives with th_arrive and q_arrive (different when it condensed on
-// the way). The column's energy is the same before and after up to rounding; that residual is booked into the
-// receiving layer.
-__device__ void move_mass(int L, const Par& P, real* mu, real* th, real* q, real* pib, real dm,
+// The theta* of interface j (between layers j and j+1).
+__device__ __forceinline__ real tstar(int j, int L, const Par& P) { return j == L - 2 ? P.theta_star : P.theta_star2; }
+
+// Re-divide the column after moving mass m (kg/m^2, > 0) from layer `from` to layer `to`. The air leaves with theta
+// th_leave and vapor q_leave per kilogram and arrives with th_arrive and q_arrive (different when it condensed on the
+// way). The column's energy is the same before and after up to rounding; that residual is booked into the receiving
+// layer.
+__device__ void move_mass(int L, const Par& P, real* mu, real* th, real* q, real* pib, int from, int to, real m,
                           real th_leave, real th_arrive, real q_leave, real q_arrive) {
-  if (dm == 0) return;
-  const int top = 0, bot = 1;
-  const int from = dm > 0 ? bot : top, to = dm > 0 ? top : bot;
-  const real m = dm > 0 ? dm : -dm;
+  if (m == 0) return;
   real pb2[LMAX], pib2[LMAX], mu2[LMAX], th2[LMAX], q2[LMAX];
   const real Eb = column_energy(L, mu, pib, th, q, P);
   for (int k = 0; k < L; k++) { mu2[k] = mu[k]; th2[k] = th[k]; q2[k] = q[k]; }
@@ -134,48 +137,75 @@ __device__ void move_mass(int L, const Par& P, real* mu, real* th, real* q, real
   for (int k = 0; k < L; k++) { th[k] = th2[k]; mu[k] = mu2[k]; pib[k] = pib2[k]; q[k] = q2[k]; }
 }
 
-// Crossing theta* (two layers, decisions #34, #40): a layer's theta spans [lo, hi] evenly about its mean, with theta* at
-// the shared edge; the convectively mixed lower layer crosses by its own mean heating, the stratified upper layer by
-// the heating of its air at theta* (dth_up). Mass crossing mu |d theta| / (2 |theta* - theta|); a layer wholly beyond
-// theta* crosses down to its floor; crossing air carries theta* (or its whole layer's theta) and its layer's vapor.
-// Floor air stays on its own side of theta*. Returns the mass moved up (kg/m^2).
-__device__ real crossing(int L, const Par& P, real* mu, real* th, real* q, const real* dth, real dth_up, real* pib) {
-  if (L != 2 || P.theta_star <= 0) return 0;               // theta_star <= 0: no crossing (diagnostics)
-  const int top = 0, bot = 1;
-  const real ts_ = P.theta_star;
-  real dm = 0, thc = ts_;
-  if (dth[bot] > 0) {
-    if (th[bot] >= ts_) { dm = mu[bot] - P.floor_; thc = th[bot]; }
-    else dm = mu[bot] * dth[bot] / (2 * (ts_ - (th[bot] - dth[bot])));
+// Crossing the interfaces (decisions #34, #40, #47). A layer's theta spans [lo, hi] evenly about its mean, with
+// theta*_j at the edge it shares with its neighbour. Heating carries air up across a layer's top edge, cooling carries
+// it down across its bottom edge, the mass crossing being mu |d theta| / (2 |theta* - theta|) from the theta before the
+// heating; a layer wholly beyond the edge crosses to its floor. The convectively mixed bottom layer and the middle layer
+// cross by their mean heating; the stratified top layer by the heating of its air at its bottom edge (dth_up; the radiative
+// case passes its mean heating). All crossings are worked out from the state before any of them, then applied, lowest
+// interface first; crossing air carries theta* (or its whole layer's theta) and its layer's vapor. Floor air stays on its
+// own side of every interface. wxo[j] (j = 0..L-2) receives the mass moved up across interface j (kg/m^2).
+__device__ void crossing(int L, const Par& P, real* mu, real* th, real* q, const real* dth, real dth_up, real* pib,
+                         real* wxo) {
+  for (int j = 0; j + 1 < L; j++) wxo[j] = 0;
+  if (P.theta_star <= 0) return;                           // theta_star <= 0: no crossing (diagnostics)
+  real dmj[LMAX], thcj[LMAX];
+  for (int j = 0; j + 1 < L; j++) {
+    const int a = j, b = j + 1;                            // the layers above and below interface j
+    const real ts_ = tstar(j, L, P);
+    real dm = 0, thc = ts_;
+    if (dth[b] > 0) {
+      if (th[b] >= ts_) { dm = mu[b] - P.floor_; thc = th[b]; }
+      else dm = mu[b] * dth[b] / (2 * (ts_ - (th[b] - dth[b])));
+    }
+    const real da = a == 0 ? dth_up : dth[a];
+    if (da < 0) {
+      real down;
+      if (th[a] <= ts_) { down = mu[a] - P.floor_; thc = th[a]; }
+      else down = mu[a] * (-da) / (2 * ((th[a] - dth[a]) - ts_));
+      dm -= down;
+    }
+    dmj[j] = dm; thcj[j] = thc;
   }
-  if (dth_up < 0) {
-    real down;
-    if (th[top] <= ts_) { down = mu[top] - P.floor_; thc = th[top]; }
-    else down = mu[top] * (-dth_up) / (2 * ((th[top] - dth[top]) - ts_));
-    dm -= down;
+  for (int j = L - 2; j >= 0; j--) {
+    const int a = j, b = j + 1;
+    real dm = dmj[j];
+    const real maxup = mu[b] - P.floor_, maxdn = mu[a] - P.floor_;
+    if (dm > maxup) dm = maxup > 0 ? maxup : (real)0;
+    if (-dm > maxdn) dm = maxdn > 0 ? -maxdn : (real)0;
+    if (dm > 0) move_mass(L, P, mu, th, q, pib, b, a, dm, thcj[j], thcj[j], q[b], q[b]);
+    else if (dm < 0) move_mass(L, P, mu, th, q, pib, a, b, -dm, thcj[j], thcj[j], q[a], q[a]);
+    wxo[j] = dm;
   }
-  const real maxup = mu[bot] - P.floor_, maxdn = mu[top] - P.floor_;
-  if (dm > maxup) dm = maxup > 0 ? maxup : (real)0;
-  if (-dm > maxdn) dm = maxdn > 0 ? -maxdn : (real)0;
-  const real qd = dm > 0 ? q[bot] : q[top];
-  move_mass(L, P, mu, th, q, pib, dm, thc, thc, qd, qd);
   const real tiny = P.floor_ * (real)1.000001;
-  if (mu[bot] <= tiny && th[bot] > ts_) {
-    th[top] += mu[bot] * pib[bot] * (th[bot] - ts_) / (mu[top] * pib[top]);
-    th[bot] = ts_;
+  for (int j = L - 2; j >= 0; j--) {
+    const int a = j, b = j + 1;
+    const real ts_ = tstar(j, L, P);
+    if (mu[b] <= tiny && th[b] > ts_) {
+      th[a] += mu[b] * pib[b] * (th[b] - ts_) / (mu[a] * pib[a]);
+      th[b] = ts_;
+    }
+    if (mu[a] <= tiny && th[a] < ts_) {
+      th[b] -= mu[a] * pib[a] * (ts_ - th[a]) / (mu[b] * pib[b]);
+      th[a] = ts_;
+    }
   }
-  if (mu[top] <= tiny && th[top] < ts_) {
-    th[bot] -= mu[top] * pib[top] * (ts_ - th[top]) / (mu[bot] * pib[bot]);
-    th[top] = ts_;
-  }
-  return dm;
+}
+
+// The longwave optical depth above pressure p in a column whose surface is at ps: tau0 [f s + (1 - f) s^4], s = p / ps
+// (Frierson et al. 2006's gray profile: a linear part for well-mixed absorbers, a quartic one for vapor, which sits low;
+// vapor-independent, decision #48).
+__device__ __forceinline__ real tau_p(real p, real ps, const Par& P) {
+  const real s = p / ps, s2 = s * s;
+  return P.tau0 * (P.tau_lin * s + (1 - P.tau_lin) * s2 * s2);
 }
 
 // mode 0: the sun at time t (diurnal and seasonal, v1's sunVector); mode 1: insol[i], a given mean insolation.
-// Outputs per cell: wx (mass moved up across theta*, dry crossing + moist convection), olr, sw_abs (W/m^2), stored (the
+// Outputs per cell: wx (L-1 x N: mass moved up across each interface, dry crossing + moist convection), olr, sw_abs
+// (W/m^2), stored (the
 // column's energy change, J/m^2), rain and evap (kg/m^2/s), conv (kg/m^2 moved up by moist convection this step),
 // tsurf (K: the surface that radiates, the ice skin where the ice is thicker than ice_cover, else the slab), rainp
-// (3 x N, kg/m^2/s: the rain from the upper layer's condensation, the lower layer's, and convection).
+// (3 x N, kg/m^2/s: the rain from condensation in the layers above the bottom one, in the bottom one, and convection).
 // qv and ice are read and written only when moist.
 extern "C" __global__ void air_column(int N, int L, const real* par, int mode, const real* t, const real* insol, const real* pos,
                                       const real* uabs, real* mu_in, real* theta, real* qv, real* Ts, real* ice, real dt,
@@ -213,14 +243,16 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
   const real fice = moist ? fmin((real)1, dice / P.ice_cover) : (real)0;
   const real alb = fice * P.alb_ice + (1 - fice) * P.alb;
   const real toAir = P.asw * (mt / P.mu_ref) * I;
-  for (int k = 0; k < L; k++) Q[k] += toAir * mu[k] / mt;
+  if (P.sw_tau > 0)                                  // split like the longwave optical depth (where the vapor is)
+    for (int k = 0; k < L; k++)
+      Q[k] += toAir * (tau_p(pb[k], pb[bot], P) - tau_p(k ? pb[k - 1] : (real)0, pb[bot], P)) / P.tau0;
+  else
+    for (int k = 0; k < L; k++) Q[k] += toAir * mu[k] / mt;
   const real swS = (I - toAir) * (1 - alb);
 
-  // ---- longwave optical depths; the downward longwave reaching the surface ----
-  for (int k = 0; k < L; k++) {
-    const real w = (k == bot) ? P.tw_bottom : P.tw_top;
-    eps[k] = 1 - exp(-P.tau0 * w * mu[k] / P.mu_ref);
-  }
+  // ---- longwave: each layer's emissivity from its share of the optical-depth profile; the downward longwave reaching
+  // the surface ----
+  for (int k = 0; k < L; k++) eps[k] = 1 - exp(-(tau_p(pb[k], pb[bot], P) - tau_p(k ? pb[k - 1] : (real)0, pb[bot], P)));
   real ldown = 0;
   for (int k = 0; k < L; k++) {
     real dn = eps[k] * P.sigma * T[k] * T[k] * T[k] * T[k];
@@ -313,30 +345,33 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
 
   // ---- condensation: one-step saturation adjustment per layer (v1 SPEC 18 #25); the latent heat warms the layer and
   // counts as heating for the crossing of theta*; the water rains out ----
-  real R = 0, Rk[2] = {0, 0}, Rc = 0;
+  real R = 0, Rk[2] = {0, 0}, Rc = 0;            // Rk: condensation in the layers above the bottom, in the bottom
   if (moist)
     for (int k = 0; k < L; k++) {
       const real dq = condense_k(k, mu, th, q, pib, P);
       dth[k] += P.Lv * dq / pib[k];
       R += mu[k] * dq;
-      Rk[k < 2 ? k : 1] += mu[k] * dq;
+      Rk[k == bot ? 1 : 0] += mu[k] * dq;
     }
 
-  // ---- dry crossing of theta* ----
-  const real dm = crossing(L, P, mu, th, q, dth, dth[top], pib);
+  // ---- dry crossing of the interfaces ----
+  real wxo[LMAX];
+  crossing(L, P, mu, th, q, dth, dth[top], pib, wxo);
 
-  // ---- moist convection (decision #46): a parcel of lower-layer air lifted to the interface, condensing on the way,
-  // compared with the air there, which is at theta*. Buoyant (theta_p > theta*), it rises into the upper layer with its
-  // latent heat; its condensate rains. Removing lower air lowers the interface, where the parcel condenses less, so
-  // the mass that would remove the buoyancy is d / (-d(theta_p)/dp) / g; a share 1 - exp(-dt/tau_conv) of it moves
-  // per step (a Betts-Miller-style relaxation; the one convective constant). ----
+  // ---- moist convection (decisions #46, #49): a plume of bottom-layer air lifted to the interface above it, condensing
+  // on the way, compared with the air there, which is at theta*. Buoyant (theta_p > theta*), it rises; it keeps rising
+  // through each further interface it is buoyant at and detrains into the layer above the last one, with its latent
+  // heat; its condensate rains. Removing bottom air lowers the first interface, where the plume condenses less, so the
+  // mass that would remove the buoyancy there is d / (-d(theta_p)/dp) / g; a share 1 - exp(-dt/tau_conv) of it moves per
+  // step (a Betts-Miller-style relaxation; the one convective constant). ----
   real mc = 0;
-  if (moist && L == 2) {
-    const real pi_ = P.grav * mu[top];
+  if (moist && P.theta_star > 0) {
+    real pi_ = 0;
+    for (int k = 0; k < bot; k++) pi_ += P.grav * mu[k];     // the bottom layer's top
     real thp, qc, thp2, qc2;
     parcel(th[bot], q[bot], pi_, P, thp, qc);
-    const real d = thp - P.theta_star;
-    if (d > 0 && P.theta_star > 0) {
+    const real d = thp - tstar(bot - 1, L, P);
+    if (d > 0) {
       const real dp = 500;
       parcel(th[bot], q[bot], pi_ + dp, P, thp2, qc2);
       const real slope = (thp - thp2) / dp;                     // > 0: the buoyancy falls as the interface lowers
@@ -344,18 +379,28 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
       const real want = slope > 0 ? d / slope / P.grav : maxup;
       mc = fmin(want, maxup) * (1 - exp(-dt / P.tau_conv));
       if (mc > 0) {
+        int kd = bot - 1;                                       // the layer it detrains into
+        real pj = pi_;
+        while (kd > 0) {                                        // buoyant at the next interface up too?
+          pj -= P.grav * mu[kd];
+          real t2, q2;
+          parcel(th[bot], q[bot], pj, P, t2, q2);
+          if (!(t2 > tstar(kd - 1, L, P))) break;
+          thp = t2; qc = q2; kd--;
+        }
         R += mc * (q[bot] - qc);
         Rc = mc * (q[bot] - qc);
-        move_mass(L, P, mu, th, q, pib, mc, th[bot], thp, q[bot], qc);
-        // what the arriving air brings beyond the upper layer's saturation rains at once
-        const real rt = mu[top] * condense_k(top, mu, th, q, pib, P);
+        move_mass(L, P, mu, th, q, pib, bot, kd, mc, th[bot], thp, q[bot], qc);
+        for (int j = kd; j < bot; j++) wxo[j] += mc;            // it crosses every interface on its way
+        // what the arriving air brings beyond the receiving layer's saturation rains at once
+        const real rt = mu[kd] * condense_k(kd, mu, th, q, pib, P);
         R += rt;
         Rc += rt;
       } else mc = 0;
     }
   }
   if (conv) conv[i] = mc;
-  wx[i] = dm + mc;
+  for (int j = 0; j + 1 < L; j++) wx[(size_t)j * N + i] = wxo[j];
   rain[i] = R / dt;
   if (rainp) { rainp[i] = Rk[0] / dt; rainp[(size_t)N + i] = Rk[1] / dt; rainp[(size_t)2 * N + i] = Rc / dt; }
 
@@ -423,7 +468,9 @@ extern "C" __global__ void hs_column(int N, int L, const real* par, const real* 
     const real ki = hs[0] + (hs[1] - hs[0]) * (si > 0.7 ? (si - 0.7) / 0.3 : (real)0) * c2 * c2;
     dth_up = (thi - P.theta_star) * (1 - exp(-ki * dt));
   }
-  wx[i] = crossing(L, P, mu, th, q, dth, dth_up, pib);
+  real wxo[LMAX];
+  crossing(L, P, mu, th, q, dth, dth_up, pib, wxo);
+  for (int j = 0; j + 1 < L; j++) wx[(size_t)j * N + i] = wxo[j];
   real E1 = 0;
   for (int k = 0; k < L; k++) { theta[(size_t)k * N + i] = th[k]; E1 += mu[k] * pib[k] * th[k]; }
   qnet[i] = Qs;

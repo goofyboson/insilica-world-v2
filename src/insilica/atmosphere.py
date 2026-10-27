@@ -1,17 +1,18 @@
-"""Column physics of the air layers (stage V2-2a, kernels/air.cu): v1's radiation and surface exchange over a slab
-ocean, heating as potential temperature, and mass crossing the isentropic interface θ* only when heated or cooled
-across it (decisions #33–#35).
+"""Column physics of the air layers (stages V2-2a and V2-2b, kernels/air.cu): radiation and surface exchange over a slab
+ocean, heating as potential temperature, and mass crossing each isentropic interface θ*_j only when heated or cooled
+across it (decisions #33–#35, #47). Two layers (Held–Suarez) or three (the aquaplanet, #45: θ* = 305 K and θ*₂ = 345 K).
 
-Defaults are v1's (SPEC §16 of v1, as calibrated through its Stage 3c): S0 1361 W/m², 20% of the sunlight absorbed in
-the air at a full column (ASW0), gray infrared optical depth TAU0 = 1.4 split 0.7 / 0.3 between the lower and upper
-layer at an even split, surface emissivity 0.95, ocean albedo 0.06, sensible heat 10·(1 + |u|/10) W/m²K, a 100 m
-mixed-layer slab. Sensible heat goes into the bottom 100 hPa of the column (mu_bl).
+Defaults are v1's where v1 had them (SPEC §16 of v1, as calibrated through its Stage 3c): S0 1361 W/m², 20% of the
+sunlight absorbed in the air at a full column (ASW0) and split by mass, surface emissivity 0.95, ocean albedo 0.06,
+sensible heat 10·(1 + |u|/10) W/m²K, a 100 m mixed-layer slab; sensible heat goes into the bottom 100 hPa of the column
+(mu_bl). The gray longwave's optical depth above pressure p is TAU0·[f·s + (1 − f)·s⁴], s = p/p_s, f = 0.1 (Frierson et
+al. 2006; vapor-independent; #48); each layer's emissivity is 1 − exp(−its share).
 
-Moisture (stage V2-2b, decisions #45–#48; moist=1): vapor q in each layer, evaporation from open water
-K_EVAP·(1 + |u|/10)·(q_sat(T_s) − q) kg/m²/s into the bottom 100 hPa (v1's form and K_EVAP 2e-3), saturation adjustment
-in each layer (the water rains out at once), moist convection across θ* relaxing the lower layer's θ_e excess over the
-upper layer's saturated θ_e in τ_conv = 2 h, and thermodynamic sea ice on the slab (v1's rules: freezing below 273.15 K,
-albedo 0.6 at full cover 0.05 m, a conducting skin over thicker ice).
+Moisture (stage V2-2b, #46–#50; moist=1): vapor q in each layer, evaporation from open water
+K_EVAP·(1 + |u|/10)·(q_sat(T_s) − q) kg/m²/s into the bottom 100 hPa (v1's form), saturation adjustment in each layer
+against its pressure-integrated capacity (the water rains out at once; #50), moist convection by plumes from the bottom
+layer that detrain where they stop being buoyant (relaxed over τ_conv = 2 h; #46, #49), and thermodynamic sea ice on the
+slab (v1's rules: freezing below 273.15 K, albedo 0.6 at full cover 0.05 m, a conducting skin over thicker ice).
 """
 import math
 
@@ -27,12 +28,12 @@ TILT = math.radians(23.44)
 
 DEFAULTS = dict(S0=1361.0, asw=0.2, tau0=1.4, mu_ref=P0 / GRAV, eps_s=0.95, h_sens=10.0, u0=10.0, alb=0.06,
                 c_slab=1000.0 * 4186.0 * 100.0, mu_bl=1.0e4 / GRAV, theta_star=300.0, floor_=10.0, sigma=SIGMA,
-                grav=GRAV, cp=CP_DRY, kappa=KAPPA, p0=P0, tilt=TILT, year_s=YEAR_S, day_s=DAY_S, tw_top=0.6, tw_bottom=1.4,
+                grav=GRAV, cp=CP_DRY, kappa=KAPPA, p0=P0, tilt=TILT, year_s=YEAR_S, day_s=DAY_S, tau_lin=0.1, theta_star2=345.0,
                 moist=0.0, Lv=2.5e6, Lf=3.34e5, Tf=273.15, k_evap=2.0e-3, tau_conv=7200.0, alb_ice=0.6, rho_ice=917.0,
-                ice_cover=0.05, k_ice=2.2, Rv=461.5, sat_layer=0.0)
+                ice_cover=0.05, k_ice=2.2, Rv=461.5, sat_layer=1.0, sw_tau=0.0)
 PAR_ORDER = ('S0', 'asw', 'tau0', 'mu_ref', 'eps_s', 'h_sens', 'u0', 'alb', 'c_slab', 'mu_bl', 'theta_star', 'floor_', 'sigma',
-             'grav', 'cp', 'kappa', 'p0', 'tilt', 'year_s', 'day_s', 'tw_top', 'tw_bottom',
-             'moist', 'Lv', 'Lf', 'Tf', 'k_evap', 'tau_conv', 'alb_ice', 'rho_ice', 'ice_cover', 'k_ice', 'Rv', 'sat_layer')
+             'grav', 'cp', 'kappa', 'p0', 'tilt', 'year_s', 'day_s', 'tau_lin', 'theta_star2',
+             'moist', 'Lv', 'Lf', 'Tf', 'k_evap', 'tau_conv', 'alb_ice', 'rho_ice', 'ice_cover', 'k_ice', 'Rv', 'sat_layer', 'sw_tau')
 
 
 def annual_mean_insolation(lat, S0=1361.0, tilt=TILT, days=365):
@@ -67,7 +68,7 @@ class AirPhysics:
         self.qnet = z(N)
         self.moist = bool(self.p['moist'])
         self.rain, self.evap, self.conv, self.tsurf = z(N), z(N), z(N), z(N)
-        self.rainp = z(3, N)                                 # rain by source: upper, lower condensation, convection
+        self.rainp = z(3, N)               # rain by source: condensation above the bottom layer, in it, convection
         self._none = z(1)                                     # q and ice for a dry column (never read)
 
     def column(self, mu, theta, Ts, u, t, dt, q=None, ice=None):

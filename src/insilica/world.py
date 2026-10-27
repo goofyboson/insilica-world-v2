@@ -20,10 +20,14 @@ from . import grid as gridmod
 from .cases import PRESETS, cosine_bell, default_dt, edge_east_north, initial_state  # noqa: F401  (re-exported)
 from .gpu import DeviceGrid, dsum, source_hash
 from .io import save as savefile
+from .atmosphere import AirPhysics
+from .constants import CP_DRY, GRAV, KAPPA, P0
 from .layers import DIV_DAMP, Layers
 from .transport import BETA, Transport
 
-FIELDS = ('h', 'z', 'eta', 'psi', 'speed', 'vort')      # z: height of the layer's top; eta: the free surface
+FIELDS = ('h', 'z', 'eta', 'psi', 'speed', 'vort', 'theta', 'T', 'Ts', 'ps')
+# z: height of the layer's top; eta: the free surface; theta, T, Ts, ps: air (potential temperature, temperature,
+# surface temperature, surface pressure in hPa)
 
 
 def visc4(g, U):
@@ -43,8 +47,11 @@ class World:
         spec = PRESETS[preset]
         self.params = dict(params or {})
         P = self.params
-        h, b, u = state if state is not None else spec['build'](self.grid)
+        built = state if state is not None else spec['build'](self.grid)
+        h, b, u = built[:3]
+        extra = built[3] if len(built) > 3 else {}
         h, u = np.asarray(h, dtype=float), np.asarray(u, dtype=float)
+        self.air = spec.get('air')                       # air layers (V2-2a): h is mass per area, θ per layer
         if layers and layers != h.shape[0]:
             assert h.shape[0] == 1
             h, u = np.repeat(h / layers, layers, axis=0), np.repeat(u, layers, axis=0)
@@ -57,10 +64,13 @@ class World:
         self.dt = float(dt)
         nu4 = P.get('nu4', visc4(self.grid, P['visc4_U']) if 'visc4_U' in P else visc4(self.grid, spec.get('visc4_U', 0.0)))
         self.b = cp.asarray(b, dtype=float)
+        floor = P.get('floor', 10.0 if self.air else 1.0)
         self.core = Layers(self.dg, self.L, b=self.b, gprime=self.gprime, drag=P.get('drag', spec.get('drag', 0.0)),
                            stress=P.get('stress', spec.get('stress', 0.0)),
-                           nu4=nu4, floor=P.get('floor', 1.0), rotation=P.get('rotation', 1.0),
-                           div_damp=P.get('div_damp', DIV_DAMP))
+                           nu4=nu4, floor=floor, rotation=P.get('rotation', 1.0),
+                           div_damp=P.get('div_damp', DIV_DAMP),
+                           air=dict(t_ref=self.air.get('t_ref', 288.0)) if self.air else None)
+        self.dynamics = P.get('dynamics', spec.get('dynamics', True))
         if nu4:
             lam = self.core.lap_max()
             if nu4 * lam * lam * self.dt > 1.0:
@@ -70,7 +80,19 @@ class World:
         self.h, self.u = cp.asarray(h), cp.asarray(u)
         self.M = self.h * cp.asarray(self.grid.areaCell)[None, :]
         self.psi = cp.asarray(np.tile(cosine_bell(self.grid), (self.L, 1)))
-        # fast sub-steps per step: from the deepest column, with 20% room for it to deepen
+        self.STATE = World.STATE
+        if self.air:
+            phys = dict(self.air.get('physics', {}), floor_=floor, **P.get('physics', {}))
+            phys = {k: (v(self.grid) if callable(v) else v) for k, v in phys.items()}     # e.g. θ* from the case
+            self.physics = AirPhysics(self.dg, self.L, phys, mean_sun=P.get('mean_sun', self.air.get('mean_sun', False)),
+                                      forcing=self.air.get('forcing', 'radiation'))
+            self.theta = cp.asarray(np.asarray(extra['theta'], dtype=float))
+            self.Ts = cp.asarray(np.asarray(extra['Ts'], dtype=float))
+            self.time = cp.zeros(1)
+            self.STATE = World.STATE + ('theta', 'Ts', 'time')
+        if self.air:
+            self.core.update_gfast(self.h, self.theta)
+        # fast sub-steps per step: from the fastest column, with 20% room
         self.nfast = int(P.get('nfast', math.ceil(1.2 * self.core.substeps(self.h, self.dt))))
         P['nfast'] = self.nfast                         # saved with the world, so a reload continues identically
         self.tick = 0
@@ -82,11 +104,19 @@ class World:
     STATE = ('h', 'u', 'M', 'psi')
 
     def _tick(self):
-        """One tick's kernels, on fixed buffers (no allocation), so the sequence can be captured as a graph."""
-        self.core.step(self.h, self.u, self.dt, self.nfast, self._Fm)
-        self.tr.mass_after(self.M, self._Fm, self._M1)
-        self.tr.step(self.M, self._M1, self._Fm, self.psi, order=3)
-        cp.copyto(self.M, self._M1)
+        """One tick's kernels, on fixed buffers (no allocation), so the sequence can be captured as a graph:
+        the layers' dynamics, transport of the tracer (and θ), then for air the column physics and the θ* crossings."""
+        if self.dynamics:
+            self.core.step(self.h, self.u, self.dt, self.nfast, self._Fm, theta=self.theta if self.air else None)
+            self.tr.mass_after(self.M, self._Fm, self._M1)
+            self.tr.step(self.M, self._M1, self._Fm, self.psi, order=3)
+            if self.air:
+                self.tr.step(self.M, self._M1, self._Fm, self.theta, order=3)
+            cp.copyto(self.M, self._M1)
+        if self.air:
+            self.physics.column(self.h, self.theta, self.Ts, self.u, self.time, self.dt)
+            if self.L > 1:
+                self.core.exchange(self.physics.wx, self.h, self.u, self.M, self.psi)
 
     def step(self, k=1, graph=True):
         """k ticks. The first tick runs directly (and compiles the kernels); after that the tick is captured once
@@ -129,6 +159,9 @@ class World:
         return out
 
     def energy(self):
+        """Total energy (J): kinetic + potential (+ for air the enthalpy and the slab's heat C·Ts)."""
+        if self.air:
+            return self.core.energy(self.h, self.u, self.theta) + float(cp.sum(self.Ts * cp.asarray(self.grid.areaCell))) * self.physics.p['c_slab']
         return self.core.energy(self.h, self.u)
 
     def field(self, name, layer=0):
@@ -141,6 +174,17 @@ class World:
             return self.b + cp.sum(self.h[top:], axis=0)
         if name == 'psi':
             return self.psi[layer]
+        if name == 'theta':
+            return self.theta[layer]
+        if name == 'Ts':
+            return self.Ts
+        if name == 'ps':
+            return GRAV * cp.sum(self.h, axis=0) / 100.0          # hPa
+        if name == 'T':
+            p = GRAV * cp.cumsum(self.h, axis=0)
+            pt = p - GRAV * self.h
+            pib = CP_DRY * (p ** (KAPPA + 1) - pt ** (KAPPA + 1)) / ((KAPPA + 1) * (p - pt) * P0 ** KAPPA)
+            return (pib * self.theta / CP_DRY)[layer]
         if name in ('speed', 'vort'):
             uh = self.u[layer].get()
             if name == 'speed':
@@ -174,9 +218,10 @@ class World:
         meta, arrays = savefile.read(path)
         if meta.get('gridHash') != gridmod.generator_hash() or meta.get('order') != gridmod.DEFAULT_ORDER:
             raise ValueError('save file was made with a different grid generator or cell order')
+        extra = {k: arrays[k] for k in ('theta', 'Ts') if k in arrays}
         w = cls(n=meta['n'], preset=meta['preset'], params=meta['params'],
-                state=(arrays['h'], arrays['b'], arrays['u']))
-        for k in cls.STATE:
+                state=(arrays['h'], arrays['b'], arrays['u'], extra))
+        for k in w.STATE:
             a = arrays[k]
             if a.shape != getattr(w, k).shape or a.dtype != np.float64:
                 raise ValueError(f'save file array {k}: shape {a.shape} {a.dtype}, expected {getattr(w, k).shape} float64')

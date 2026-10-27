@@ -26,11 +26,11 @@ from .layers import DIV_DAMP, Layers
 from .transport import BETA, Transport
 
 FIELDS = ('h', 'z', 'eta', 'psi', 'speed', 'vort', 'theta', 'T', 'Ts', 'Tsurf', 'ps', 'q', 'rh', 'rain', 'evap', 'ice',
-          'sst', 'mld', 'tthermo', 'tdeep', 'current')
+          'sst', 'sss', 'mld', 'tthermo', 'tdeep', 'current')
 # z: height of the layer's top; eta: the free surface; theta, T, Ts, ps: air (potential temperature, temperature,
 # surface temperature, surface pressure in hPa); q, rh, rain, evap, ice: moist air (specific humidity in g/kg, relative
 # humidity, rain and evaporation in mm/day, sea ice in m, Tsurf the radiating surface: the ice skin over ice);
-# sst, mld, tthermo, tdeep, current: the ocean (V2-3; mixed-layer temperature in °C, its depth in m, the thermocline
+# sst, sss, mld, tthermo, tdeep, current: the ocean (V2-3; mixed-layer temperature in °C and salinity in psu, its depth in m, the thermocline
 # layer's and the abyss's temperatures in °C, the mixed layer's current speed in m/s)
 
 
@@ -115,8 +115,8 @@ class World:
                 raise ValueError(f'the ocean step {self.sea.cfg["dt"]} s must be a whole number of air steps ({self.dt} s)')
             self.ocean_every = int(round(ratio))
             self.Ts = self.sea.T[0]                          # a view: the air's surface physics heats the mixed layer
-            self.oh, self.ou, self.oT, self.oM = self.sea.h, self.sea.u, self.sea.T, self.sea.M
-            self.STATE = tuple(k for k in self.STATE if k != 'Ts') + ('oh', 'ou', 'oT', 'oM')
+            self.oh, self.ou, self.oT, self.oM, self.oS = self.sea.h, self.sea.u, self.sea.T, self.sea.M, self.sea.S
+            self.STATE = tuple(k for k in self.STATE if k != 'Ts') + ('oh', 'ou', 'oT', 'oM', 'oS')
         if self.air:
             self.core.update_gfast(self.h, self.theta)
         # fast sub-steps per step: from the fastest column, with 20% room
@@ -162,7 +162,7 @@ class World:
                                 qocean=self.sea.qocean if self.sea is not None else None,
                                 qsw=self.sea.qsw if self.sea is not None else None)
             if self.sea is not None:
-                self.sea.accumulate(self.dt)
+                self.sea.accumulate(self.dt, self.physics.evap, self.physics.rain, self.ice)
             if self.L > 1:
                 self.core.exchange(self.physics.wx, self.h, self.u, self.M, self.psi, theta=self.theta)
         if kind:
@@ -233,7 +233,7 @@ class World:
         if not self.air:
             return base
         return (base + ['theta', 'T', 'Ts', 'ps'] + (['Tsurf', 'q', 'rh', 'rain', 'evap', 'ice'] if self.moist else [])
-                + (['sst', 'mld', 'tthermo', 'tdeep', 'current'] if self.sea is not None else []))
+                + (['sst', 'sss', 'mld', 'tthermo', 'tdeep', 'current'] if self.sea is not None else []))
 
     def field(self, name, layer=0):
         """A cell field (CuPy, float64) for the viewer."""
@@ -253,6 +253,8 @@ class World:
             return self.q[layer] * 1000.0                          # g/kg
         if name == 'sst':
             return self.sea.T[0] - 273.15
+        if name == 'sss':
+            return self.sea.S[0]
         if name == 'tthermo':
             return self.sea.T[1] - 273.15
         if name == 'tdeep':

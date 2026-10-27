@@ -17,7 +17,7 @@ typedef REAL real;
 struct Par {
   real S0, asw, tau0, mu_ref, eps_s, h_sens, u0, alb, c_slab, mu_bl, theta_star, floor_, sigma, grav, cp, kappa, p0;
   real tilt, year_s, day_s, tw_top, tw_bottom;
-  real moist, Lv, Lf, Tf, k_evap, tau_conv, alb_ice, rho_ice, ice_cover, k_ice, Rv;
+  real moist, Lv, Lf, Tf, k_evap, tau_conv, alb_ice, rho_ice, ice_cover, k_ice, Rv, sat_layer;
 };
 
 // The parameters arrive as an array in this order (atmosphere.PAR_ORDER).
@@ -27,7 +27,7 @@ __device__ Par unpack(const real* a) {
   P.c_slab = a[8]; P.mu_bl = a[9]; P.theta_star = a[10]; P.floor_ = a[11]; P.sigma = a[12]; P.grav = a[13]; P.cp = a[14];
   P.kappa = a[15]; P.p0 = a[16]; P.tilt = a[17]; P.year_s = a[18]; P.day_s = a[19]; P.tw_top = a[20]; P.tw_bottom = a[21];
   P.moist = a[22]; P.Lv = a[23]; P.Lf = a[24]; P.Tf = a[25]; P.k_evap = a[26]; P.tau_conv = a[27]; P.alb_ice = a[28];
-  P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32];
+  P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32]; P.sat_layer = a[33];
   return P;
 }
 
@@ -60,6 +60,42 @@ __device__ real condense(real& th, real& q, real pib, real p, const Par& P) {
   q -= dq;
   th += P.Lv * dq / pib;
   return dq;
+}
+
+// Saturation adjustment of a layer of uniform theta spanning pressures [pt, pb] (Pa), against the layer's capacity: q_sat
+// averaged over its pressure range (8-point Gauss-Legendre; temperatures below 160 K hold no vapor worth counting), so
+// a deep layer's warm bottom counts, as it does when its relative humidity is uniform with height. One Newton step with
+// d(q_sat)/d(theta) from Clausius-Clapeyron at each node. Updates theta and q; returns the condensate (kg/kg).
+__device__ real condense_layer(real& th, real& q, real pib, real pt, real pb, const Par& P) {
+  const real x[8] = {-0.9602898564975363, -0.7966664774136267, -0.5255324099163290, -0.1834346424956498,
+                     0.1834346424956498, 0.5255324099163290, 0.7966664774136267, 0.9602898564975363};
+  const real wq[8] = {0.1012285362903763, 0.2223810344533745, 0.3137066458778873, 0.3626837833783620,
+                      0.3626837833783620, 0.3137066458778873, 0.2223810344533745, 0.1012285362903763};
+  real qs = 0, dqs = 0;
+  for (int j = 0; j < 8; j++) {
+    const real p = (real)0.5 * (pt + pb) + (real)0.5 * (pb - pt) * x[j];
+    const real ex = pow(p / P.p0, P.kappa), T = th * ex;
+    if (T < 160) continue;
+    const real s = qsat(T, p);
+    qs += (real)0.5 * wq[j] * s;
+    dqs += (real)0.5 * wq[j] * s * P.Lv / (P.Rv * T * T) * ex;
+  }
+  if (!(q > qs)) return 0;
+  const real dq = (q - qs) / (1 + P.Lv / pib * dqs);
+  q -= dq;
+  th += P.Lv * dq / pib;
+  return dq;
+}
+
+// Condensation in layer k of the column (mass mu): the layer-integrated capacity when sat_layer, else v1's rule at the
+// layer's mass-mean pressure.
+__device__ real condense_k(int k, const real* mu, real* th, real* q, const real* pib, const Par& P) {
+  if (P.sat_layer > 0) {
+    real pt = 0;
+    for (int j = 0; j < k; j++) pt += P.grav * mu[j];
+    return condense_layer(th[k], q[k], pib[k], pt, pt + P.grav * mu[k], P);
+  }
+  return condense(th[k], q[k], pib[k], p_of(pib[k], P), P);
 }
 
 // A parcel (theta, q) lifted to pressure p (Pa): its theta and vapor there after condensing what it can't hold.
@@ -138,12 +174,13 @@ __device__ real crossing(int L, const Par& P, real* mu, real* th, real* q, const
 // mode 0: the sun at time t (diurnal and seasonal, v1's sunVector); mode 1: insol[i], a given mean insolation.
 // Outputs per cell: wx (mass moved up across theta*, dry crossing + moist convection), olr, sw_abs (W/m^2), stored (the
 // column's energy change, J/m^2), rain and evap (kg/m^2/s), conv (kg/m^2 moved up by moist convection this step),
-// tsurf (K: the surface that radiates, the ice skin where the ice is thicker than ice_cover, else the slab).
+// tsurf (K: the surface that radiates, the ice skin where the ice is thicker than ice_cover, else the slab), rainp
+// (3 x N, kg/m^2/s: the rain from the upper layer's condensation, the lower layer's, and convection).
 // qv and ice are read and written only when moist.
 extern "C" __global__ void air_column(int N, int L, const real* par, int mode, const real* t, const real* insol, const real* pos,
                                       const real* uabs, real* mu_in, real* theta, real* qv, real* Ts, real* ice, real dt,
                                       real* wx, real* olr, real* sw_abs, real* stored, real* rain, real* evap, real* conv,
-                                      real* tsurf) {
+                                      real* tsurf, real* rainp) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= N) return;
   const Par P = unpack(par);
@@ -276,12 +313,13 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
 
   // ---- condensation: one-step saturation adjustment per layer (v1 SPEC 18 #25); the latent heat warms the layer and
   // counts as heating for the crossing of theta*; the water rains out ----
-  real R = 0;
+  real R = 0, Rk[2] = {0, 0}, Rc = 0;
   if (moist)
     for (int k = 0; k < L; k++) {
-      const real dq = condense(th[k], q[k], pib[k], p_of(pib[k], P), P);
+      const real dq = condense_k(k, mu, th, q, pib, P);
       dth[k] += P.Lv * dq / pib[k];
       R += mu[k] * dq;
+      Rk[k < 2 ? k : 1] += mu[k] * dq;
     }
 
   // ---- dry crossing of theta* ----
@@ -307,15 +345,19 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
       mc = fmin(want, maxup) * (1 - exp(-dt / P.tau_conv));
       if (mc > 0) {
         R += mc * (q[bot] - qc);
+        Rc = mc * (q[bot] - qc);
         move_mass(L, P, mu, th, q, pib, mc, th[bot], thp, q[bot], qc);
         // what the arriving air brings beyond the upper layer's saturation rains at once
-        R += mu[top] * condense(th[top], q[top], pib[top], p_of(pib[top], P), P);
+        const real rt = mu[top] * condense_k(top, mu, th, q, pib, P);
+        R += rt;
+        Rc += rt;
       } else mc = 0;
     }
   }
   if (conv) conv[i] = mc;
   wx[i] = dm + mc;
   rain[i] = R / dt;
+  if (rainp) { rainp[i] = Rk[0] / dt; rainp[(size_t)N + i] = Rk[1] / dt; rainp[(size_t)2 * N + i] = Rc / dt; }
 
   const real E1 = column_energy(L, mu, pib, th, q, P) + P.c_slab * Ts[i] - P.Lf * m_ice;
   for (int k = 0; k < L; k++) { theta[(size_t)k * N + i] = th[k]; if (moist) qv[(size_t)k * N + i] = q[k]; }

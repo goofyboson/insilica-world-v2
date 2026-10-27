@@ -20,7 +20,7 @@ typedef REAL real;
 struct Par {
   real S0, asw, tau0, mu_ref, eps_s, h_sens, u0, alb, c_slab, mu_bl, theta_star, floor_, sigma, grav, cp, kappa, p0;
   real tilt, year_s, day_s, tau_lin, theta_star2;
-  real moist, Lv, Lf, Tf, k_evap, tau_conv, alb_ice, rho_ice, ice_cover, k_ice, Rv, sat_layer, sw_tau, xmid;
+  real moist, Lv, Lf, Tf, k_evap, tau_conv, alb_ice, rho_ice, ice_cover, k_ice, Rv, sat_layer, sw_tau;
 };
 
 // The parameters arrive as an array in this order (atmosphere.PAR_ORDER).
@@ -30,7 +30,7 @@ __device__ Par unpack(const real* a) {
   P.c_slab = a[8]; P.mu_bl = a[9]; P.theta_star = a[10]; P.floor_ = a[11]; P.sigma = a[12]; P.grav = a[13]; P.cp = a[14];
   P.kappa = a[15]; P.p0 = a[16]; P.tilt = a[17]; P.year_s = a[18]; P.day_s = a[19]; P.tau_lin = a[20]; P.theta_star2 = a[21];
   P.moist = a[22]; P.Lv = a[23]; P.Lf = a[24]; P.Tf = a[25]; P.k_evap = a[26]; P.tau_conv = a[27]; P.alb_ice = a[28];
-  P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32]; P.sat_layer = a[33]; P.sw_tau = a[34]; P.xmid = a[35];
+  P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32]; P.sat_layer = a[33]; P.sw_tau = a[34];
   return P;
 }
 
@@ -137,11 +137,46 @@ __device__ void move_mass(int L, const Par& P, real* mu, real* th, real* q, real
   for (int k = 0; k < L; k++) { th[k] = th2[k]; mu[k] = mu2[k]; pib[k] = pib2[k]; q[k] = q2[k]; }
 }
 
-// Crossing the interfaces (decisions #34, #40, #47). A layer's theta spans [lo, hi] evenly about its mean, with
-// theta*_j at the edge it shares with its neighbour. Heating carries air up across a layer's top edge, cooling carries
-// it down across its bottom edge, the mass crossing being mu |d theta| / (2 |theta* - theta|) from the theta before the
-// heating; a layer wholly beyond the edge crosses to its floor. The convectively mixed bottom layer and the middle layer
-// cross by their mean heating; the stratified top layer by the heating of its air at its bottom edge (dth_up; the radiative
+// A middle layer's theta between its two edges [a, b] (decision #58): a truncated exponential density proportional to
+// exp(s (theta - a) / (b - a)) with the layer's mean m. Its mean is a + (b - a) r(s), r(s) = 1 - 1/s + 1/(e^s - 1)
+// (1/2 at s = 0, rising with s), solved for s by bisection; the share of the layer's mass per kelvin at the edges is then
+// fa = s / (e^s - 1) / (b - a) and fb = s e^s / (e^s - 1) / (b - a). A layer whose mean sits near one edge holds most of
+// its air there and little at the other.
+__device__ void edge_density(real a, real b, real m, real& fa, real& fb) {
+  const real W = b - a;
+  real x = (m - a) / W;
+  if (x < (real)1e-6) x = (real)1e-6;
+  if (x > 1 - (real)1e-6) x = 1 - (real)1e-6;
+  // safeguarded Newton on r(s) = x within a bracket (r rises with s; r'(s) = 1/s^2 - e^s/(e^s - 1)^2, 1/12 at s = 0)
+  real lo = -700, hi = 700, s = 12 * (x - (real)0.5);
+  for (int it = 0; it < 40; it++) {
+    real r, dr;
+    if (fabs(s) < (real)1e-4) { r = (real)0.5 + s / 12; dr = (real)1 / 12; }
+    else {
+      const real e1 = expm1(s);
+      r = 1 - 1 / s + 1 / e1;
+      dr = 1 / (s * s) - (e1 + 1) / (e1 * e1);
+    }
+    if (r < x) lo = s; else hi = s;
+    real sn = s - (r - x) / dr;
+    if (r == x) break;
+    if (!(sn >= lo && sn <= hi) || !(dr > 0)) sn = (real)0.5 * (lo + hi);
+    if (fabs(sn - s) < (real)1e-12 * (1 + fabs(s))) { s = sn; break; }
+    s = sn;
+  }
+  if (fabs(s) < (real)1e-6) { fa = (1 - s / 2) / W; fb = (1 + s / 2) / W; return; }
+  const real e1 = expm1(s);
+  fa = s / e1 / W;
+  fb = s * (e1 + 1) / e1 / W;
+}
+
+// Crossing the interfaces (decisions #34, #40, #47, #58). Heating carries air up across a layer's top edge, cooling
+// carries it down across its bottom edge: the mass crossing is the layer's mass per kelvin at that edge times |d theta|,
+// from the theta before the heating; a layer wholly beyond the edge crosses to its floor. The bottom and top layers
+// have one known edge: their theta spans [lo, hi] evenly about the mean with theta*_j at the shared edge, so the mass
+// crossing is mu |d theta| / (2 |theta* - theta|). A middle layer has both: its air is spread by edge_density. The
+// convectively mixed bottom layer and the middle layer cross by their mean heating; the stratified top layer by the
+// heating of its air at its bottom edge (dth_up; the radiative
 // case passes its mean heating). All crossings are worked out from the state before any of them, then applied, lowest
 // interface first; crossing air carries theta* (or its whole layer's theta) and its layer's vapor. Floor air stays on its
 // own side of every interface. wxo[j] (j = 0..L-2) receives the mass moved up across interface j (kg/m^2); gross, if
@@ -158,14 +193,23 @@ __device__ void crossing(int L, const Par& P, real* mu, real* th, real* q, const
     if (gross) { gross[2 * j] = 0; gross[2 * j + 1] = 0; }
     if (dth[b] > 0) {
       if (th[b] >= ts_) { dm = mu[b] - P.floor_; thc = th[b]; }
-      else dm = mu[b] * dth[b] / (2 * (ts_ - (th[b] - dth[b])));
-      if (b != L - 1) dm *= P.xmid;                         // a middle layer's top edge (experiment scale)
+      else if (b == L - 1) dm = mu[b] * dth[b] / (2 * (ts_ - (th[b] - dth[b])));
+      else {                                                // a middle layer's top edge
+        real fa, fb;
+        edge_density(tstar(b, L, P), ts_, th[b] - dth[b], fa, fb);
+        dm = mu[b] * dth[b] * fb;
+      }
     }
     const real da = a == 0 ? dth_up : dth[a];
     if (da < 0) {
       real down;
       if (th[a] <= ts_) { down = mu[a] - P.floor_; thc = th[a]; }
-      else down = mu[a] * (-da) / (2 * ((th[a] - dth[a]) - ts_));
+      else if (a == 0) down = mu[a] * (-da) / (2 * ((th[a] - dth[a]) - ts_));
+      else {                                                // a middle layer's bottom edge
+        real fa, fb;
+        edge_density(ts_, tstar(a - 1, L, P), th[a] - dth[a], fa, fb);
+        down = mu[a] * (-da) * fa;
+      }
       dm -= down;
       if (gross) gross[2 * j + 1] = down;
     }
@@ -248,7 +292,15 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
   const real fice = moist ? fmin((real)1, dice / P.ice_cover) : (real)0;
   const real alb = fice * P.alb_ice + (1 - fice) * P.alb;
   const real toAir = P.asw * (mt / P.mu_ref) * I;
-  if (P.sw_tau > 0)                    // split like the longwave optical depth, where the vapor is (decision #51)
+  if (P.sw_tau > 1) {                  // split like the vapor part (s^4) of the longwave profile (decision #59)
+    const real ps_ = pb[bot];
+    real st = 0;
+    for (int k = 0; k < L; k++) {
+      const real sb = pb[k] / ps_, sb4 = sb * sb * sb * sb;
+      Q[k] += toAir * (sb4 - st);
+      st = sb4;
+    }
+  } else if (P.sw_tau > 0)             // split like the longwave optical depth, where the vapor is (decision #51)
     for (int k = 0; k < L; k++)
       Q[k] += toAir * (tau_p(pb[k], pb[bot], P) - tau_p(k ? pb[k - 1] : (real)0, pb[bot], P)) / P.tau0;
   else

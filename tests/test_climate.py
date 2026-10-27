@@ -8,7 +8,7 @@ from insilica import runcache
 from insilica.grid.trisk import cell_winds
 from insilica.world import World
 
-CLIMATE_SPIN_YEARS, WEATHER_SPIN_YEARS = 4, 1
+CLIMATE_SPIN_YEARS, WEATHER_SPIN_YEARS = 15, 1   # the 100 m slab settles in ~10 years (#54)
 
 
 def _year_ticks(w, years):
@@ -101,10 +101,13 @@ def test_weather(record):
             out[k] = s[bins]
         return out
 
+    # B4 over the tropospheric layers (decision #60): the top layer is the stratosphere, whose polar-night jet would
+    # dominate the mean-flow energy
     mid = (np.abs(lat) >= 30) & (np.abs(lat) <= 60)
     Um, Vm = zmean(U), zmean(V)
-    ke_mean = float(np.sum((H.mean(0) * (Um ** 2 + Vm ** 2))[:, mid] * g.areaCell[mid]))
-    ke_eddy = float(np.sum((H * ((U - Um) ** 2 + (V - Vm) ** 2)).mean(0)[:, mid] * g.areaCell[mid]))
+    tro = slice(1, None) if w.L > 2 else slice(None)
+    ke_mean = float(np.sum((H.mean(0) * (Um ** 2 + Vm ** 2))[tro][:, mid] * g.areaCell[mid]))
+    ke_eddy = float(np.sum((H * ((U - Um) ** 2 + (V - Vm) ** 2)).mean(0)[tro][:, mid] * g.areaCell[mid]))
     b4 = ke_eddy / ke_mean
     # B9: mid-latitude daily rain is local and intermittent
     ml = (np.abs(lat) >= 35) & (np.abs(lat) <= 55)
@@ -124,7 +127,7 @@ def test_weather(record):
     clump = float(np.median([R[d, tro][rows == wet_row].max() / max(R[d, tro][rows == wet_row].mean(), 1e-12) for d in range(days)]))
     corr = float(np.median([np.corrcoef(R[d, tro], R[d - 5, tro])[0, 1] for d in range(5, days)]))
     ok = b4 > 0.2 and cv > 1 and top20 > 0.5
-    record('WEATHER', f'after {WEATHER_SPIN_YEARS} year, 60 days: B4 eddy / mean-flow kinetic energy at 30–60° {b4:.2f}; B9 mid-latitude daily rain '
+    record('WEATHER', f'after {WEATHER_SPIN_YEARS} year, 60 days: B4 eddy / mean-flow kinetic energy at 30–60° in the troposphere (#60) {b4:.2f}; B9 mid-latitude daily rain '
            f'coefficient of variation {cv:.2f}, wettest 20% of cells at 45° get {top20 * 100:.0f}% of the rain (median day); '
            f'B10 (report only) wettest tropical row max/mean {clump:.2f}, 5-day map correlation {corr:.2f}',
            'B4 > 0.2; B9 CV > 1 and > 50%; B10 reported (v1: > 2 and < 0.5)', ok)

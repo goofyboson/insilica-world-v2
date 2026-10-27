@@ -228,7 +228,10 @@ def aqua_dry(g):
 
 AIR = dict(t_ref=288.0)
 AIR3 = dict(theta_star=305.0, theta_star2=380.0)             # the three-layer air's interfaces (decisions #45, #51)
-PRESETS['aqua'] = dict(build=aqua, dt=lambda n: 900.0 * 2.0 ** (5 - n), visc4_U=15.0, stress=[0.0, 0.0, 0.05], vmix=0.01,
+# Surface drag on the bottom layer: Held & Suarez's k_f = 1/day over sigma > 0.7, integrated, c = 0.15 M / day ~ 0.017
+# kg/m^2/s, close to an Earth-like rho C_D |U| (decision #57). No interfacial stress (#56).
+SURFACE_DRAG = 0.15 * MU_REF / 86400.0
+PRESETS['aqua'] = dict(build=aqua, dt=lambda n: 900.0 * 2.0 ** (5 - n), visc4_U=15.0, stress=[0.0, 0.0, SURFACE_DRAG],
                        tracer=False, air=dict(AIR, physics=dict(AIR3, moist=1.0)))
 PRESETS['aqua_dry'] = dict(PRESETS['aqua'], build=aqua_dry, air=dict(AIR, physics=AIR3))
 PRESETS['rce'] = dict(build=aqua_dry, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True, physics=AIR3), dynamics=False)
@@ -258,5 +261,5 @@ def held_suarez_theta_star(g):
 # HS friction k_f = 1/day over sigma > 0.7, ramping from 0 to 1 at the ground: its column integral is k_f·0.15·M, the
 # bottom stress c of the lower layer.
 PRESETS['held_suarez'] = dict(build=held_suarez, dt=lambda n: 900.0 * 2.0 ** (5 - n), visc4_U=15.0,
-                              stress=[0.0, 0.15 * MU_REF / 86400.0], vmix=0.01, tracer=False,
+                              stress=[0.0, SURFACE_DRAG], tracer=False,
                               air=dict(AIR, forcing='held_suarez', physics=dict(theta_star=held_suarez_theta_star)))

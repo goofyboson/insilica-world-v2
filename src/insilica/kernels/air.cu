@@ -20,7 +20,7 @@ typedef REAL real;
 struct Par {
   real S0, asw, tau0, mu_ref, eps_s, h_sens, u0, alb, c_slab, mu_bl, theta_star, floor_, sigma, grav, cp, kappa, p0;
   real tilt, year_s, day_s, tau_lin, theta_star2;
-  real moist, Lv, Lf, Tf, k_evap, tau_conv, alb_ice, rho_ice, ice_cover, k_ice, Rv, sat_layer, sw_tau;
+  real moist, Lv, Lf, Tf, k_evap, tau_conv, alb_ice, rho_ice, ice_cover, k_ice, Rv, sat_layer, sw_tau, xmid;
 };
 
 // The parameters arrive as an array in this order (atmosphere.PAR_ORDER).
@@ -30,7 +30,7 @@ __device__ Par unpack(const real* a) {
   P.c_slab = a[8]; P.mu_bl = a[9]; P.theta_star = a[10]; P.floor_ = a[11]; P.sigma = a[12]; P.grav = a[13]; P.cp = a[14];
   P.kappa = a[15]; P.p0 = a[16]; P.tilt = a[17]; P.year_s = a[18]; P.day_s = a[19]; P.tau_lin = a[20]; P.theta_star2 = a[21];
   P.moist = a[22]; P.Lv = a[23]; P.Lf = a[24]; P.Tf = a[25]; P.k_evap = a[26]; P.tau_conv = a[27]; P.alb_ice = a[28];
-  P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32]; P.sat_layer = a[33]; P.sw_tau = a[34];
+  P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32]; P.sat_layer = a[33]; P.sw_tau = a[34]; P.xmid = a[35];
   return P;
 }
 
@@ -144,9 +144,10 @@ __device__ void move_mass(int L, const Par& P, real* mu, real* th, real* q, real
 // cross by their mean heating; the stratified top layer by the heating of its air at its bottom edge (dth_up; the radiative
 // case passes its mean heating). All crossings are worked out from the state before any of them, then applied, lowest
 // interface first; crossing air carries theta* (or its whole layer's theta) and its layer's vapor. Floor air stays on its
-// own side of every interface. wxo[j] (j = 0..L-2) receives the mass moved up across interface j (kg/m^2).
+// own side of every interface. wxo[j] (j = 0..L-2) receives the mass moved up across interface j (kg/m^2); gross, if
+// given, the up and down parts at each interface before netting and limiting (gross[2j], gross[2j+1]; diagnostics).
 __device__ void crossing(int L, const Par& P, real* mu, real* th, real* q, const real* dth, real dth_up, real* pib,
-                         real* wxo) {
+                         real* wxo, real* gross = 0) {
   for (int j = 0; j + 1 < L; j++) wxo[j] = 0;
   if (P.theta_star <= 0) return;                           // theta_star <= 0: no crossing (diagnostics)
   real dmj[LMAX], thcj[LMAX];
@@ -154,9 +155,11 @@ __device__ void crossing(int L, const Par& P, real* mu, real* th, real* q, const
     const int a = j, b = j + 1;                            // the layers above and below interface j
     const real ts_ = tstar(j, L, P);
     real dm = 0, thc = ts_;
+    if (gross) { gross[2 * j] = 0; gross[2 * j + 1] = 0; }
     if (dth[b] > 0) {
       if (th[b] >= ts_) { dm = mu[b] - P.floor_; thc = th[b]; }
       else dm = mu[b] * dth[b] / (2 * (ts_ - (th[b] - dth[b])));
+      if (b != L - 1) dm *= P.xmid;                         // a middle layer's top edge (experiment scale)
     }
     const real da = a == 0 ? dth_up : dth[a];
     if (da < 0) {
@@ -164,7 +167,9 @@ __device__ void crossing(int L, const Par& P, real* mu, real* th, real* q, const
       if (th[a] <= ts_) { down = mu[a] - P.floor_; thc = th[a]; }
       else down = mu[a] * (-da) / (2 * ((th[a] - dth[a]) - ts_));
       dm -= down;
+      if (gross) gross[2 * j + 1] = down;
     }
+    if (gross) gross[2 * j] = dm + gross[2 * j + 1];
     dmj[j] = dm; thcj[j] = thc;
   }
   for (int j = L - 2; j >= 0; j--) {
@@ -210,7 +215,7 @@ __device__ __forceinline__ real tau_p(real p, real ps, const Par& P) {
 extern "C" __global__ void air_column(int N, int L, const real* par, int mode, const real* t, const real* insol, const real* pos,
                                       const real* uabs, real* mu_in, real* theta, real* qv, real* Ts, real* ice, real dt,
                                       real* wx, real* olr, real* sw_abs, real* stored, real* rain, real* evap, real* conv,
-                                      real* tsurf, real* rainp) {
+                                      real* tsurf, real* rainp, real* dgo) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= N) return;
   const Par P = unpack(par);
@@ -322,6 +327,10 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
   // ---- heating as potential temperature ----
   real dth[LMAX];
   for (int k = 0; k < L; k++) { dth[k] = Q[k] * dt / (mu[k] * pib[k]); th[k] += dth[k]; }
+  // diagnostics (dgo, optional, rows x N): per layer radiative + sensible heating (W/m^2), latent heating (W/m^2); per
+  // interface the gross dry crossing up and down (kg/m^2 per step); per layer the convective mass delivered into it
+  real dgl[LMAX], gross[2 * LMAX], cin[LMAX];
+  for (int k = 0; k < L; k++) { dgl[k] = 0; cin[k] = 0; }
 
   // ---- the slab: open water takes the surface fluxes (evaporation costs it Lv per kg); under ice, the conduction up
   // into the skin. Freezing below Tf turns slab heat into ice; ice melts with slab heat above Tf and from the top
@@ -350,13 +359,14 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
     for (int k = 0; k < L; k++) {
       const real dq = condense_k(k, mu, th, q, pib, P);
       dth[k] += P.Lv * dq / pib[k];
+      dgl[k] += P.Lv * mu[k] * dq / dt;
       R += mu[k] * dq;
       Rk[k == bot ? 1 : 0] += mu[k] * dq;
     }
 
   // ---- dry crossing of the interfaces ----
   real wxo[LMAX];
-  crossing(L, P, mu, th, q, dth, dth[top], pib, wxo);
+  crossing(L, P, mu, th, q, dth, dth[top], pib, wxo, gross);
 
   // ---- moist convection (decisions #46, #49): a plume of bottom-layer air lifted to the interface above it, condensing
   // on the way, compared with the air there, which is at theta*. Buoyant (theta_p > theta*), it rises; it keeps rising
@@ -392,6 +402,7 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
         Rc = mc * (q[bot] - qc);
         move_mass(L, P, mu, th, q, pib, bot, kd, mc, th[bot], thp, q[bot], qc);
         for (int j = kd; j < bot; j++) wxo[j] += mc;            // it crosses every interface on its way
+        cin[kd] += mc;
         // what the arriving air brings beyond the receiving layer's saturation rains at once
         const real rt = mu[kd] * condense_k(kd, mu, th, q, pib, P);
         R += rt;
@@ -402,6 +413,13 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
   if (conv) conv[i] = mc;
   for (int j = 0; j + 1 < L; j++) wx[(size_t)j * N + i] = wxo[j];
   rain[i] = R / dt;
+  if (dgo) {
+    int r = 0;
+    for (int k = 0; k < L; k++) dgo[(size_t)(r++) * N + i] = Q[k];
+    for (int k = 0; k < L; k++) dgo[(size_t)(r++) * N + i] = dgl[k];
+    for (int j = 0; j + 1 < L; j++) { dgo[(size_t)(r++) * N + i] = gross[2 * j]; dgo[(size_t)(r++) * N + i] = gross[2 * j + 1]; }
+    for (int k = 0; k < L; k++) dgo[(size_t)(r++) * N + i] = cin[k];
+  }
   if (rainp) { rainp[i] = Rk[0] / dt; rainp[(size_t)N + i] = Rk[1] / dt; rainp[(size_t)2 * N + i] = Rc / dt; }
 
   const real E1 = column_energy(L, mu, pib, th, q, P) + P.c_slab * Ts[i] - P.Lf * m_ice;

@@ -22,7 +22,7 @@ import cupy as cp
 import numpy as np
 
 from .constants import CP_DRY, GRAV, KAPPA, P0
-from .gpu import grid_dims
+from .gpu import NULL, grid_dims
 
 SIGMA = 5.670e-8
 DAY_S, YEAR_S = 86400.0, 365 * 86400.0
@@ -32,10 +32,10 @@ DEFAULTS = dict(S0=1361.0, asw=0.2, tau0=1.3, mu_ref=P0 / GRAV, eps_s=0.95, h_se
                 c_slab=1000.0 * 4186.0 * 100.0, mu_bl=1.0e4 / GRAV, theta_star=300.0, floor_=10.0, sigma=SIGMA,
                 grav=GRAV, cp=CP_DRY, kappa=KAPPA, p0=P0, tilt=TILT, year_s=YEAR_S, day_s=DAY_S, tau_lin=0.1, theta_star2=380.0,
                 moist=0.0, Lv=2.5e6, Lf=3.34e5, Tf=273.15, k_evap=4.0e-3, tau_conv=7200.0, alb_ice=0.6, rho_ice=917.0,
-                ice_cover=0.05, k_ice=2.2, Rv=461.5, sat_layer=1.0, sw_tau=1.0)
+                ice_cover=0.05, k_ice=2.2, Rv=461.5, sat_layer=1.0, sw_tau=1.0, xmid=1.0)
 PAR_ORDER = ('S0', 'asw', 'tau0', 'mu_ref', 'eps_s', 'h_sens', 'u0', 'alb', 'c_slab', 'mu_bl', 'theta_star', 'floor_', 'sigma',
              'grav', 'cp', 'kappa', 'p0', 'tilt', 'year_s', 'day_s', 'tau_lin', 'theta_star2',
-             'moist', 'Lv', 'Lf', 'Tf', 'k_evap', 'tau_conv', 'alb_ice', 'rho_ice', 'ice_cover', 'k_ice', 'Rv', 'sat_layer', 'sw_tau')
+             'moist', 'Lv', 'Lf', 'Tf', 'k_evap', 'tau_conv', 'alb_ice', 'rho_ice', 'ice_cover', 'k_ice', 'Rv', 'sat_layer', 'sw_tau', 'xmid')
 
 
 def annual_mean_insolation(lat, S0=1361.0, tilt=TILT, days=365):
@@ -70,6 +70,7 @@ class AirPhysics:
         self.qnet = z(N)
         self.moist = bool(self.p['moist'])
         self.rain, self.evap, self.conv, self.tsurf = z(N), z(N), z(N), z(N)
+        self.dgo = None                     # optional diagnostics array (rows x N; air_column), set by a caller
         self.rainp = z(3, N)               # rain by source: condensation above the bottom layer, in it, convection
         self._none = z(1)                                     # q and ice for a dry column (never read)
 
@@ -87,7 +88,7 @@ class AirPhysics:
         k['air_column'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.par, i32(self.mode), t, self.insol, self.pos, self.uabs,
                                           mu, theta, q if q is not None else self._none, Ts, ice if ice is not None else self._none, R(dt),
                                           self.wx, self.olr, self.sw_abs, self.stored, self.rain, self.evap, self.conv,
-                                          self.tsurf, self.rainp))
+                                          self.tsurf, self.rainp, self.dgo if self.dgo is not None else NULL))
         k['advance_time']((1,), (1,), (t, R(dt)))
 
 

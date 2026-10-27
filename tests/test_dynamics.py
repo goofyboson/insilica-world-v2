@@ -10,6 +10,8 @@ from conftest import fmt
 from insilica import cases
 from insilica import grid as gridmod
 from insilica.constants import GRAV
+from insilica.gpu import DeviceGrid
+from insilica.ocean import OCEAN, Ocean
 from insilica.world import World
 
 
@@ -37,7 +39,8 @@ def wave_speed(n, state, dt, t1_h, t2_h, layer, base, gprime=()):
 
 @pytest.mark.xdist_group('grid5')
 def test_waves(record):
-    """WAVES External gravity waves at √(gH) (air 300 m/s, ocean 200 m/s) and a two-layer internal wave (n = 5)"""
+    """WAVES External gravity waves at √(gH) (air 300 m/s, ocean 200 m/s) and a two-layer internal wave (n = 5); the
+    ocean's equatorial Kelvin wave at its first baroclinic speed (n = 6)"""
     out, ok = [], True
     for label, c0, dt in (('air', 300.0, 1800.0), ('ocean', 200.0, 3600.0)):
         g = World(5, 'w2').grid
@@ -53,8 +56,39 @@ def test_waves(record):
     err = c / ci - 1
     ok &= abs(err) <= 0.03
     out.append(f'internal {c:.2f} vs {ci:.2f} m/s ({err * 100:+.2f}%)')
-    record('WAVES', '; '.join(out), 'external within 2%, internal within 3%', ok)
+    ck, c1 = ocean_kelvin(6, 5.0, 25.0)
+    err = ck / c1 - 1
+    ok &= abs(err) <= 0.02
+    out.append(f'ocean Kelvin (n = 6) {ck:.3f} vs {c1:.3f} m/s ({err * 100:+.2f}%)')
+    record('WAVES', '; '.join(out), 'external within 2%, internal within 3%, ocean Kelvin within 2%', ok)
     assert ok
+
+
+def ocean_kelvin(n, t1_d, t2_d):
+    """The ocean alone (its default layers, fixed g', friction and smoothing; no air) at rest with a first-baroclinic-mode
+    bump at (0°, 0°): the speed of the mode's eastward peak along the equator (|lat| < 2°) between two times, and c1."""
+    g = gridmod.get(n)
+    c = OCEAN
+    h0 = [c['h_mixed'], c['h_thermo'], c['depth'] - c['h_mixed'] - c['h_thermo']]
+    speeds, V, W = cases.layer_modes(h0, c['gprime'])
+    T = np.stack([np.full(g.N, t) for t in (c['T_thermo'], c['T_thermo'], c['T_deep'])])
+    oc = Ocean(DeviceGrid(g), state=(cases.mode_bump(g, h0, V[:, 1]), np.zeros((len(h0), g.E)), T))
+    eq = np.abs(g.lat) < math.radians(2.0)
+    x = np.angle(np.exp(1j * g.lon[eq])) * cases.R_PLANET
+    east, b = x > 0, 100e3
+    idx = (x[east] / b).astype(int)
+    w = np.bincount(idx)
+    pos, steps = [], 0
+    for t in (t1_d, t2_d):
+        while steps < int(round(t * 86400 / c['dt'])):
+            oc.step(mix=False)
+            steps += 1
+        a = W[1] @ (oc.h.get()[:, eq] - np.asarray(h0)[:, None])
+        prof = np.where(w > 0, np.bincount(idx, weights=a[east]) / np.maximum(w, 1), np.nan)
+        k = int(np.nanargmax(prof[2:-1])) + 2
+        y0, y1, y2 = prof[k - 1], prof[k], prof[k + 1]
+        pos.append((k + 0.5 + 0.5 * (y0 - y2) / (y0 - 2 * y1 + y2)) * b)
+    return (pos[1] - pos[0]) / ((t2_d - t1_d) * 86400), speeds[1]
 
 
 def disturbance_energy(a, b):

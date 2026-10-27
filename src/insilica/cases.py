@@ -114,6 +114,25 @@ def internal_wave_speed(gprime, h1, h2, grav=GRAV):
     return math.sqrt(grav * H / 2 * (1 - math.sqrt(1 - 4 * gprime * h1 * h2 / (grav * H * H))))
 
 
+def layer_modes(h, gprime, grav=GRAV):
+    """Gravity-wave modes of Boussinesq layers h (top first) at rest under a free surface: speeds (fastest, the external
+    mode, first), thickness structures V (columns) and W = V⁻¹ (rows project thickness anomalies onto the modes)."""
+    L, gg = len(h), [grav] + list(gprime)
+    G = np.array([[sum(gg[i] for i in range(k + 1) if j >= i) for j in range(L)] for k in range(L)])
+    lam, V = np.linalg.eig(np.diag(np.asarray(h, dtype=float)) @ G)
+    o = np.argsort(lam.real)[::-1]
+    V = V.real[:, o]
+    return np.sqrt(lam.real[o]), V, np.linalg.inv(V)
+
+
+def mode_bump(g, h, v, amp=10.0, radius=5.0e5):
+    """Layers h at rest with a Gaussian bump at (0°, 0°) in the thickness structure v (scaled so that no layer changes by
+    more than amp: a linear wave)."""
+    d = amp * np.exp(-(great_circle(g, 0.0, 0.0) / radius) ** 2)
+    v = np.asarray(v, dtype=float)
+    return np.asarray(h, dtype=float)[:, None] + (v / np.abs(v).max())[:, None] * d[None, :]
+
+
 def solid_body_layers(g, H, U, gprime, b=None):
     """Two layers in steady solid-body zonal rotation, u_k = U_k cos φ, each in exact gradient-wind balance:
     M_k = C_k − (a Ω U_k + U_k²/2) sin²φ, with M_0 = gη and M_1 = gη + g' z_1. Layer area means are H."""

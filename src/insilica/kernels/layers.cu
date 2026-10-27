@@ -102,10 +102,14 @@ extern "C" __global__ void air_bern(int N, int E, int L, const real* h, const re
   }
 }
 
-// The fast mode's coefficient per cell for air (decision #37): Gc = R T_s / mu, the change of the bottom layer's
-// Montgomery potential per unit column mass at fixed theta, T_s from the lowest layer holding real air (above twice
-// the floor). The fast mode then runs at the column's own external speed sqrt(R T_s), and the part left in the slow
-// step is second order. Computed from the step's starting state and held through its stages.
+// The fast mode's coefficient per cell for air (decisions #37, #43): the column's external stiffness, the mass-weighted
+// change of the layers' Montgomery potential per unit column mass when every layer's mass changes in proportion (the
+// external mode), at fixed theta. The bottom gives R T_s / mu (T_s from the lowest layer holding real air, above twice
+// the floor); each interface j below layer j adds (theta_j - theta_j+1) R (p_j / p0)^kappa P_j / mu^2, P_j the mass
+// above it. With the bottom term alone (#37) the interfaces' share of the external restoring force stayed in the slow
+// step, where RK3 cannot follow a wave turning ~3 radians per step: a 2-dt column-mass mode grew at the pentagons once
+// the air was warm. With the full stiffness the barotropic slow forcing holds no external stiffness, and what is left
+// in the slow step is second order. Computed from the step's starting state and held through its stages.
 extern "C" __global__ void air_gfast(int N, int L, const real* h, const real* theta, real grav, real kappa, real p0, real rgas,
                                      real floor_, real* Gc) {
   LOOP1(i, N)
@@ -114,7 +118,14 @@ extern "C" __global__ void air_gfast(int N, int L, const real* h, const real* th
   int kb = L - 1;
   while (kb > 0 && h[(size_t)kb * N + i] < 2 * floor_) kb--;
   const real Ts = theta[(size_t)kb * N + i] * pow(grav * mu / p0, kappa);
-  Gc[i] = rgas * Ts / mu;
+  real gc = rgas * Ts / mu;
+  real above = 0;
+  for (int j = 0; j < L - 1; j++) {
+    above += h[(size_t)j * N + i];
+    const real dth = theta[(size_t)j * N + i] - theta[(size_t)(j + 1) * N + i];
+    if (dth > 0) gc += dth * rgas * pow(grav * above / p0, kappa) * above / (mu * mu);
+  }
+  Gc[i] = gc;
 }
 
 // Per stage: each edge's layer thickness h_e and potential vorticity q_e (the mean of its two vertices), read by

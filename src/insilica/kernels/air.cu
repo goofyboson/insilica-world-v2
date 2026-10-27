@@ -1,4 +1,4 @@
-// Column physics of the two air layers over a slab surface (stages V2-2a and V2-2b, decisions #32-#35, #40, #43-#46):
+// Column physics of the two air layers over a slab surface (stages V2-2a and V2-2b, decisions #32-#35, #40, #44-#47):
 // v1's radiation and surface exchange, heating as potential temperature, air crossing the isentropic interface
 // theta* only when heated or cooled across it; with moisture (V2-2b) vapor in both layers, evaporation from open
 // water, condensation and rain, moist convection across theta*, and thermodynamic sea ice on the slab.

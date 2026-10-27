@@ -177,14 +177,20 @@ class Layers:
                 k['vmix_heat'](*grid_dims(g.N), (i32(g.N), i32(L), h, self.diss, g.cellEdge, g.le, g.de, g.areaCell, R(self.grav),
                                                  R(CP_DRY), R(KAPPA), R(P0), theta))
 
-    def exchange(self, wx, h, u, M, psi):
+    def exchange(self, wx, h, u, M, psi, theta=None):
         """Move thickness wx (L−1, N; m, positive upward across the interface below layer k) between layers with
-        its tracer and momentum, conservatively (upwind). The caller keeps donors above the floor."""
+        its tracer and momentum, conservatively (upwind). The caller keeps donors above the floor. For air (theta
+        given) the kinetic energy the momentum mixing removed warms the column (decision #73)."""
         g, k, i32 = self.dg, self.k, np.int32
         hold = self.hold
         cp.copyto(hold, h)
+        heat = self.air and theta is not None
         k['xch_cell'](*grid_dims(g.N), (i32(g.N), i32(self.L), wx, g.areaCell, h, M, psi))
-        k['xch_edge'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(self.L), wx, hold, g.eI, g.eJ, u))
+        k['xch_edge'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(self.L), wx, hold, g.eI, g.eJ, u, self.diss if heat else NULL))
+        if heat:
+            R = self.real
+            k['vmix_heat'](*grid_dims(g.N), (i32(g.N), i32(self.L), h, self.diss, g.cellEdge, g.le, g.de, g.areaCell, R(self.grav),
+                                             R(CP_DRY), R(KAPPA), R(P0), theta))
 
     def energy(self, h, u, theta=None):
         """Total energy per unit density (J/ρ0): Σ_k Σ_i A h_k K_k + Σ_i A [g(η² − b²)/2 + Σ_k≥1 g'_{k−1}(z_k² − b²)/2]."""

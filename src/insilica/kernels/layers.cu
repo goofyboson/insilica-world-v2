@@ -380,13 +380,19 @@ extern "C" __global__ void xch_cell(int N, int L, const real* wx, const real* ar
 }
 
 // Momentum, given the edge thicknesses before (h_e from hold) and the exchange: h_e,k u_k is conserved column-wise.
-extern "C" __global__ void xch_edge(int N, int E, int L, const real* wx, const real* hold, const int* eI, const int* eJ, real* u) {
+// Mixing momentum between layers removes kinetic energy; diss, if given, receives it per unit area at the edge
+// (0.5 sum_k h_e,k u_k^2 before minus after, the energy measure's own form; J/m^2 for air), for the caller to book as heat.
+extern "C" __global__ void xch_edge(int N, int E, int L, const real* wx, const real* hold, const int* eI, const int* eJ, real* u,
+                                    real* diss) {
   LOOP1(e, E)
   real mom[LMAX], hn[LMAX];
+  real k0 = 0;
   for (int k = 0; k < L; k++) {
     const real he = (real)0.5 * (hold[(size_t)k * N + eI[e]] + hold[(size_t)k * N + eJ[e]]);
-    mom[k] = he * u[(size_t)k * E + e];
+    const real uk = u[(size_t)k * E + e];
+    mom[k] = he * uk;
     hn[k] = he;
+    k0 += he * uk * uk;
   }
   for (int k = 0; k + 1 < L; k++) {
     const real v = (real)0.5 * (wx[(size_t)k * N + eI[e]] + wx[(size_t)k * N + eJ[e]]);
@@ -394,7 +400,13 @@ extern "C" __global__ void xch_edge(int N, int E, int L, const real* wx, const r
     mom[k] += v * ud; mom[k + 1] -= v * ud;
     hn[k] += v; hn[k + 1] -= v;
   }
-  for (int k = 0; k < L; k++) u[(size_t)k * E + e] = mom[k] / hn[k];
+  real k1 = 0;
+  for (int k = 0; k < L; k++) {
+    const real un = mom[k] / hn[k];
+    u[(size_t)k * E + e] = un;
+    k1 += hn[k] * un * un;
+  }
+  if (diss) diss[e] = (real)0.5 * (k0 - k1);
 }
 
 // ---- Interfacial stress (decision #39): turbulent momentum exchange between neighbouring layers. ----
@@ -422,7 +434,8 @@ extern "C" __global__ void lay_vmix(int N, int E, int L, const real* h, const in
   diss[e] = d;
 }
 
-// The kinetic energy the interfacial stress removed, back as heat (air; decision #39): each edge's loss
+// The kinetic energy the interfacial stress, the wind stress or the crossings' momentum mixing removed, back as heat
+// (air; decisions #39, #65, #73): each edge's loss
 // l_e d_e diss_e (J) goes half to each of its cells, spread over the column's layers in proportion to their mass, so
 // every layer warms by the same amount per kilogram: d theta_k = Q / (mu_col pibar_k).
 extern "C" __global__ void vmix_heat(int N, int L, const real* h, const real* diss, const int* cellEdge, const real* le,

@@ -164,7 +164,7 @@ class World:
             if self.sea is not None:
                 self.sea.accumulate(self.dt)
             if self.L > 1:
-                self.core.exchange(self.physics.wx, self.h, self.u, self.M, self.psi)
+                self.core.exchange(self.physics.wx, self.h, self.u, self.M, self.psi, theta=self.theta)
         if kind:
             self.sea.step(mix=kind == 2)
 

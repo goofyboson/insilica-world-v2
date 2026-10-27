@@ -29,6 +29,7 @@ from .gpu import NULL, grid_dims
 
 LMAX = 8
 FAST_COURANT = 0.5          # fast sub-step: tau·√(gH)/d_min ≤ this
+FAST_COURANT_AIR = 0.25     # for air (decision #43): at 0.5 (4 sub-steps at n = 5) a pentagon's column collapsed in days
 DIV_DAMP = 0.1              # divergence damping of the fast mode (decision #28)
 
 
@@ -73,7 +74,8 @@ class Layers:
     def substeps(self, h, dt):
         """Fast sub-steps per full step for the current deepest column."""
         c2 = float(cp.max(cp.sum(h, axis=0) * self.Gc))           # (external speed)², the fastest column
-        return max(1, math.ceil(dt * math.sqrt(c2) / (FAST_COURANT * self.dmin)))
+        courant = FAST_COURANT_AIR if self.air else FAST_COURANT
+        return max(1, math.ceil(dt * math.sqrt(c2) / (courant * self.dmin)))
 
     def update_gfast(self, h, theta):
         """For air: each cell's fast-mode coefficient R·T_s/μ from the current state."""

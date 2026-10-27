@@ -6,6 +6,12 @@ Defaults are v1's (SPEC §16 of v1, as calibrated through its Stage 3c): S0 1361
 the air at a full column (ASW0), gray infrared optical depth TAU0 = 1.4 split 0.7 / 0.3 between the lower and upper
 layer at an even split, surface emissivity 0.95, ocean albedo 0.06, sensible heat 10·(1 + |u|/10) W/m²K, a 100 m
 mixed-layer slab. Sensible heat goes into the bottom 100 hPa of the column (mu_bl).
+
+Moisture (stage V2-2b, decisions #43–#46; moist=1): vapor q in each layer, evaporation from open water
+K_EVAP·(1 + |u|/10)·(q_sat(T_s) − q) kg/m²/s into the bottom 100 hPa (v1's form and K_EVAP 2e-3), saturation adjustment
+in each layer (the water rains out at once), moist convection across θ* relaxing the lower layer's θ_e excess over the
+upper layer's saturated θ_e in τ_conv = 2 h, and thermodynamic sea ice on the slab (v1's rules: freezing below 273.15 K,
+albedo 0.6 at full cover 0.05 m, a conducting skin over thicker ice).
 """
 import math
 
@@ -21,9 +27,12 @@ TILT = math.radians(23.44)
 
 DEFAULTS = dict(S0=1361.0, asw=0.2, tau0=1.4, mu_ref=P0 / GRAV, eps_s=0.95, h_sens=10.0, u0=10.0, alb=0.06,
                 c_slab=1000.0 * 4186.0 * 100.0, mu_bl=1.0e4 / GRAV, theta_star=300.0, floor_=10.0, sigma=SIGMA,
-                grav=GRAV, cp=CP_DRY, kappa=KAPPA, p0=P0, tilt=TILT, year_s=YEAR_S, day_s=DAY_S, tw_top=0.6, tw_bottom=1.4)
+                grav=GRAV, cp=CP_DRY, kappa=KAPPA, p0=P0, tilt=TILT, year_s=YEAR_S, day_s=DAY_S, tw_top=0.6, tw_bottom=1.4,
+                moist=0.0, Lv=2.5e6, Lf=3.34e5, Tf=273.15, k_evap=2.0e-3, tau_conv=7200.0, alb_ice=0.6, rho_ice=917.0,
+                ice_cover=0.05, k_ice=2.2, Rv=461.5)
 PAR_ORDER = ('S0', 'asw', 'tau0', 'mu_ref', 'eps_s', 'h_sens', 'u0', 'alb', 'c_slab', 'mu_bl', 'theta_star', 'floor_', 'sigma',
-             'grav', 'cp', 'kappa', 'p0', 'tilt', 'year_s', 'day_s', 'tw_top', 'tw_bottom')
+             'grav', 'cp', 'kappa', 'p0', 'tilt', 'year_s', 'day_s', 'tw_top', 'tw_bottom',
+             'moist', 'Lv', 'Lf', 'Tf', 'k_evap', 'tau_conv', 'alb_ice', 'rho_ice', 'ice_cover', 'k_ice', 'Rv')
 
 
 def annual_mean_insolation(lat, S0=1361.0, tilt=TILT, days=365):
@@ -56,10 +65,14 @@ class AirPhysics:
         self.hs = cp.asarray([1.0 / (40 * DAY_S), 1.0 / (4 * DAY_S)])
         self.lat = cp.asarray(np.arcsin(np.clip(dg.host.pos[:, 2], -1, 1)))
         self.qnet = z(N)
+        self.moist = bool(self.p['moist'])
+        self.rain, self.evap, self.conv = z(N), z(N), z(N)
+        self._none = z(1)                                     # q and ice for a dry column (never read)
 
-    def column(self, mu, theta, Ts, u, t, dt):
-        """Radiation, surface exchange, heating and the θ* crossing for one step; the crossing masses go to self.wx
-        (moved with momentum and tracers by Layers.exchange)."""
+    def column(self, mu, theta, Ts, u, t, dt, q=None, ice=None):
+        """Radiation, surface exchange, heating, (moist: evaporation, condensation, sea ice, convection) and the θ*
+        crossing for one step; the masses moved up go to self.wx (moved with momentum and tracers by Layers.exchange),
+        rain and evaporation (kg/m²/s) to self.rain, self.evap."""
         g, k, i32, R = self.dg, self.k, np.int32, self.dg.dtype.type
         if self.forcing == 'held_suarez':
             k['hs_column'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.par, self.hs, self.lat, mu, theta, R(dt), self.wx, self.qnet,
@@ -68,7 +81,8 @@ class AirPhysics:
             return
         k['cell_speed'](*grid_dims(g.N), (i32(g.N), u[self.L - 1], g.cellEdge, g.le, g.de, g.areaCell, self.uabs))
         k['air_column'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.par, i32(self.mode), t, self.insol, self.pos, self.uabs,
-                                          mu, theta, Ts, R(dt), self.wx, self.olr, self.sw_abs, self.stored))
+                                          mu, theta, q if q is not None else self._none, Ts, ice if ice is not None else self._none, R(dt),
+                                          self.wx, self.olr, self.sw_abs, self.stored, self.rain, self.evap, self.conv))
         k['advance_time']((1,), (1,), (t, R(dt)))
 
 

@@ -41,7 +41,7 @@
 'use strict';
 // Viewer for the local engine (protocol: src/insilica/server/app.py). It draws each cell as a fan of
 // triangles (center plus Voronoi corners) colored by the subscribed field.
-const FIELD_NAMES = { h: 'layer thickness (m, or kg/m² for air)', z: 'height of the layer top (m)', eta: 'free surface (m)', psi: 'tracer', speed: 'wind speed (m/s)', vort: 'relative vorticity (1/s)', theta: 'potential temperature θ (K)', T: 'air temperature (K)', Ts: 'surface temperature (K)', ps: 'surface pressure (hPa)' };
+const FIELD_NAMES = { h: 'layer thickness (m, or kg/m² for air)', z: 'height of the layer top (m)', eta: 'free surface (m)', psi: 'tracer', speed: 'wind speed (m/s)', vort: 'relative vorticity (1/s)', theta: 'potential temperature θ (K)', T: 'air temperature (K)', Ts: 'surface temperature (K)', ps: 'surface pressure (hPa)', q: 'specific humidity (g/kg)', rh: 'relative humidity', rain: 'rain (mm/day)', evap: 'evaporation (mm/day)', ice: 'sea ice (m)' };
 const $ = (id) => document.getElementById(id);
 let ws, info, mesh, colors, cellDeg, playing = false, field = 'psi', layer = 0;
 

@@ -8,7 +8,7 @@ import math
 
 import numpy as np
 
-from .constants import GRAV, OMEGA, R_PLANET
+from .constants import GRAV, KAPPA, OMEGA, P0, R_PLANET
 
 
 def edge_east_north(g):
@@ -202,17 +202,31 @@ MU_REF = 1.0e5 / GRAV                       # kg/m², the column mass of 1000 hP
 
 def aqua(g):
     """Two air layers at rest over a slab aquaplanet: an even mass split, the lower layer's θ warm at the equator,
-    the upper layer's uniform, and v1's starting surface temperature 288 − 40 (sin²φ − 1/3) K."""
+    the upper layer's uniform, and v1's starting surface temperature 288 − 40 (sin²φ − 1/3) K, for moist air no colder
+    than 274 K (so the run doesn't start under metres of ice). Vapor as v1 starts it: 50% / 70% of saturation in the
+    upper / lower layer at its mid-pressure."""
     s2 = np.sin(g.lat) ** 2
     h = np.full((2, g.N), MU_REF / 2)
     theta = np.stack([np.full(g.N, 320.0), 290.0 - 30.0 * s2])
-    Ts = 288.0 - 40.0 * (s2 - 1.0 / 3.0)
-    return h, np.zeros(g.N), np.zeros((2, g.E)), dict(theta=theta, Ts=Ts)
+    Ts = np.maximum(288.0 - 40.0 * (s2 - 1.0 / 3.0), 274.0)
+    pm = np.array([0.25e5, 0.75e5])[:, None]
+    T = theta * (pm / P0) ** KAPPA
+    qs = 0.622 * 611.0 * np.exp(17.27 * (T - 273.15) / (T - 35.85)) / pm
+    q = np.array([0.5, 0.7])[:, None] * qs
+    return h, np.zeros(g.N), np.zeros((2, g.E)), dict(theta=theta, Ts=Ts, q=q, ice=np.zeros(g.N))
+
+
+def aqua_dry(g):
+    """The aquaplanet's dry start: v1's surface temperature 288 − 40 (sin²φ − 1/3) K, no vapor."""
+    h, b, u, x = aqua(g)
+    return h, b, u, dict(theta=x['theta'], Ts=288.0 - 40.0 * (np.sin(g.lat) ** 2 - 1.0 / 3.0))
 
 
 AIR = dict(t_ref=288.0)
-PRESETS['aqua'] = dict(build=aqua, dt=lambda n: 900.0 * 2.0 ** (5 - n), visc4_U=15.0, stress=[0.0, 0.05], vmix=0.01, tracer=False, air=AIR)
-PRESETS['rce'] = dict(build=aqua, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True), dynamics=False)
+PRESETS['aqua'] = dict(build=aqua, dt=lambda n: 900.0 * 2.0 ** (5 - n), visc4_U=15.0, stress=[0.0, 0.05], vmix=0.01, tracer=False,
+                       air=dict(AIR, physics=dict(moist=1.0)))
+PRESETS['aqua_dry'] = dict(PRESETS['aqua'], build=aqua_dry, air=AIR)
+PRESETS['rce'] = dict(build=aqua_dry, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True), dynamics=False)
 
 
 def held_suarez(g, seed=1):

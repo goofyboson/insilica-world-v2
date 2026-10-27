@@ -12,7 +12,14 @@ A planet simulator with two moving ocean layers and three moving air layers, run
 
 ## Current status
 
-**V2-2b Moist atmosphere closed 2026-10-27 (34/34), merged to `main`. Next: V2-3 Ocean.** Three moist air layers
+**V2-3 Ocean in progress (branch `stage-v2-3`).** Three fixed-density ocean layers (mixed layer, thermocline, abyss)
+with temperature and salinity under the three air layers: Kraus–Turner mixing with sunlight counted where it is absorbed,
+convection, sea ice with a polar halocline, wind-stress coupling; the equatorial Kelvin wave runs within 0.7% of c₁
+(SPEC #64–#78). Done so far: stability, energy closure (−0.009 W/m²), WAVES, a cached 20-year coupled spin-up at n = 4.
+Still to do: coupled CONSERVE, CLIMATE recalibration, PERF gate, viewer ocean fields, the stage's records; then, once
+the stage's changes are in, **an n = 6 coupled spin-up and climate check** (agreed 2026-10-27).
+
+**V2-2b Moist atmosphere closed 2026-10-27 (34/34), merged to `main`.** Three moist air layers
 (isentropic interfaces at 305 and 380 K) over a slab aquaplanet with sea ice: an ITCZ (2.2× the subtropics), a Hadley
 cell, trades and surface westerlies, mid-latitude storms, 2.2 mm/day of rain at 290 K; every gravity wave runs in the
 fast substeps. Air at n = 6 costs 38 ms per model hour (~260 model years a day). Known near miss: mid-latitude rain is
@@ -35,7 +42,7 @@ bug carried over from v1; V2-0 ported v1's grid and solver to 64-bit CUDA.
 | V2-1 | Fluid core: stacked layers, real-speed fast waves (time-split RK3), thickness floor, bottom stress, exchange hook | ✅ Done (29/29) |
 | V2-2a | Dry atmosphere: two air layers with an isentropic interface, radiation, slab surface, RCE and Held–Suarez | ✅ Done (32/32) |
 | V2-2b | Moist atmosphere: three air layers, vapor, evaporation, condensation, moist convection, rain, sea ice; climate and weather tests | ✅ Done (34/34) |
-| V2-3 | Ocean: two layers, wind stress, thermocline, entrainment, sea ice; aquaplanet first | ⏳ Next |
+| V2-3 | Ocean: three layers, wind stress, thermocline, entrainment, salinity, sea ice; aquaplanet first | 🔧 In progress |
 | V2-4 | Land and coasts: gyres and boundary currents, surface water, soil, ice sheets, terrain | ⏳ Planned |
 | V2-5 | Two resolutions: air n = 6 coupled to ocean n = 8 | ⏳ Planned |
 | V2-6 | Moon and tides, geology, UI polish | ⏳ Planned |

@@ -9,10 +9,17 @@ from insilica.grid.trisk import cell_winds
 from insilica.world import World
 
 CLIMATE_SPIN_YEARS, WEATHER_SPIN_YEARS = 15, 1   # the 100 m slab settles in ~10 years (#54)
+COUPLED_SPIN_YEARS = 20                          # the coupled ocean's ice and halocline are in place by ~15 years (#77)
 
 
 def _year_ticks(w, years):
     return int(round(years * 365 * 86400 / w.dt))
+
+
+def coupled_spun(n=4):
+    """The coupled air-ocean world after its cached spin-up (V2-3; whole days, so the ocean's daily sums are empty)."""
+    w0 = World(n, 'coupled')
+    return runcache.spun_up(f'coupled-n{n}', lambda: World(n, 'coupled'), _year_ticks(w0, COUPLED_SPIN_YEARS))[0]
 
 
 def _band(Ah, lat, f, lo, hi):

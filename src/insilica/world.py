@@ -117,6 +117,7 @@ class World:
             self.Ts = self.sea.T[0]                          # a view: the air's surface physics heats the mixed layer
             self.oh, self.ou, self.oT, self.oM, self.oS = self.sea.h, self.sea.u, self.sea.T, self.sea.M, self.sea.S
             self.STATE = tuple(k for k in self.STATE if k != 'Ts') + ('oh', 'ou', 'oT', 'oM', 'oS')
+            self._sync_sea()
         if self.air:
             self.core.update_gfast(self.h, self.theta)
         # fast sub-steps per step: from the fastest column, with 20% room
@@ -129,6 +130,13 @@ class World:
         self._graphs, self._tick0 = {}, 0                 # one captured graph per kind of tick (air; + ocean; + mixing)
 
     STATE = ('h', 'u', 'M', 'psi')
+
+    def _sync_sea(self):
+        """The ocean's quantities derived from the state (after creation or loading): the mixed layer's heat capacity, and
+        the sea ice the fresh-water flux counts its change from."""
+        self.sea.update_cap()
+        if self.moist:
+            cp.copyto(self.sea.ice_prev, self.ice)
 
     def _kind(self, tick):
         """0: air only; 1: with an ocean step; 2: with an ocean step and the mixed layer's mixing."""
@@ -331,5 +339,7 @@ class World:
             if a.shape != getattr(w, k).shape or a.dtype != np.float64:
                 raise ValueError(f'save file array {k}: shape {a.shape} {a.dtype}, expected {getattr(w, k).shape} float64')
             getattr(w, k)[...] = cp.asarray(a)          # into the existing buffers a captured graph uses
+        if w.sea is not None:
+            w._sync_sea()
         w.tick = w._tick0 = meta['tick']
         return w

@@ -80,7 +80,7 @@ class Ocean:
         self.cap = z(N)                                         # ρ_w c_w h₀, for the air's surface physics
         self.qocean, self.qsw = z(N), z(N)                      # W/m² into the mixed layer, and its sunlight
         self.q_acc, self.sun_acc = z(N), z(N)                   # their non-solar part and the sunlight, summed for the mixing (J/m²)
-        self.fw_acc, self.ice_prev = z(N), None                 # fresh water in (kg/m²), summed; the sea ice at the last step
+        self.fw_acc, self.ice_prev = z(N), z(N)                 # fresh water in (kg/m²), summed; the sea ice at the last step
         self.tau_acc, self.taum, self.diss = z(E), z(N), z(E)   # Σ τ² dt on edges; the step's rms stress at cells
         self.wx = z(L - 1, N)
         # The mixed layer is mixed on daily-mean forcing (decision #67): mixed hourly, the day's sunshine shoaled it at
@@ -115,8 +115,6 @@ class Ocean:
         keeps to the mixing's sums, and freshen or salt it with rain, evaporation and the sea ice's change (kg/m²/s, kg/m²)."""
         g, c, R = self.dg, self.cfg, self.dg.dtype.type
         if evap is not None:
-            if self.ice_prev is None:
-                self.ice_prev = ice.copy()
             self.k['ocn_fresh'](*grid_dims(g.N), (np.int32(g.N), self.h, self.S, evap, rain, ice, self.ice_prev, R(c['S_ref']),
                                                  R(c['rho']), R(dt), self.fw_acc))
         self.k['ocn_pen'](*grid_dims(g.N), (np.int32(g.N), np.int32(self.L), self.h, self.T, self.qocean, self.qsw, R(c['rho'] * c['cw']),

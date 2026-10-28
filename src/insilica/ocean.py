@@ -23,7 +23,7 @@ import cupy as cp
 import numpy as np
 
 from .constants import GRAV
-from .gpu import grid_dims
+from .gpu import NULL, grid_dims
 from .layers import Layers
 from .transport import Transport
 
@@ -130,8 +130,8 @@ class Ocean:
         self.diss (J/m² per edge) for the air to take as heat."""
         g, i32, R = self.dg, np.int32, self.dg.dtype.type
         self.k['couple_stress'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(air_h.shape[0]), air_h, air_u, self.h, self.u,
-                                                  g.eI, g.eJ, R(c), R(self.cfg['rho']), R(dt), self.diss, self.tau_acc))
-        self.core.mask(self.u, 1)
+                                                  g.eI, g.eJ, R(c), R(self.cfg['rho']), R(dt), self.diss, self.tau_acc,
+                                                  self.core.wall if self.core.wall is not None else NULL))
 
     def eos(self):
         """The column physics' equation of state as kernel arguments: g, α, α2, β (decision #76)."""

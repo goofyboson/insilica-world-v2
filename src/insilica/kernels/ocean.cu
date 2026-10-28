@@ -15,20 +15,26 @@ typedef REAL real;
 // energy removed, 0.5 ma mo / (ma + mo) (du0^2 - du1^2) per unit area at the edge, goes to diss (J/m^2; booked as the
 // air's heat); the stress the ocean received (N/m^2) is added to tau_acc as tau^2 dt (for the mixed layer's u*).
 extern "C" __global__ void couple_stress(int N, int E, int La, const real* ha, real* ua, const real* ho, real* uo, const int* eI,
-                                         const int* eJ, real c, real rho_w, real dt, real* diss, real* tau_acc) {
+                                         const int* eJ, real c, real rho_w, real dt, real* diss, real* tau_acc, const real* wall) {
   LOOP1(e, E)
   const int b = La - 1;
   const real ma = (real)0.5 * (ha[(size_t)b * N + eI[e]] + ha[(size_t)b * N + eJ[e]]);
-  const real mo = rho_w * (real)0.5 * (ho[eI[e]] + ho[eJ[e]]);
   real* pa = ua + (size_t)b * E + e;
   real* po = uo + e;
-  const real mean = (ma * *pa + mo * *po) / (ma + mo);
-  const real du0 = *pa - *po;
-  const real du1 = du0 * exp(-c * (1 / ma + 1 / mo) * dt);
   const real a0 = *pa;
-  *pa = mean + mo / (ma + mo) * du1;
-  *po = mean - ma / (ma + mo) * du1;
-  diss[e] = (real)0.5 * ma * mo / (ma + mo) * (du0 * du0 - du1 * du1);
+  if (wall && wall[e] == 0) {                     // a wall (#79): the water cannot move across it, the air drags on it
+    const real du1 = a0 * exp(-c / ma * dt);
+    *pa = du1;
+    diss[e] = (real)0.5 * ma * (a0 * a0 - du1 * du1);
+  } else {
+    const real mo = rho_w * (real)0.5 * (ho[eI[e]] + ho[eJ[e]]);
+    const real mean = (ma * *pa + mo * *po) / (ma + mo);
+    const real du0 = *pa - *po;
+    const real du1 = du0 * exp(-c * (1 / ma + 1 / mo) * dt);
+    *pa = mean + mo / (ma + mo) * du1;
+    *po = mean - ma / (ma + mo) * du1;
+    diss[e] = (real)0.5 * ma * mo / (ma + mo) * (du0 * du0 - du1 * du1);
+  }
   const real tau = ma * (a0 - *pa) / dt;
   tau_acc[e] += tau * tau * dt;
 }

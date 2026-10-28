@@ -180,6 +180,7 @@ class Layers:
         if self.nu4:
             self._lap(u, self.L1)
             self._lap(self.L1, self.L2)
+            self.nu4dt = self.nu4 * dt                     # the ∇⁴ loss is booked as heat with the crossings' (#81)
         self._stage(h, u, h, u, 1 / 3, dt, nfast, self.h1, self.u1, theta=theta)
         self._stage(self.h1, self.u1, h, u, 1 / 2, dt, nfast, self.h2, self.u2, theta=theta)
         self._stage(self.h2, self.u2, h, u, 1.0, dt, nfast, h, u, Fm, theta=theta)
@@ -194,13 +195,16 @@ class Layers:
     def exchange(self, wx, h, u, M, psi, theta=None):
         """Move thickness wx (L−1, N; m, positive upward across the interface below layer k) between layers with
         its tracer and momentum, conservatively (upwind). The caller keeps donors above the floor. For air (theta
-        given) the kinetic energy the momentum mixing removed warms the column (decision #73)."""
+        given) the kinetic energy the momentum mixing removed warms the column (decision #73), with the last step's ∇⁴
+        viscosity loss (#81)."""
         g, k, i32 = self.dg, self.k, np.int32
         hold = self.hold
         cp.copyto(hold, h)
         heat = self.air and theta is not None
         k['xch_cell'](*grid_dims(g.N), (i32(g.N), i32(self.L), wx, g.areaCell, h, M, psi))
-        k['xch_edge'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(self.L), wx, hold, g.eI, g.eJ, u, self.diss if heat else NULL))
+        v4 = heat and self.nu4 != 0
+        k['xch_edge'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(self.L), wx, hold, g.eI, g.eJ, u, self.diss if heat else NULL,
+                                         self.L2 if v4 else NULL, self.real(self.nu4dt if v4 else 0.0)))
         self.mask(u, self.L)
         if heat:
             R = self.real

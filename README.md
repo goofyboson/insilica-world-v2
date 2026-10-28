@@ -15,8 +15,8 @@ A planet simulator with two moving ocean layers and three moving air layers, run
 **V2-3 Ocean in progress (branch `stage-v2-3`).** Three fixed-density ocean layers (mixed layer, thermocline, abyss)
 with temperature and salinity under the three air layers: Kraus–Turner mixing with sunlight counted where it is absorbed,
 convection, sea ice with a polar halocline, wind-stress coupling; the equatorial Kelvin wave runs within 0.7% of c₁
-(SPEC #64–#78). Done so far: stability, energy closure (−0.009 W/m²), WAVES, a cached 20-year coupled spin-up at n = 4, and a `basin` preset (a thin pole-to-pole wall, one ocean basin: gyres carry ~0.5 PW poleward, the equatorial thermocline tilts; #79).
-CLIMATE coupled on `basin` passes (#80). Still to do: coupled CONSERVE, PERF gate, viewer ocean fields, the stage's records; then, once
+(SPEC #64–#81). Done so far: stability, energy closure (−0.009 W/m²), WAVES, a cached 20-year coupled spin-up at n = 4, and a `basin` preset (a thin pole-to-pole wall, one ocean basin: gyres carry ~0.5 PW poleward, the equatorial thermocline tilts; #79).
+CLIMATE coupled on `basin` passes (#80); CONSERVE coupled passes, with the air's ∇⁴ loss now booked as heat (#81). Still to do: PERF coupled gate, viewer ocean fields, the stage's records; then, once
 the stage's changes are in, **an n = 6 coupled spin-up and climate check** (agreed 2026-10-27).
 
 **V2-2b Moist atmosphere closed 2026-10-27 (34/34), merged to `main`.** Three moist air layers

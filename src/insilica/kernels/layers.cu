@@ -389,17 +389,20 @@ extern "C" __global__ void lay_mask(int E, int L, const real* mask, real* a) {
 // Momentum, given the edge thicknesses before (h_e from hold) and the exchange: h_e,k u_k is conserved column-wise.
 // Mixing momentum between layers removes kinetic energy; diss, if given, receives it per unit area at the edge
 // (0.5 sum_k h_e,k u_k^2 before minus after, the energy measure's own form; J/m^2 for air), for the caller to book as heat.
+// With lap4 given (air, decision #81) diss also takes the step's del^4 viscosity loss, nu4 dt sum_k h_e,k u_k del^4 u_k
+// (its tendency -nu4 del^4 u, from the step's start, against the energy measure 0.5 h_e u^2), here to save a launch.
 extern "C" __global__ void xch_edge(int N, int E, int L, const real* wx, const real* hold, const int* eI, const int* eJ, real* u,
-                                    real* diss) {
+                                    real* diss, const real* lap4, real nu4dt) {
   LOOP1(e, E)
   real mom[LMAX], hn[LMAX];
-  real k0 = 0;
+  real k0 = 0, v4 = 0;
   for (int k = 0; k < L; k++) {
     const real he = (real)0.5 * (hold[(size_t)k * N + eI[e]] + hold[(size_t)k * N + eJ[e]]);
     const real uk = u[(size_t)k * E + e];
     mom[k] = he * uk;
     hn[k] = he;
     k0 += he * uk * uk;
+    if (lap4) v4 += he * uk * lap4[(size_t)k * E + e];
   }
   for (int k = 0; k + 1 < L; k++) {
     const real v = (real)0.5 * (wx[(size_t)k * N + eI[e]] + wx[(size_t)k * N + eJ[e]]);
@@ -413,7 +416,7 @@ extern "C" __global__ void xch_edge(int N, int E, int L, const real* wx, const r
     u[(size_t)k * E + e] = un;
     k1 += hn[k] * un * un;
   }
-  if (diss) diss[e] = (real)0.5 * (k0 - k1);
+  if (diss) diss[e] = (real)0.5 * (k0 - k1) + nu4dt * v4;
 }
 
 // ---- Interfacial stress (decision #39): turbulent momentum exchange between neighbouring layers. ----

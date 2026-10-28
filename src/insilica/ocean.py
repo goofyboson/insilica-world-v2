@@ -28,7 +28,7 @@ from .layers import Layers
 from .transport import Transport
 
 ALPHA_REF = 2.0e-4                                              # 1/K: dTmin's buoyancy (decision #68)
-OCEAN = dict(depth=4000.0, h_mixed=100.0, h_thermo=600.0, T_thermo=293.15, T_deep=273.15, h_season=0.0, T_season=297.15, alpha=0.52e-4, alpha2=1.0e-5, beta=7.6e-4, S_ref=35.0, rho=1025.0, cw=3990.0, dt=3600.0, mix_dt=86400.0,
+OCEAN = dict(depth=4000.0, h_mixed=100.0, h_thermo=600.0, T_thermo=293.15, T_deep=273.15, alpha=0.52e-4, alpha2=1.0e-5, beta=7.6e-4, S_ref=35.0, rho=1025.0, cw=3990.0, dt=3600.0, mix_dt=86400.0,
              gprime=(0.016, 0.016),
              hmin=10.0, hmax=1000.0, dTmin=0.1, m_kt=0.5, n_kt=0.2, visc4_U=0.5, bottom_stress=2.5e-4,
              interface_stress=5.0e-4, thin=2.0, walls=(), sw_R=0.58, sw_z1=0.35, sw_z2=23.0)
@@ -58,8 +58,7 @@ class Ocean:
         # the thermocline's turbulent stress carries the wind's momentum down (decision #69): c ~ C_d |du| ~ 1e-3 x 0.5
         # m/s; without it a mixed layer thinned to its floor by equatorial upwelling ran away toward the wind's speed
         # g' per interface (decision #64): g · 2e-4/K · ΔT for 8 K steps (≈ 20 → 12 → 4 °C), baroclinic gravity waves 3.1 and 1.2 m/s
-        # h_season > 0 adds a seasonal-thermocline layer between the mixed layer and the thermocline (experiment)
-        L = self.L = 4 if c['h_season'] > 0 else 3
+        L = self.L = 3
         assert len(c['gprime']) == L - 1
         # thin walls (decision #79): at each longitude in walls (degrees), pole to pole, the edges between the cells on its two
         # sides carry no water — a basin's coasts, with no land cells (the air still sees open water there)
@@ -75,11 +74,9 @@ class Ocean:
             # near where the subtropics' mixing pumps it (decision #75), its drift stays slow (~0.05 K/yr); the abyss at the
             # freezing point, where polar winters would take it over centuries, so polar ice can form (decision #77)
             Ts = np.asarray(Tsurf, dtype=float)
-            hs = [c['h_mixed']] + ([c['h_season']] if L == 4 else []) + [c['h_thermo']]
-            h = np.stack([np.full(N, x) for x in hs] + [np.full(N, c['depth'] - sum(hs))])
+            h = np.stack([np.full(N, c['h_mixed']), np.full(N, c['h_thermo']), np.full(N, c['depth'] - c['h_mixed'] - c['h_thermo'])])
             u = np.zeros((L, E))
-            Tm = ([c['T_season']] if L == 4 else []) + [c['T_thermo']]
-            T = np.stack([Ts] + [np.clip(Ts, c['T_deep'], x) for x in Tm] + [np.full(N, c['T_deep'])])
+            T = np.stack([Ts, np.clip(Ts, c['T_deep'], c['T_thermo']), np.full(N, c['T_deep'])])
             S = np.full((L, N), c['S_ref'])
         else:
             h, u, T = state[:3]

@@ -250,6 +250,25 @@ days of dynamics 6.8e-16. Ocean results bit-identical to V2-2a. PERF air n = 6 3
 day; gate 40, #61, after #62), ocean n = 8 81.0 ms; slow step 3.3–5.0 ns per layer-edge at n ≥ 5. Suite 158 s warm (the
 15-year CLIMATE spin-up is built once, ~5 min), PERF 19 s.
 
+**V2-3 results (2026-10-28, 36/36 with PERF; closed):** the ocean is three fixed-g' Boussinesq layers (#64, #71) with
+temperature and salinity (#76) under the three air layers; the `basin` preset walls it into one basin (#79). WAVES ocean
+Kelvin wave (n = 6) 3.051 vs c₁ 3.073 m/s (−0.73%; gate 2%, #78). CLIMATE coupled (`basin`, n = 4, year 21 after a cached
+20-year spin-up) 289.84 K; TOA +3.62 W/m² against the ocean's and ice's uptake +3.66 (air −0.03); bottom-layer transport
+equatorward at 10–30° (49 × 10⁹ kg/s at 10°S); trades −0.96, westerlies +0.92 m/s; rain 2.26 mm/day, ITCZ ×1.44, 40–60°
+×1.35; equator − pole 35.0 K; 60°N seasons 8.6 K; ocean heat transport −0.63/−0.55/+0.53/+0.36 PW at 30S/20S/20N/30N;
+equatorial thermocline 30 m deeper in the west, SST 0.93 K warmer; sea-ice edge 58–64°; equatorial dip −0.67 K
+(reported). CONSERVE coupled: the ocean's step keeps heat, volume and salt to ≤ 6e-16, salt against fresh water 1.1e-16,
+wind-stress momentum 1.5e-17, energy change − TOA +0.044 W/m² (gate 0.1, #81). The slab CLIMATE (290.22 K, TOA +0.43, ITCZ
+×2.19), WEATHER (B4 0.45; B9 1.01 / 51% now meets, #63) and the other V2-2 tests pass after the stage's air fixes (#73,
+#81, #83). PERF air n = 6 39.5, coupled n = 6 44.8 (gate 50, #82), ocean n = 8 80.7 ms per model hour. Suite 871 s with
+5 processes (spin-ups rebuilt), PERF 21 s. Stage-close checks at n = 6: the slab `aqua` stable for 2 years (max |u|
+50–73 m/s; it blew up at day 151 before #83); `basin` years 21–22 at 289.42–289.45 K, air balance +0.02 / −0.00 W/m²,
+ITCZ ×1.44, equator − pole 33.0–33.1 K, 60°N seasons 6.3 K, ocean heat transport 0.20–0.31 PW at 20° and 0.21–0.40 at 30°,
+tilt 34–35 m, SST contrast 0.28–0.31 K, ice edge 59–68° (the n = 4 test's transport and contrast thresholds would be
+marginal there). B9 with the ocean: 0.94 / 49% at n = 6, 0.84 / 46% at n = 4. Not done in V2-3: the plan's ocean
+baroclinic eddies at n = 8 (report-only), moved to V2-5 (ocean n = 8); a cold tongue (equatorial dip) does not form
+with these trades.
+
 **Stage history.** V2-0 closed with 41/41 and V2-0b with 45/45 under the earlier, finer-grained suite (IDs F0,
 G1–G4, K1, K2, C1, D1, S1, P1, W1, R1, E1–E4); its results are in #15–#21 and the git history (`880afb0`,
 `224b4dd`). #22 maps those checks onto the suite above.

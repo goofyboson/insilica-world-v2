@@ -12,14 +12,15 @@ A planet simulator with two moving ocean layers and three moving air layers, run
 
 ## Current status
 
-**V2-3 Ocean in progress (branch `stage-v2-3`).** Three fixed-density ocean layers (mixed layer, thermocline, abyss)
-with temperature and salinity under the three air layers: Kraus–Turner mixing with sunlight counted where it is absorbed,
-convection, sea ice with a polar halocline, wind-stress coupling; the equatorial Kelvin wave runs within 0.7% of c₁
-(SPEC #64–#83). Done so far: stability, energy closure (−0.009 W/m²), WAVES, a cached 20-year coupled spin-up at n = 4, and a `basin` preset (a thin pole-to-pole wall, one ocean basin: gyres carry ~0.5 PW poleward, the equatorial thermocline tilts; #79).
-CLIMATE coupled on `basin` passes (#80); CONSERVE coupled passes, with the air's ∇⁴ loss now booked as heat (#81). PERF times the coupled world (45 ms per model hour at n = 6, gate 50, #82). The viewer shows the ocean's fields and opens saved worlds. The air no longer blows up at n = 6: a nearly empty layer takes its neighbours' wind (#83). Records #65–#83 are written. Still to do: the stage-close checks (with a 2-year slab run at n = 6); then, once
-the stage's changes are in, **an n = 6 coupled spin-up and climate check** (agreed 2026-10-27).
-
-**V2-2b Moist atmosphere closed 2026-10-27 (34/34), merged to `main`.** Three moist air layers
+**V2-3 Ocean closed 2026-10-28 (36/36 with PERF), merged to `main`. Next: V2-4 Land and coasts.** Three ocean layers
+(mixed layer, thermocline, abyss) with fixed density steps, temperature and salinity under the three air layers:
+Kraus–Turner mixing with sunlight counted where it is absorbed, convection, sea ice with a polar halocline, exact wind
+stress. A `basin` preset (a thin pole-to-pole wall) gives gyres that carry ~0.5 PW poleward and an east–west tilt of the
+equatorial thermocline; the equatorial Kelvin wave runs within 0.7% of c₁. The coupled world at n = 6 costs 45 ms per
+model hour (~220 model years a day). Along the way the air's energy now closes better (the crossings' and ∇⁴ kinetic
+energy are heat) and nearly empty air layers take their neighbours' wind, so the air runs at n = 4–7 with one setting
+(SPEC §9 #64–#83). Earlier:
+**V2-2b Moist atmosphere closed 2026-10-27 (34/34).** Three moist air layers
 (isentropic interfaces at 305 and 380 K) over a slab aquaplanet with sea ice: an ITCZ (2.2× the subtropics), a Hadley
 cell, trades and surface westerlies, mid-latitude storms, 2.2 mm/day of rain at 290 K; every gravity wave runs in the
 fast substeps. Air at n = 6 costs 38 ms per model hour (~260 model years a day). Known near miss: mid-latitude rain is
@@ -42,8 +43,8 @@ bug carried over from v1; V2-0 ported v1's grid and solver to 64-bit CUDA.
 | V2-1 | Fluid core: stacked layers, real-speed fast waves (time-split RK3), thickness floor, bottom stress, exchange hook | ✅ Done (29/29) |
 | V2-2a | Dry atmosphere: two air layers with an isentropic interface, radiation, slab surface, RCE and Held–Suarez | ✅ Done (32/32) |
 | V2-2b | Moist atmosphere: three air layers, vapor, evaporation, condensation, moist convection, rain, sea ice; climate and weather tests | ✅ Done (34/34) |
-| V2-3 | Ocean: three layers, wind stress, thermocline, entrainment, salinity, sea ice; aquaplanet first | 🔧 In progress |
-| V2-4 | Land and coasts: gyres and boundary currents, surface water, soil, ice sheets, terrain | ⏳ Planned |
+| V2-3 | Ocean: three layers, wind stress, thermocline, entrainment, salinity, sea ice; aquaplanet and one basin | ✅ Done (36/36) |
+| V2-4 | Land and coasts: gyres and boundary currents, surface water, soil, ice sheets, terrain | ⏳ Next |
 | V2-5 | Two resolutions: air n = 6 coupled to ocean n = 8 | ⏳ Planned |
 | V2-6 | Moon and tides, geology, UI polish | ⏳ Planned |
 | V2-7 | Optimization and speedup: ensembles in one launch, 32-bit where safe, mixed time steps, faster spin-up; then approximations (reduced model, learned emulator) against the 64-bit reference ([plan §7.1](docs/v2-plan.md)) | ⏳ Planned |
@@ -75,7 +76,7 @@ current, sea ice) are in the Field menu.
 .venv/Scripts/python -m insilica.server --load cache/basin-n4-spun.iw2
 ```
 
-Tests (thirteen tests in up to 5 processes, about 2 minutes warm, longer the first time while spin-ups are cached; prints every measured value against its threshold; add
+Tests (27 tests in up to 5 processes, about 7 minutes warm, about 15 after an engine change while the spin-ups are rebuilt; prints every measured value against its threshold; add
 `--perf` for the speed probe):
 
 ```bash

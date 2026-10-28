@@ -20,7 +20,7 @@ from .gpu import DeviceGrid
 from .layers import Layers
 from .world import World, default_dt, initial_state
 
-SHOWCASE = (('air', 6, 'aqua'), ('ocean', 8, 'outcrop'))
+SHOWCASE = (('air', 6, 'aqua'), ('coupled', 6, 'basin'), ('ocean', 8, 'outcrop'))
 
 
 def time_steps(g, layers, steps=None):

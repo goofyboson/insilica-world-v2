@@ -8,12 +8,12 @@ from insilica import probe
 from insilica.grid import CACHE_DIR
 
 GATE_NS = 16.0                                   # n = 8 slow step: 2× the plan's worst estimate of 8 ns
-GATE_MODEL_HOUR = {'air': 0.040, 'ocean': 0.180}  # s per model hour: moist three-layer air with physics (#61; 0.030 dry, #42), ocean the plan's estimate (§5)
+GATE_MODEL_HOUR = {'air': 0.040, 'coupled': 0.050, 'ocean': 0.180}  # s per model hour: moist three-layer air with physics (#61; 0.030 dry, #42), the air over the walled ocean (#82), ocean the plan's estimate (§5)
 
 
 @pytest.mark.perf
 def test_perf(record):
-    """PERF Engine speed: ns per layer-edge per slow step (n = 4–8, L = 1/2/4) and cost per model hour (air n = 6, ocean n = 8)"""
+    """PERF Engine speed: ns per layer-edge per slow step (n = 4–8, L = 1/2/4) and cost per model hour (air and coupled n = 6, ocean n = 8)"""
     out = probe.run(levels=(4, 5, 6, 7, 8), layers=(1, 2, 4), log=lambda *a: None)
     (CACHE_DIR / 'output').mkdir(parents=True, exist_ok=True)
     (CACHE_DIR / 'output' / 'probe.json').write_text(json.dumps(out, indent=1))
@@ -26,5 +26,6 @@ def test_perf(record):
     ok = (worst8 <= GATE_NS and all(s['s_per_model_hour'] <= GATE_MODEL_HOUR[s['name']] for s in out['showcase'])
           and all(x['finite'] for x in out['runs'] + out['showcase']))
     record('PERF', f'slow step, ns per layer-edge: {table}. Launch {out["launch_us"]:.1f} µs. {show}',
-           f'n = 8 ≤ {GATE_NS:.0f} ns; air ≤ {GATE_MODEL_HOUR["air"] * 1000:.0f} ms (#61), ocean ≤ {GATE_MODEL_HOUR["ocean"] * 1000:.0f} ms per model hour', ok)
+           f'n = 8 ≤ {GATE_NS:.0f} ns; air ≤ {GATE_MODEL_HOUR["air"] * 1000:.0f} ms (#61), coupled ≤ {GATE_MODEL_HOUR["coupled"] * 1000:.0f} ms (#82), '
+           f'ocean ≤ {GATE_MODEL_HOUR["ocean"] * 1000:.0f} ms per model hour', ok)
     assert ok

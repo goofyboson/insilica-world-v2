@@ -123,7 +123,7 @@ class World:
         # fast sub-steps per step: from the fastest column, with 20% room
         self.nfast = int(P.get('nfast', math.ceil(1.2 * self.core.substeps(self.h, self.dt))))
         P['nfast'] = self.nfast                         # saved with the world, so a reload continues identically
-        self.tick = 0
+        self.tick = self._tick_start = 0
         self._Fm, self._M1 = cp.zeros_like(self.u), cp.zeros_like(self.M)
         # A blocking stream: work on it orders with the default stream, so reads after step() see the results.
         self._stream = cp.cuda.Stream(non_blocking=False)
@@ -277,11 +277,12 @@ class World:
         if name == 'mld':
             return self.sea.h[0]
         if name == 'current':
-            out = cp.zeros(g.N)
-            self.sea.k['cell_speed'](*grid_dims(g.N), (np.int32(g.N), self.sea.u[0], g.cellEdge, g.le, g.de, g.areaCell, out))
+            d = self.dg
+            out = cp.zeros(d.N)
+            self.sea.k['cell_speed'](*grid_dims(d.N), (np.int32(d.N), self.sea.u[0], d.cellEdge, d.le, d.de, d.areaCell, out))
             return out
-        if name == 'Tsurf':                                        # before the first step: the slab
-            return self.physics.tsurf if self.tick > 0 else self.Ts
+        if name == 'Tsurf':                                        # before the first step (of a new or loaded world): the slab
+            return self.physics.tsurf if self.tick > self._tick_start else self.Ts
         if name == 'rain':
             return self.physics.rain * 86400.0                      # mm/day
         if name == 'evap':
@@ -348,5 +349,5 @@ class World:
             getattr(w, k)[...] = cp.asarray(a)          # into the existing buffers a captured graph uses
         if w.sea is not None:
             w._sync_sea()
-        w.tick = w._tick0 = meta['tick']
+        w.tick = w._tick0 = w._tick_start = meta['tick']
         return w

@@ -16,7 +16,7 @@ A planet simulator with two moving ocean layers and three moving air layers, run
 with temperature and salinity under the three air layers: Kraus–Turner mixing with sunlight counted where it is absorbed,
 convection, sea ice with a polar halocline, wind-stress coupling; the equatorial Kelvin wave runs within 0.7% of c₁
 (SPEC #64–#81). Done so far: stability, energy closure (−0.009 W/m²), WAVES, a cached 20-year coupled spin-up at n = 4, and a `basin` preset (a thin pole-to-pole wall, one ocean basin: gyres carry ~0.5 PW poleward, the equatorial thermocline tilts; #79).
-CLIMATE coupled on `basin` passes (#80); CONSERVE coupled passes, with the air's ∇⁴ loss now booked as heat (#81). PERF times the coupled world (45 ms per model hour at n = 6, gate 50, #82). Still to do: viewer ocean fields, the stage's records; then, once
+CLIMATE coupled on `basin` passes (#80); CONSERVE coupled passes, with the air's ∇⁴ loss now booked as heat (#81). PERF times the coupled world (45 ms per model hour at n = 6, gate 50, #82). The viewer shows the ocean's fields and opens saved worlds. Still to do: the stage's records; then, once
 the stage's changes are in, **an n = 6 coupled spin-up and climate check** (agreed 2026-10-27).
 
 **V2-2b Moist atmosphere closed 2026-10-27 (34/34), merged to `main`.** Three moist air layers
@@ -63,6 +63,16 @@ Engine and viewer (then open http://127.0.0.1:8765/):
 
 ```bash
 .venv/Scripts/python -m insilica.server --n 5 --preset aqua
+```
+
+A saved world opens with `--load` instead: for example the 20-year `basin` spin-up the tests use (save it once with
+`coupled_spun(4, 'basin').save('cache/basin-n4-spun.iw2')` from `tests/test_climate.py`; the launch configuration
+`engine-basin` serves it on port 8766). Every preset, `coupled` and `basin` included, can also be started from rest in
+the viewer's New world panel; the ocean's fields (SST, salinity, mixed-layer depth, thermocline and abyss temperatures,
+current, sea ice) are in the Field menu.
+
+```bash
+.venv/Scripts/python -m insilica.server --load cache/basin-n4-spun.iw2
 ```
 
 Tests (thirteen tests in up to 5 processes, about 2 minutes warm, longer the first time while spin-ups are cached; prints every measured value against its threshold; add

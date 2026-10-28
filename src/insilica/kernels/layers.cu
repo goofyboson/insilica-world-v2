@@ -379,6 +379,13 @@ extern "C" __global__ void xch_cell(int N, int L, const real* wx, const real* ar
   }
 }
 
+// Thin walls (decision #79): zero the normal velocity or flux of L rows of an edge field where mask is 0.
+extern "C" __global__ void lay_mask(int E, int L, const real* mask, real* a) {
+  LOOP1(e, E)
+  if (mask[e] == 0)
+    for (int k = 0; k < L; k++) a[(size_t)k * E + e] = 0;
+}
+
 // Momentum, given the edge thicknesses before (h_e from hold) and the exchange: h_e,k u_k is conserved column-wise.
 // Mixing momentum between layers removes kinetic energy; diss, if given, receives it per unit area at the edge
 // (0.5 sum_k h_e,k u_k^2 before minus after, the energy measure's own form; J/m^2 for air), for the caller to book as heat.

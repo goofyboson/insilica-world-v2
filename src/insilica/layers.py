@@ -34,15 +34,18 @@ DIV_DAMP = 0.1              # divergence damping of the fast mode (decision #28)
 
 class Layers:
     def __init__(self, dg, layers=1, b=None, grav=GRAV, gprime=(), drag=0.0, stress=0.0, nu4=0.0, floor=1.0, rotation=1.0,
-                 div_damp=DIV_DAMP, air=None, vmix=0.0, thin=2.0):
+                 div_damp=DIV_DAMP, air=None, vmix=0.0, thin=2.0, wall=None):
         """air: None for Boussinesq (ocean-like) layers, h in m; or a dict for air layers, h the layer's mass per area
         (kg/m²) with a potential temperature θ per layer passed to step() (decision #32). The fast mode then runs on
         the column mass with each cell's own coefficient Gc = R·T_s/μ (decision #37), at √(R·T_s). thin: the PV flux's cap on a
-        neighbour's thickness, in multiples of the edge's own (decision #38; the ocean's, #72)."""
+        neighbour's thickness, in multiples of the edge's own (decision #38; the ocean's, #72). wall: None, or an (E,) mask,
+        0 on the edges no water crosses (thin walls between cells, Boussinesq layers only; decision #79)."""
         assert 1 <= layers <= LMAX and len(gprime) == layers - 1
         self.dg, self.L = dg, layers
         self.real = dg.dtype.type
         self.grav, self.nu4, self.floor, self.div_damp, self.thin = grav, nu4, floor, div_damp, thin
+        assert wall is None or not air, 'walls are for Boussinesq layers'
+        self.wall = None if wall is None else cp.asarray(wall, dtype=dg.dtype)
         N, E, NV, L, dt = dg.N, dg.E, dg.NV, layers, dg.dtype
         z = lambda *s: cp.zeros(s, dtype=dt)
         self.b = z(N) if b is None else cp.asarray(b, dtype=dt)
@@ -70,10 +73,15 @@ class Layers:
         k = lambda n, f='layers.cu': dg.kernel(n, f)
         self.k = {n: k(n) for n in ('lay_eta', 'lay_ubar', 'lay_bern', 'air_bern', 'air_gfast', 'lay_slow', 'bt_eta', 'bt_u', 'lay_flux', 'lay_scale',
                                     'lay_limit', 'lay_h', 'lay_u', 'xch_cell', 'xch_edge', 'lay_vmix', 'vmix_heat', 'lay_edge_hq',
-                                    'air_stiff', 'af_mu', 'af_phi', 'af_u', 'af_flux')}
+                                    'air_stiff', 'af_mu', 'af_phi', 'af_u', 'af_flux', 'lay_mask')}
         self.k['swe_vertex'] = k('swe_vertex', 'fused.cu')
         self.k.update({n: k(n, 'trisk.cu') for n in ('cell_div', 'vertex_curl', 'edge_lap')})
         self.dmin = float(np.min(dg.host.de))
+
+    def mask(self, a, rows):
+        """Zero the wall edges of `rows` rows of the edge field a (no-op without walls)."""
+        if self.wall is not None:
+            self.k['lay_mask'](*grid_dims(self.dg.E), (np.int32(self.dg.E), np.int32(rows), self.wall, a))
 
     def substeps(self, h, dt):
         """Fast sub-steps per full step for the current deepest column."""
@@ -147,12 +155,16 @@ class Layers:
         for _ in range(n):
             k['bt_eta'](*c1, (N, self.He, self.ub, g.cellEdge, g.cellSign, g.le, g.areaCell, tau, self.eta, self.eta_prev))
             k['bt_u'](*e1, (E, self.eta, self.eta_prev, R(self.div_damp), self.G, g.eI, g.eJ, g.de, self.Gc, tau, self.ub, self.acc))
+            self.mask(self.ub, 1)
+            self.mask(self.acc, 1)
         # layers
         k['lay_flux'](*eL, (N, E, hs, us, self.ubs, self.acc, R(1.0 / n), g.eI, g.eJ, self.F))
+        self.mask(self.F, L)
         k['lay_scale'](*cL, (N, E, h0, self.F, g.cellEdgeAsc, g.eI, g.le, g.areaCell, R(c * dt), R(self.floor), self.scale))
         k['lay_limit'](*eL, (N, E, g.eI, g.eJ, self.scale, g.le, R(dt), self.F, Fm if Fm is not None else NULL))
         k['lay_h'](*cL, (N, E, h0, self.F, g.cellEdge, g.cellSign, g.le, g.areaCell, R(c * dt), hn))
         k['lay_u'](*eL, (E, u0, self.Tp, self.ub, self.ub0, R(c * dt), un))
+        self.mask(un, L)
 
     def step(self, h, u, dt, nfast, Fm=None, theta=None):
         """One time-split RK3 step in place on h (L, N), u (L, E), with nfast fast sub-steps per full step (stage s
@@ -164,6 +176,7 @@ class Layers:
         else:
             k['lay_eta'](*grid_dims(g.N), (i32(g.N), i32(L), h, self.b, self.eta0))
             k['lay_ubar'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(L), h, u, g.eI, g.eJ, self.ub0))
+            self.mask(self.ub0, 1)
         if self.nu4:
             self._lap(u, self.L1)
             self._lap(self.L1, self.L2)
@@ -172,6 +185,7 @@ class Layers:
         self._stage(self.h2, self.u2, h, u, 1.0, dt, nfast, h, u, Fm, theta=theta)
         if self.vmix and L > 1:
             k['lay_vmix'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(L), h, g.eI, g.eJ, self.real(self.vmix), self.real(dt), u, self.diss))
+            self.mask(u, L)
             if self.air:
                 R = self.real
                 k['vmix_heat'](*grid_dims(g.N), (i32(g.N), i32(L), h, self.diss, g.cellEdge, g.le, g.de, g.areaCell, R(self.grav),
@@ -187,6 +201,7 @@ class Layers:
         heat = self.air and theta is not None
         k['xch_cell'](*grid_dims(g.N), (i32(g.N), i32(self.L), wx, g.areaCell, h, M, psi))
         k['xch_edge'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(self.L), wx, hold, g.eI, g.eJ, u, self.diss if heat else NULL))
+        self.mask(u, self.L)
         if heat:
             R = self.real
             k['vmix_heat'](*grid_dims(g.N), (i32(g.N), i32(self.L), h, self.diss, g.cellEdge, g.le, g.de, g.areaCell, R(self.grav),

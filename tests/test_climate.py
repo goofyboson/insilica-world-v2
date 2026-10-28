@@ -16,10 +16,11 @@ def _year_ticks(w, years):
     return int(round(years * 365 * 86400 / w.dt))
 
 
-def coupled_spun(n=4):
-    """The coupled air-ocean world after its cached spin-up (V2-3; whole days, so the ocean's daily sums are empty)."""
-    w0 = World(n, 'coupled')
-    return runcache.spun_up(f'coupled-n{n}', lambda: World(n, 'coupled'), _year_ticks(w0, COUPLED_SPIN_YEARS))[0]
+def coupled_spun(n=4, preset='coupled'):
+    """A coupled air-ocean world ('coupled', or 'basin' with its ocean walled, #79) after its cached spin-up (V2-3; whole
+    days, so the ocean's daily sums are empty)."""
+    w0 = World(n, preset)
+    return runcache.spun_up(f'{preset}-n{n}', lambda: World(n, preset), _year_ticks(w0, COUPLED_SPIN_YEARS))[0]
 
 
 def _band(Ah, lat, f, lo, hi):

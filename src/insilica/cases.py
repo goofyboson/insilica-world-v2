@@ -256,6 +256,9 @@ PRESETS['aqua_dry'] = dict(PRESETS['aqua'], build=aqua_dry, air=dict(AIR, physic
 # V2-3: the moist three-layer air over a two-layer ocean (decisions #64–#69): the air's drag on the surface is the wind
 # stress on the ocean (exact, in Ocean.couple), so the air's own bottom stress is off. Air steps must divide the hour.
 PRESETS['coupled'] = dict(PRESETS['aqua'], stress=[0.0, 0.0, 0.0], ocean=dict(surface_drag=SURFACE_DRAG))
+# One ocean basin (decision #79): the coupled world with a thin pole-to-pole wall at 180° that the ocean cannot cross, so
+# that gyres, western boundary currents and an east–west tilt of the equatorial thermocline can form; the air is unchanged.
+PRESETS['basin'] = dict(PRESETS['coupled'], ocean=dict(surface_drag=SURFACE_DRAG, walls=(180.0,)))
 PRESETS['rce'] = dict(build=aqua_dry, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True, physics=AIR3), dynamics=False)
 
 

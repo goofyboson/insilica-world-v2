@@ -31,7 +31,17 @@ ALPHA_REF = 2.0e-4                                              # 1/K: dTmin's b
 OCEAN = dict(depth=4000.0, h_mixed=100.0, h_thermo=600.0, T_thermo=293.15, T_deep=273.15, h_season=0.0, T_season=297.15, alpha=0.52e-4, alpha2=1.0e-5, beta=7.6e-4, S_ref=35.0, rho=1025.0, cw=3990.0, dt=3600.0, mix_dt=86400.0,
              gprime=(0.016, 0.016),
              hmin=10.0, hmax=1000.0, dTmin=0.1, m_kt=0.5, n_kt=0.2, visc4_U=0.5, bottom_stress=2.5e-4,
-             interface_stress=5.0e-4, thin=2.0, sw_R=0.58, sw_z1=0.35, sw_z2=23.0)
+             interface_stress=5.0e-4, thin=2.0, walls=(), sw_R=0.58, sw_z1=0.35, sw_z2=23.0)
+
+
+def wall_mask(g, walls):
+    """(E,) mask, 0 on the edges whose two cells lie on opposite sides of a wall at one of the longitudes (degrees)."""
+    m = np.ones(g.E)
+    for lon in walls:
+        d = np.angle(np.exp(1j * (g.lon - math.radians(lon))))        # longitude from the wall, in (−π, π]
+        a, b = d[g.eI], d[g.eJ]
+        m[(np.abs(a) < math.pi / 2) & (np.abs(b) < math.pi / 2) & ((a >= 0) != (b >= 0))] = 0.0   # a cell on the wall is east of it
+    return m
 
 
 class Ocean:
@@ -51,8 +61,11 @@ class Ocean:
         # h_season > 0 adds a seasonal-thermocline layer between the mixed layer and the thermocline (experiment)
         L = self.L = 4 if c['h_season'] > 0 else 3
         assert len(c['gprime']) == L - 1
+        # thin walls (decision #79): at each longitude in walls (degrees), pole to pole, the edges between the cells on its two
+        # sides carry no water — a basin's coasts, with no land cells (the air still sees open water there)
+        self.wall = wall_mask(g, c['walls']) if len(c['walls']) else None
         self.core = Layers(dg, L, b=self.b, gprime=list(c['gprime']), stress=[0.0] * (L - 1) + [c['bottom_stress']], nu4=nu4,
-                           floor=c['hmin'], vmix=c['interface_stress'], thin=c['thin'])
+                           floor=c['hmin'], vmix=c['interface_stress'], thin=c['thin'], wall=self.wall)
         if nu4:
             lam = self.core.lap_max()
             assert nu4 * lam * lam * c['dt'] <= 1.0, 'ocean nu4 unstable at its step'
@@ -72,6 +85,7 @@ class Ocean:
             h, u, T = state[:3]
             S = state[3] if len(state) > 3 else np.full((L, N), c['S_ref'])
         self.h, self.u, self.T = cp.asarray(h, dtype=float), cp.asarray(u, dtype=float), cp.asarray(T, dtype=float)
+        self.core.mask(self.u, L)
         self.S = cp.asarray(S, dtype=float)                     # salinity (psu, decision #76)
         self.M = self.h * cp.asarray(g.areaCell)[None, :]
         self.nfast = int(math.ceil(1.2 * self.core.substeps(self.h, c['dt'])))
@@ -104,6 +118,7 @@ class Ocean:
         g, i32, R = self.dg, np.int32, self.dg.dtype.type
         self.k['couple_stress'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(air_h.shape[0]), air_h, air_u, self.h, self.u,
                                                   g.eI, g.eJ, R(c), R(self.cfg['rho']), R(dt), self.diss, self.tau_acc))
+        self.core.mask(self.u, 1)
 
     def eos(self):
         """The column physics' equation of state as kernel arguments: g, α, α2, β (decision #76)."""

@@ -9,10 +9,18 @@ from insilica.grid.trisk import cell_winds
 from insilica.world import World
 
 CLIMATE_SPIN_YEARS, WEATHER_SPIN_YEARS = 15, 1   # the 100 m slab settles in ~10 years (#54)
+COUPLED_SPIN_YEARS = 20                          # the coupled ocean's ice and halocline are in place by ~15 years (#77)
 
 
 def _year_ticks(w, years):
     return int(round(years * 365 * 86400 / w.dt))
+
+
+def coupled_spun(n=4, preset='coupled'):
+    """A coupled air-ocean world ('coupled', or 'basin' with its ocean walled, #79) after its cached spin-up (V2-3; whole
+    days, so the ocean's daily sums are empty)."""
+    w0 = World(n, preset)
+    return runcache.spun_up(f'{preset}-n{n}', lambda: World(n, preset), _year_ticks(w0, COUPLED_SPIN_YEARS))[0]
 
 
 def _band(Ah, lat, f, lo, hi):
@@ -65,6 +73,74 @@ def test_climate(record):
            f'{max(ts60) - min(ts60):.1f} K',
            '288 ± 3 K; |TOA| < 1 W/m²; equatorward bottom flow within 30°; trades 5–25°; westerlies 35–55°; ITCZ > 2× and '
            '40–60° > 0.5× the subtropics; global 2–3 mm/day', ok)
+    assert ok
+
+
+@pytest.mark.xdist_group('grid4')
+def test_climate_coupled(record):
+    """CLIMATE coupled The air over the three-layer ocean in one basin (`basin`, n = 4, the year after a cached spin-up): the air's balance against the ocean's uptake, its circulation and rain, and the ocean's heat transport, thermocline tilt, east–west SST contrast, sea ice and seasons"""
+    w = coupled_spun(4, 'basin')
+    w.track_ocean_heat_transport()
+    g, sea = w.grid, w.sea
+    A = cp.asarray(g.areaCell)
+    Ah = g.areaCell / g.areaCell.sum()
+    lat = np.degrees(g.lat)
+    x = (np.degrees(np.angle(np.exp(1j * g.lon))) + 180.0) % 360.0      # longitude east of the wall at 180°
+    east = np.stack([-np.sin(g.lon), np.cos(g.lon), np.zeros(g.N)], 1)
+    per = int(round(86400 / w.dt))
+    b = w.L - 1
+    rc, Lf = sea.cfg['rho'] * sea.cfg['cw'], w.physics.p['Lf']
+    stored = lambda: float(cp.sum(A * (rc * cp.sum(sea.h * (sea.T - 273.15), axis=0) - Lf * w.ice)))   # ocean and ice, J
+    rain, Ts, toa, wxb, sst, zt = (cp.zeros(g.N) for _ in range(6))
+    ub = np.zeros(g.N)
+    m60 = (lat > 55) & (lat < 65)
+    ts60, icelat = [], []
+    mu0, E0 = w.h[b].copy(), stored()
+    for _ in range(365):
+        for _ in range(per):
+            w.step(1)
+            rain += w.physics.rain; Ts += w.physics.tsurf; toa += w.physics.sw_abs - w.physics.olr; wxb += w.physics.wx[b - 1]
+            sst += sea.T[0]; zt += sea.h[0] + sea.h[1]
+        ub += np.sum(cell_winds(g, w.u[b].get()) * east, 1)
+        ts60.append(float(np.sum(Ah[m60] * w.physics.tsurf.get()[m60]) / np.sum(Ah[m60])))
+        ice = w.ice.get() > 1.0                                    # kg/m², ~1 mm
+        icelat.append(float(np.min(np.abs(lat[ice]))) if ice.any() else 90.0)
+    ns, T = 365 * per, 365 * 86400.0
+    rain = (rain / ns * 86400).get(); Ts = (Ts / ns).get(); ub /= 365
+    sst = (sst / ns).get() - 273.15; zt = (zt / ns).get()
+    toa = float(cp.sum(toa / ns * A) / cp.sum(A))
+    uptake = (stored() - E0) / T / float(cp.sum(A))
+    o = np.argsort(lat)
+    ls = lat[o]
+    at = lambda cum, xs: {v: cum[np.searchsorted(ls, v) - 1] for v in xs}
+    tr = {v: c / 1e9 for v, c in at(np.cumsum((-((w.h[b] - mu0) / T + wxb / T) * A).get()[o]), (-30, -20, -10, 10, 20, 30)).items()}
+    # the ocean's northward heat transport (PW): the currents' heat divergence summed from the south pole
+    oht = {v: c / 1e15 for v, c in at(np.cumsum((-sea.conv / T * A).get()[o]), (-30, -20, 20, 30)).items()}
+    band = lambda f, lo, hi: _band(Ah, lat, f, lo, hi)
+    eqm = np.abs(lat) < 5
+    third = lambda f, a, c: float(np.sum((g.areaCell * f)[eqm & (x >= a) & (x < c)]) / np.sum(g.areaCell[eqm & (x >= a) & (x < c)]))
+    tilt, contrast = third(zt, 0, 120) - third(zt, 240, 360), third(sst, 0, 120) - third(sst, 240, 360)
+    m_eq, m_off = (np.abs(lat) < 2) & (x > 240), (np.abs(lat) > 4) & (np.abs(lat) < 8) & (x > 240)
+    dip = float(np.sum((g.areaCell * sst)[m_off]) / g.areaCell[m_off].sum() - np.sum((g.areaCell * sst)[m_eq]) / g.areaCell[m_eq].sum())
+    ts, eqp, sub = float(np.sum(Ah * Ts)), band(Ts, 0, 10) - band(Ts, 80, 90), band(rain, 15, 30)
+    itcz, mid, glob = band(rain, 0, 10) / sub, band(rain, 40, 60) / sub, float(np.sum(Ah * rain))
+    trades, west = band(ub, 5, 25), band(ub, 35, 55)
+    seasons = max(ts60) - min(ts60)
+    hadley = all(tr[v] < 0 for v in (10, 20, 30)) and all(tr[v] > 0 for v in (-10, -20, -30))
+    poleward = all(oht[v] <= -0.2 for v in (-30, -20)) and all(oht[v] >= 0.2 for v in (20, 30))
+    ok = (abs(ts - 288) <= 3 and abs(toa - uptake) < 1 and hadley and trades < 0 and west > 0 and itcz > 1.3 and mid > 0.5
+          and 2 <= glob <= 3 and 30 <= eqp <= 60 and seasons > 3 and poleward and tilt > 10 and contrast > 0.3
+          and 50 <= min(icelat) and max(icelat) <= 75)
+    record('CLIMATE coupled', f'year {COUPLED_SPIN_YEARS + 1} (basin): mean surface {ts:.2f} K; TOA {toa:+.2f} W/m², ocean and ice '
+           f'uptake {uptake:+.2f} (air {toa - uptake:+.2f}); bottom-layer northward transport (1e9 kg/s) at 30S/20S/10S/10N/20N/30N '
+           f'{"/".join(f"{tr[v]:+.0f}" for v in (-30, -20, -10, 10, 20, 30))}; trades {trades:+.2f} m/s, westerlies {west:+.2f} m/s; '
+           f'rain {glob:.2f} mm/day, ITCZ ×{itcz:.2f}, 40–60° ×{mid:.2f}; equator − pole {eqp:.1f} K; 60°N seasons {seasons:.1f} K; '
+           f'ocean heat transport (PW) at 30S/20S/20N/30N {"/".join(f"{oht[v]:+.2f}" for v in (-30, -20, 20, 30))}; equatorial '
+           f'thermocline west − east {tilt:+.0f} m, SST west − east {contrast:+.2f} K; sea-ice edge {min(icelat):.0f}–{max(icelat):.0f}°; '
+           f'reported: equatorial dip (4–8° − 0–2°, east third) {dip:+.2f} K',
+           '288 ± 3 K; |TOA − uptake| < 1 W/m²; Hadley, trades, westerlies; ITCZ > 1.3× and 40–60° > 0.5× the subtropics; '
+           '2–3 mm/day; equator − pole 30–60 K; 60°N seasons > 3 K; ocean heat transport ≥ 0.2 PW poleward at 20° and 30°; '
+           'thermocline tilt > 10 m; SST contrast > 0.3 K; ice edge 50–75°', ok)
     assert ok
 
 

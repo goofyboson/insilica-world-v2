@@ -53,10 +53,67 @@ def test_conserve(record, n, days):
            f'exchange of {moved:.1%} of the lower layer: ' + ', '.join(f'{k} {fmt(v)}' for k, v in xch.items())
            + f'; two-layer jet energy drift, no dissipation, {days} d: {fmt(drift)}',
            '≤ 1e-13; ≥ floor (1 m); exchange ≤ 1e-13; energy drift < 1e-4', ok)
-    air_ok = True
+    air_ok = cpl_ok = True
     if n == 4:
         air_ok = conserve_air(record)
-    assert ok and air_ok
+        cpl_ok = conserve_coupled(record)
+    assert ok and air_ok and cpl_ok
+
+
+def conserve_coupled(record, days=2):
+    """The coupled world's budgets (V2-3, `basin` from its cached spin-up, every step): the ocean's own step keeps its
+    heat, salt and volume (per layer outside the mixing); salt changes only by the virtual flux of rain, evaporation and
+    sea ice; the wind stress conserves the air's and the ocean's momentum away from the walls; and the total energy
+    changes by the TOA flux, up to the air core's own non-conservation (#81)."""
+    import sys
+    sys.path.insert(0, str(__import__('pathlib').Path(__file__).parent))
+    from test_climate import coupled_spun
+    w = coupled_spun(4, 'basin')
+    g, sea = w.grid, w.sea
+    A = cp.asarray(g.areaCell)
+    At, lede = float(A.sum()), cp.asarray(g.le * g.de)
+    rc, rho, Sr = sea.cfg['rho'] * sea.cfg['cw'], sea.cfg['rho'], sea.cfg['S_ref']
+    heat = lambda: float(cp.sum(A * cp.sum(sea.h * (sea.T - 273.15), axis=0))) * rc
+    vol = lambda: [float(cp.sum(A * sea.h[k])) for k in range(sea.L)]
+    salt = lambda: float(cp.sum(A * cp.sum(sea.h * sea.S, axis=0)))
+    worst = dict(heat=0.0, volume=0.0, salt=0.0, momentum=0.0)
+    step0, couple0 = sea.step, sea.couple
+
+    def step(mix=True):
+        h0, v0, s0 = heat(), vol(), salt()
+        step0(mix=mix)
+        h1, v1, s1 = heat(), vol(), salt()
+        dv = [abs(sum(v1) - sum(v0)) / sum(v0)] + ([] if mix else [abs(b - a) / a for a, b in zip(v0, v1)])
+        worst.update(heat=max(worst['heat'], abs(h1 - h0) / abs(h0)), volume=max(worst['volume'], *dv),
+                     salt=max(worst['salt'], abs(s1 - s0) / s0))
+    open_ = cp.asarray(sea.core.wall)
+
+    def momentum():
+        b = w.L - 1
+        ha, ho = 0.5 * (w.h[b][g.eI] + w.h[b][g.eJ]), rho * 0.5 * (sea.h[0][g.eI] + sea.h[0][g.eJ])
+        return (float(cp.sum(open_ * lede * (ha * w.u[b] + ho * sea.u[0]))),
+                float(cp.sum(open_ * lede * (ha * cp.abs(w.u[b]) + ho * cp.abs(sea.u[0])))))
+
+    def couple(*a, **k):
+        m0 = momentum()
+        couple0(*a, **k)
+        worst['momentum'] = max(worst['momentum'], abs(momentum()[0] - m0[0]) / m0[1])
+    sea.step, sea.couple = step, couple
+    res, fw, ice0, S0 = 0.0, 0.0, w.ice.copy(), salt()
+    for _ in range(int(days * 86400 / w.dt)):
+        e0 = w.energy()
+        w.step(1, graph=False)                                # the wrapped parts run every step
+        res += w.energy() - e0 - float(cp.sum(A * (w.physics.sw_abs - w.physics.olr))) * w.dt
+        fw += float(cp.sum(A * (w.physics.rain - w.physics.evap))) * w.dt
+    fw -= float(cp.sum(A * (w.ice - ice0)))
+    saltflux = abs((salt() - S0) + Sr * fw / rho) / S0
+    energy = res / At / (days * 86400)
+    ok = max(worst.values()) <= 1e-13 and saltflux <= 1e-13 and abs(energy) <= 0.1
+    record('CONSERVE coupled', f'basin, {days} d after the spin-up: ocean step heat {fmt(worst["heat"])}, volume {fmt(worst["volume"])}, '
+           f'salt {fmt(worst["salt"])}; salt against fresh water {fmt(saltflux)}; wind-stress momentum {fmt(worst["momentum"])} of the '
+           f'gross; energy change − TOA {energy:+.4f} W/m²',
+           '≤ 1e-13; ≤ 1e-13; ≤ 1e-13; |energy − TOA| ≤ 0.1 W/m²', ok)
+    return ok
 
 
 def conserve_air(record):

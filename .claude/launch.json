@@ -4,8 +4,28 @@
     {
       "name": "engine",
       "runtimeExecutable": ".venv/Scripts/python.exe",
-      "runtimeArgs": ["-m", "insilica.server", "--n", "5", "--preset", "aqua"],
+      "runtimeArgs": [
+        "-m",
+        "insilica.server",
+        "--n",
+        "5",
+        "--preset",
+        "aqua"
+      ],
       "port": 8765
+    },
+    {
+      "name": "engine-basin",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "-m",
+        "insilica.server",
+        "--load",
+        "cache/basin-n4-spun.iw2",
+        "--port",
+        "8766"
+      ],
+      "port": 8766
     }
   ]
 }

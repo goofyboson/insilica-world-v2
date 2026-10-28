@@ -13,7 +13,7 @@ Binary frame: uint32 little-endian header length H, H bytes of JSON header, zero
 the payload. Header: {"kind": "field", "name", "layer", "tick", "dtype", "count", "min", "max"} or
 {"kind": "grid", "n", "N", "parts": [{"name", "dtype", "count"}, ...]} with each part padded to 8 bytes.
 
-  python -m insilica.server [--n 4] [--preset w5] [--port 8765]
+  python -m insilica.server [--n 4] [--preset w5] [--load world.iw2] [--port 8765]   (--load: start from a saved world)
 """
 import argparse
 import asyncio
@@ -64,8 +64,8 @@ def parse_frame(data):
 
 
 class Engine:
-    def __init__(self, n=4, preset='w5'):
-        self.world = World(n=n, preset=preset)
+    def __init__(self, n=4, preset='w5', load=None):
+        self.world = World.load(load) if load else World(n=n, preset=preset)
         self.playing, self.tpf = False, 1
         self.clients = {}            # websocket → subscription (field, layer) or None
         self.lock = asyncio.Lock()
@@ -170,8 +170,9 @@ def http(connection, request):
     return connection.respond(404, 'Not found\n')
 
 
-async def main(n=4, preset='w5', host='127.0.0.1', port=8765, ready=None):
-    engine = Engine(n, preset)
+async def main(n=4, preset='w5', host='127.0.0.1', port=8765, ready=None, load=None):
+    engine = Engine(n, preset, load)
+    n, preset = engine.world.n, engine.world.preset
     async with serve(engine.handle, host, port, process_request=http, max_size=2 ** 26, compression=None) as server:
         loop_task = asyncio.create_task(engine.loop())
         actual = server.sockets[0].getsockname()[1]
@@ -189,9 +190,10 @@ def cli():
     ap = argparse.ArgumentParser(description='InSilica World V2 engine with the browser viewer')
     ap.add_argument('--n', type=int, default=4)
     ap.add_argument('--preset', default='w5', choices=PRESETS)
+    ap.add_argument('--load', help='start from this saved world (.iw2) instead of a new one')
     ap.add_argument('--port', type=int, default=8765)
     a = ap.parse_args()
     try:
-        asyncio.run(main(a.n, a.preset, port=a.port))
+        asyncio.run(main(a.n, a.preset, port=a.port, load=a.load))
     except KeyboardInterrupt:
         pass

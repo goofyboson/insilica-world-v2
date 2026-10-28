@@ -25,7 +25,7 @@ def source_hash():
     root = Path(__file__).resolve().parent
     for f in sorted(list(root.rglob('*.py')) + list(KERNEL_DIR.glob('*.cu'))):
         h.update(f.relative_to(root).as_posix().encode())
-        h.update(f.read_bytes())
+        h.update(f.read_bytes().replace(b'\r\n', b'\n'))     # line endings do not change the engine
     return h.hexdigest()[:12]
 
 

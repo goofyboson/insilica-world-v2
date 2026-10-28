@@ -114,6 +114,25 @@ def internal_wave_speed(gprime, h1, h2, grav=GRAV):
     return math.sqrt(grav * H / 2 * (1 - math.sqrt(1 - 4 * gprime * h1 * h2 / (grav * H * H))))
 
 
+def layer_modes(h, gprime, grav=GRAV):
+    """Gravity-wave modes of Boussinesq layers h (top first) at rest under a free surface: speeds (fastest, the external
+    mode, first), thickness structures V (columns) and W = V⁻¹ (rows project thickness anomalies onto the modes)."""
+    L, gg = len(h), [grav] + list(gprime)
+    G = np.array([[sum(gg[i] for i in range(k + 1) if j >= i) for j in range(L)] for k in range(L)])
+    lam, V = np.linalg.eig(np.diag(np.asarray(h, dtype=float)) @ G)
+    o = np.argsort(lam.real)[::-1]
+    V = V.real[:, o]
+    return np.sqrt(lam.real[o]), V, np.linalg.inv(V)
+
+
+def mode_bump(g, h, v, amp=10.0, radius=5.0e5):
+    """Layers h at rest with a Gaussian bump at (0°, 0°) in the thickness structure v (scaled so that no layer changes by
+    more than amp: a linear wave)."""
+    d = amp * np.exp(-(great_circle(g, 0.0, 0.0) / radius) ** 2)
+    v = np.asarray(v, dtype=float)
+    return np.asarray(h, dtype=float)[:, None] + (v / np.abs(v).max())[:, None] * d[None, :]
+
+
 def solid_body_layers(g, H, U, gprime, b=None):
     """Two layers in steady solid-body zonal rotation, u_k = U_k cos φ, each in exact gradient-wind balance:
     M_k = C_k − (a Ω U_k + U_k²/2) sin²φ, with M_0 = gη and M_1 = gη + g' z_1. Layer area means are H."""
@@ -234,6 +253,14 @@ SURFACE_DRAG = 0.15 * MU_REF / 86400.0
 PRESETS['aqua'] = dict(build=aqua, dt=lambda n: 900.0 * 2.0 ** (5 - n), visc4_U=15.0, stress=[0.0, 0.0, SURFACE_DRAG],
                        tracer=False, air=dict(AIR, physics=dict(AIR3, moist=1.0)))
 PRESETS['aqua_dry'] = dict(PRESETS['aqua'], build=aqua_dry, air=dict(AIR, physics=AIR3))
+# V2-3: the moist three-layer air over the three-layer ocean (decisions #64–#79): the air's drag on the surface is the wind
+# stress on the ocean (exact, in Ocean.couple), so the air's own bottom stress is off. Air steps must divide the hour.
+# Evaporation recalibrated for the ocean's surface (K_EVAP 4.8e-3 against the slab's 4e-3: 2.0 → ~2.3 mm/day; #80).
+PRESETS['coupled'] = dict(PRESETS['aqua'], stress=[0.0, 0.0, 0.0], ocean=dict(surface_drag=SURFACE_DRAG),
+                          air=dict(AIR, physics=dict(AIR3, moist=1.0, k_evap=4.8e-3)))
+# One ocean basin (decision #79): the coupled world with a thin pole-to-pole wall at 180° that the ocean cannot cross, so
+# that gyres, western boundary currents and an east–west tilt of the equatorial thermocline can form; the air is unchanged.
+PRESETS['basin'] = dict(PRESETS['coupled'], ocean=dict(surface_drag=SURFACE_DRAG, walls=(180.0,)))
 PRESETS['rce'] = dict(build=aqua_dry, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True, physics=AIR3), dynamics=False)
 
 

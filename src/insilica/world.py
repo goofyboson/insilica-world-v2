@@ -197,6 +197,13 @@ class World:
         self._stream.synchronize()
         return self
 
+    def track_ocean_heat_transport(self):
+        """Sum the ocean currents' heat convergence per cell from now on (Ocean.track_heat_transport); the captured step
+        graphs are dropped, so the next steps record the sums."""
+        self.sea.track_heat_transport()
+        self._graphs.clear()
+        self._tick0 = self.tick
+
     def exchange(self, wx):
         """Move thickness wx (L − 1, N; m, positive up) between neighbouring layers with tracer and momentum."""
         with self._stream:

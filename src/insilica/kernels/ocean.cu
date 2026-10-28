@@ -192,6 +192,15 @@ extern "C" __global__ void ocn_pen(int N, int L, const real* h, real* T, const r
   sun_acc[i] += qsw[i] * dt;
 }
 
+// Diagnostic (decision #80): H += sign rho c_w sum_k h_k (T_k - 273.15 K), J/m^2 relative to 0 C. Taken with sign -1 before
+// the currents' step and +1 after their heat transport, it sums the currents' heat convergence per cell.
+extern "C" __global__ void ocn_heat(int N, int L, const real* h, const real* T, real rho_cw, real sign, real* H) {
+  LOOP1(i, N)
+  real s = 0;
+  for (int k = 0; k < L; k++) s += h[(size_t)k * N + i] * (T[(size_t)k * N + i] - (real)273.15);
+  H[i] += sign * rho_cw * s;
+}
+
 // The mixed layer's heat capacity per cell for the air's surface physics: rho_w c_w h0 (J/m^2/K).
 extern "C" __global__ void ocn_cap(int N, const real* h, real rho_cw, real* cap) {
   LOOP1(i, N)

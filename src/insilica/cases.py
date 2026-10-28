@@ -253,9 +253,11 @@ SURFACE_DRAG = 0.15 * MU_REF / 86400.0
 PRESETS['aqua'] = dict(build=aqua, dt=lambda n: 900.0 * 2.0 ** (5 - n), visc4_U=15.0, stress=[0.0, 0.0, SURFACE_DRAG],
                        tracer=False, air=dict(AIR, physics=dict(AIR3, moist=1.0)))
 PRESETS['aqua_dry'] = dict(PRESETS['aqua'], build=aqua_dry, air=dict(AIR, physics=AIR3))
-# V2-3: the moist three-layer air over a two-layer ocean (decisions #64–#69): the air's drag on the surface is the wind
+# V2-3: the moist three-layer air over the three-layer ocean (decisions #64–#79): the air's drag on the surface is the wind
 # stress on the ocean (exact, in Ocean.couple), so the air's own bottom stress is off. Air steps must divide the hour.
-PRESETS['coupled'] = dict(PRESETS['aqua'], stress=[0.0, 0.0, 0.0], ocean=dict(surface_drag=SURFACE_DRAG))
+# Evaporation recalibrated for the ocean's surface (K_EVAP 4.8e-3 against the slab's 4e-3: 2.0 → ~2.3 mm/day; #80).
+PRESETS['coupled'] = dict(PRESETS['aqua'], stress=[0.0, 0.0, 0.0], ocean=dict(surface_drag=SURFACE_DRAG),
+                          air=dict(AIR, physics=dict(AIR3, moist=1.0, k_evap=4.8e-3)))
 # One ocean basin (decision #79): the coupled world with a thin pole-to-pole wall at 180° that the ocean cannot cross, so
 # that gyres, western boundary currents and an east–west tilt of the equatorial thermocline can form; the air is unchanged.
 PRESETS['basin'] = dict(PRESETS['coupled'], ocean=dict(surface_drag=SURFACE_DRAG, walls=(180.0,)))

@@ -104,9 +104,22 @@ class Ocean:
         assert abs(ratio - round(ratio)) < 1e-9 and round(ratio) >= 1, 'mix_dt must be a whole number of ocean steps'
         self.mix_every = int(round(ratio))
         k = lambda n: dg.kernel(n, 'ocean.cu')
-        self.k = {n: k(n) for n in ('couple_stress', 'ocn_column', 'ocn_cap', 'ocn_overturn', 'ocn_pen', 'ocn_fresh', 'ocn_xch_salt')}
+        self.k = {n: k(n) for n in ('couple_stress', 'ocn_column', 'ocn_cap', 'ocn_overturn', 'ocn_pen', 'ocn_fresh', 'ocn_xch_salt',
+                                    'ocn_heat')}
+        self.conv = None                                        # the currents' heat convergence, when tracked
         self.k['cell_speed'] = dg.kernel('cell_speed', 'air.cu')
         self.update_cap()
+
+    def track_heat_transport(self):
+        """From now on, sum the currents' heat convergence per cell in self.conv (J/m², relative to 0 °C; decision #80):
+        the ocean's heat transport is its integral over latitude. In a world, use World.track_ocean_heat_transport, which
+        also recaptures the step's graph."""
+        self.conv = cp.zeros(self.dg.N)
+
+    def _heat(self, sign):
+        g = self.dg
+        self.k['ocn_heat'](*grid_dims(g.N), (np.int32(g.N), np.int32(self.L), self.h, self.T, g.dtype.type(self.cfg['rho'] * self.cfg['cw']),
+                                            g.dtype.type(sign), self.conv))
 
     def update_cap(self):
         g = self.dg
@@ -140,9 +153,13 @@ class Ocean:
         shoals on the forcing summed since the last mixing (mix_dt)."""
         g, c, i32, R = self.dg, self.cfg, np.int32, self.dg.dtype.type
         self.k['ocn_overturn'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.T, self.S) + self.eos())
+        if self.conv is not None:
+            self._heat(-1.0)
         self.core.step(self.h, self.u, c['dt'], self.nfast, self._Fm)
         self.tr.mass_after(self.M, self._Fm, self._M1)
         self.tr.step(self.M, self._M1, self._Fm, self.T, order=3)
+        if self.conv is not None:
+            self._heat(1.0)
         self.tr.step(self.M, self._M1, self._Fm, self.S, order=3)
         cp.copyto(self.M, self._M1)
         self.update_cap()

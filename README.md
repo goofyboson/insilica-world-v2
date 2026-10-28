@@ -15,8 +15,8 @@ A planet simulator with two moving ocean layers and three moving air layers, run
 **V2-3 Ocean in progress (branch `stage-v2-3`).** Three fixed-density ocean layers (mixed layer, thermocline, abyss)
 with temperature and salinity under the three air layers: Kraus–Turner mixing with sunlight counted where it is absorbed,
 convection, sea ice with a polar halocline, wind-stress coupling; the equatorial Kelvin wave runs within 0.7% of c₁
-(SPEC #64–#81). Done so far: stability, energy closure (−0.009 W/m²), WAVES, a cached 20-year coupled spin-up at n = 4, and a `basin` preset (a thin pole-to-pole wall, one ocean basin: gyres carry ~0.5 PW poleward, the equatorial thermocline tilts; #79).
-CLIMATE coupled on `basin` passes (#80); CONSERVE coupled passes, with the air's ∇⁴ loss now booked as heat (#81). PERF times the coupled world (45 ms per model hour at n = 6, gate 50, #82). The viewer shows the ocean's fields and opens saved worlds. Still to do: the stage's records; then, once
+(SPEC #64–#83). Done so far: stability, energy closure (−0.009 W/m²), WAVES, a cached 20-year coupled spin-up at n = 4, and a `basin` preset (a thin pole-to-pole wall, one ocean basin: gyres carry ~0.5 PW poleward, the equatorial thermocline tilts; #79).
+CLIMATE coupled on `basin` passes (#80); CONSERVE coupled passes, with the air's ∇⁴ loss now booked as heat (#81). PERF times the coupled world (45 ms per model hour at n = 6, gate 50, #82). The viewer shows the ocean's fields and opens saved worlds. The air no longer blows up at n = 6: a nearly empty layer takes its neighbours' wind (#83). Records #65–#83 are written. Still to do: the stage-close checks (with a 2-year slab run at n = 6); then, once
 the stage's changes are in, **an n = 6 coupled spin-up and climate check** (agreed 2026-10-27).
 
 **V2-2b Moist atmosphere closed 2026-10-27 (34/34), merged to `main`.** Three moist air layers

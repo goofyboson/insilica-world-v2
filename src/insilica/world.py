@@ -7,7 +7,8 @@ Cases and their settings are in cases.py; `params` overrides a case's settings:
   dt, gprime (list, L − 1), floor (m, default 1), drag (per layer, 1/s), stress (per layer, m/s: linear stress
   coefficient, deceleration c/h), nu4 (m⁴/s) or visc4_U (m/s: ν4 = U·d³/π⁴
   with d the mean cell spacing, the grid-scale wave then damps at U/d), rotation (multiplies f), beta (transport),
-  div_damp (the fast mode's divergence damping, default 0.1), nfast (fast sub-steps per step; default from √(gH)).
+  div_damp (the fast mode's divergence damping, default 0.1), nfast (fast sub-steps per step; default from √(gH)),
+  thin_wind (air: the layer mass below which a layer takes its neighbours' wind, default 100 kg/m², #83; 0 = off).
 """
 import hashlib
 import math
@@ -25,6 +26,7 @@ from .constants import CP_DRY, GRAV, KAPPA, P0
 from .layers import DIV_DAMP, Layers
 from .transport import BETA, Transport
 
+THIN_WIND = 100.0     # kg/m² (~1 hPa): below it an air layer takes its neighbours' wind, fully at the floor (#83)
 FIELDS = ('h', 'z', 'eta', 'psi', 'speed', 'vort', 'theta', 'T', 'Ts', 'Tsurf', 'ps', 'q', 'rh', 'rain', 'evap', 'ice',
           'sst', 'sss', 'mld', 'tthermo', 'tdeep', 'current')
 # z: height of the layer's top; eta: the free surface; theta, T, Ts, ps: air (potential temperature, temperature,
@@ -74,7 +76,8 @@ class World:
                            nu4=nu4, floor=floor, rotation=P.get('rotation', 1.0),
                            div_damp=P.get('div_damp', DIV_DAMP),
                            air=dict(t_ref=self.air.get('t_ref', 288.0)) if self.air else None,
-                           vmix=P.get('vmix', spec.get('vmix', 0.0)))
+                           vmix=P.get('vmix', spec.get('vmix', 0.0)),
+                           thin_wind=P.get('thin_wind', THIN_WIND if spec.get('air') else 0.0))
         self.dynamics = P.get('dynamics', spec.get('dynamics', True))
         self.tracer = P.get('tracer', spec.get('tracer', True))   # transport the demo tracer psi (off for air: #42)
         if nu4:

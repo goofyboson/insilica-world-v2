@@ -391,8 +391,13 @@ extern "C" __global__ void lay_mask(int E, int L, const real* mask, real* a) {
 // (0.5 sum_k h_e,k u_k^2 before minus after, the energy measure's own form; J/m^2 for air), for the caller to book as heat.
 // With lap4 given (air, decision #81) diss also takes the step's del^4 viscosity loss, nu4 dt sum_k h_e,k u_k del^4 u_k
 // (its tendency -nu4 del^4 u, from the step's start, against the energy measure 0.5 h_e u^2), here to save a launch.
+// A nearly empty layer takes its neighbours' wind (air, decision #83): with hthin > 0, where the thinner of an edge's two
+// cells holds less than hthin, the layer's wind there moves toward the mass-weighted wind of the layers above and below
+// by w = (hthin - h_min) / (hthin - floor), all the way at the floor; the momentum it gains comes from those neighbours
+// (column momentum exact) and the kinetic energy removed joins diss. A layer near empty has no mass to resist its
+// kinetic-energy gradient, which otherwise runs away cell by cell (n = 6). Thicker layers are untouched.
 extern "C" __global__ void xch_edge(int N, int E, int L, const real* wx, const real* hold, const int* eI, const int* eJ, real* u,
-                                    real* diss, const real* lap4, real nu4dt) {
+                                    real* diss, const real* lap4, real nu4dt, real hthin, real floor_) {
   LOOP1(e, E)
   real mom[LMAX], hn[LMAX];
   real k0 = 0, v4 = 0;
@@ -410,11 +415,28 @@ extern "C" __global__ void xch_edge(int N, int E, int L, const real* wx, const r
     mom[k] += v * ud; mom[k + 1] -= v * ud;
     hn[k] += v; hn[k + 1] -= v;
   }
+  real un[LMAX];
+  for (int k = 0; k < L; k++) un[k] = mom[k] / hn[k];
+  if (hthin > 0)
+    for (int k = 0; k < L; k++) {
+      const real hm = fmin(hold[(size_t)k * N + eI[e]], hold[(size_t)k * N + eJ[e]]);
+      if (hm >= hthin) continue;
+      real w = (hthin - hm) / (hthin - floor_);
+      if (w > 1) w = 1;
+      real hs = 0, ms = 0;
+      if (k > 0) { hs += hn[k - 1]; ms += hn[k - 1] * un[k - 1]; }
+      if (k + 1 < L) { hs += hn[k + 1]; ms += hn[k + 1] * un[k + 1]; }
+      if (hs <= 0) continue;
+      const real du = w * (ms / hs - un[k]);
+      un[k] += du;
+      const real dn = hn[k] * du / hs;
+      if (k > 0) un[k - 1] -= dn;
+      if (k + 1 < L) un[k + 1] -= dn;
+    }
   real k1 = 0;
   for (int k = 0; k < L; k++) {
-    const real un = mom[k] / hn[k];
-    u[(size_t)k * E + e] = un;
-    k1 += hn[k] * un * un;
+    u[(size_t)k * E + e] = un[k];
+    k1 += hn[k] * un[k] * un[k];
   }
   if (diss) diss[e] = (real)0.5 * (k0 - k1) + nu4dt * v4;
 }

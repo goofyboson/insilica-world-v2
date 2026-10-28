@@ -34,16 +34,18 @@ DIV_DAMP = 0.1              # divergence damping of the fast mode (decision #28)
 
 class Layers:
     def __init__(self, dg, layers=1, b=None, grav=GRAV, gprime=(), drag=0.0, stress=0.0, nu4=0.0, floor=1.0, rotation=1.0,
-                 div_damp=DIV_DAMP, air=None, vmix=0.0, thin=2.0, wall=None):
+                 div_damp=DIV_DAMP, air=None, vmix=0.0, thin=2.0, wall=None, thin_wind=0.0):
         """air: None for Boussinesq (ocean-like) layers, h in m; or a dict for air layers, h the layer's mass per area
         (kg/m²) with a potential temperature θ per layer passed to step() (decision #32). The fast mode then runs on
         the column mass with each cell's own coefficient Gc = R·T_s/μ (decision #37), at √(R·T_s). thin: the PV flux's cap on a
         neighbour's thickness, in multiples of the edge's own (decision #38; the ocean's, #72). wall: None, or an (E,) mask,
-        0 on the edges no water crosses (thin walls between cells, Boussinesq layers only; decision #79)."""
+        0 on the edges no water crosses (thin walls between cells, Boussinesq layers only; decision #79). thin_wind: below
+        this thickness a layer takes its neighbours' wind, fully at the floor (air, in exchange; 0 = off; decision #83)."""
         assert 1 <= layers <= LMAX and len(gprime) == layers - 1
         self.dg, self.L = dg, layers
         self.real = dg.dtype.type
         self.grav, self.nu4, self.floor, self.div_damp, self.thin = grav, nu4, floor, div_damp, thin
+        self.thin_wind = thin_wind
         assert wall is None or not air, 'walls are for Boussinesq layers'
         self.wall = None if wall is None else cp.asarray(wall, dtype=dg.dtype)
         N, E, NV, L, dt = dg.N, dg.E, dg.NV, layers, dg.dtype
@@ -196,7 +198,7 @@ class Layers:
         """Move thickness wx (L−1, N; m, positive upward across the interface below layer k) between layers with
         its tracer and momentum, conservatively (upwind). The caller keeps donors above the floor. For air (theta
         given) the kinetic energy the momentum mixing removed warms the column (decision #73), with the last step's ∇⁴
-        viscosity loss (#81)."""
+        viscosity loss (#81), and a nearly empty layer takes its neighbours' wind (#83)."""
         g, k, i32 = self.dg, self.k, np.int32
         hold = self.hold
         cp.copyto(hold, h)
@@ -204,7 +206,8 @@ class Layers:
         k['xch_cell'](*grid_dims(g.N), (i32(g.N), i32(self.L), wx, g.areaCell, h, M, psi))
         v4 = heat and self.nu4 != 0
         k['xch_edge'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(self.L), wx, hold, g.eI, g.eJ, u, self.diss if heat else NULL,
-                                         self.L2 if v4 else NULL, self.real(self.nu4dt if v4 else 0.0)))
+                                         self.L2 if v4 else NULL, self.real(self.nu4dt if v4 else 0.0),
+                                         self.real(self.thin_wind if heat else 0.0), self.real(self.floor)))
         self.mask(u, self.L)
         if heat:
             R = self.real

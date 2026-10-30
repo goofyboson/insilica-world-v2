@@ -44,10 +44,41 @@ def wall_mask(g, walls):
     return m
 
 
+def river_map(g, land):
+    """Where each land cell's runoff enters the sea (#84, until rivers, V2-4b): the nearest ocean cell by grid steps, breadth
+    first from the coasts in cell order. As CSR per ocean cell: rstart (N + 1), rsrc (source cells), rw (A_src / A_cell)."""
+    nb = [[] for _ in range(g.N)]
+    for a, b in zip(g.eI, g.eJ):
+        nb[a].append(b); nb[b].append(a)
+    sink = np.full(g.N, -1, dtype=np.int64)
+    front = [i for i in range(g.N) if land[i] <= 0.5]
+    sink[front] = front
+    while front:
+        nxt = []
+        for i in front:
+            for j in sorted(nb[i]):
+                if sink[j] < 0:
+                    sink[j] = sink[i]
+                    nxt.append(j)
+        front = nxt
+    src = [i for i in range(g.N) if land[i] > 0.5 and sink[i] >= 0]
+    rstart = np.zeros(g.N + 1, dtype=np.int32)
+    for i in src:
+        rstart[sink[i] + 1] += 1
+    rstart = np.cumsum(rstart).astype(np.int32)
+    rsrc, rw, at = np.zeros(max(len(src), 1), dtype=np.int32), np.zeros(max(len(src), 1)), rstart[:-1].copy()
+    for i in src:
+        t = sink[i]
+        rsrc[at[t]], rw[at[t]] = i, g.areaCell[i] / g.areaCell[t]
+        at[t] += 1
+    return rstart, rsrc, rw
+
+
 class Ocean:
-    def __init__(self, dg, cfg=None, Tsurf=None, state=None):
+    def __init__(self, dg, cfg=None, Tsurf=None, state=None, land=None, c_land=2.0e6):
         """cfg overrides OCEAN; Tsurf (N, K) starts the mixed layer's temperature (from the air case's surface);
-        state = (h, u, T) restores one."""
+        state = (h, u, T) restores one; land (N, 0/1): cells with no water (#84), walled off, their T[0] the ground's
+        temperature with heat capacity c_land."""
         self.dg = dg
         self.cfg = c = dict(OCEAN, **(cfg or {}))
         N, E = dg.N, dg.E
@@ -63,6 +94,14 @@ class Ocean:
         # thin walls (decision #79): at each longitude in walls (degrees), pole to pole, the edges between the cells on its two
         # sides carry no water — a basin's coasts, with no land cells (the air still sees open water there)
         self.wall = wall_mask(g, c['walls']) if len(c['walls']) else None
+        self.c_land = c_land
+        self.land, self.river = None, (NULL, NULL, NULL)
+        if land is not None:
+            m = self.wall if self.wall is not None else np.ones(g.E)
+            m[(land[g.eI] > 0.5) | (land[g.eJ] > 0.5)] = 0.0
+            self.wall = m
+            self.land = cp.asarray(np.asarray(land, dtype=float))
+            self.river = tuple(cp.asarray(a) for a in river_map(g, land))
         self.core = Layers(dg, L, b=self.b, gprime=list(c['gprime']), stress=[0.0] * (L - 1) + [c['bottom_stress']], nu4=nu4,
                            floor=c['hmin'], vmix=c['interface_stress'], thin=c['thin'], wall=self.wall)
         if nu4:
@@ -120,7 +159,8 @@ class Ocean:
 
     def update_cap(self):
         g = self.dg
-        self.k['ocn_cap'](*grid_dims(g.N), (np.int32(g.N), self.h, g.dtype.type(self.cfg['rho'] * self.cfg['cw']), self.cap))
+        self.k['ocn_cap'](*grid_dims(g.N), (np.int32(g.N), self.h, g.dtype.type(self.cfg['rho'] * self.cfg['cw']), self.cap, self._land(),
+                                            g.dtype.type(self.c_land)))
 
     def couple(self, air_h, air_u, c, dt):
         """The wind stress over one air step (exactly, momentum conserved); the kinetic energy it removed is left in
@@ -130,26 +170,30 @@ class Ocean:
                                                   g.eI, g.eJ, R(c), R(self.cfg['rho']), R(dt), self.diss, self.tau_acc,
                                                   self.core.wall if self.core.wall is not None else NULL))
 
+    def _land(self):
+        return self.land if self.land is not None else NULL
+
     def eos(self):
         """The column physics' equation of state as kernel arguments: g, α, α2, β (decision #76)."""
         c, R = self.cfg, self.dg.dtype.type
         return R(GRAV), R(c['alpha']), R(c['alpha2']), R(c['beta'])
 
-    def accumulate(self, dt, evap=None, rain=None, ice=None):
+    def accumulate(self, dt, evap=None, rain=None, ice=None, runoff=None):
         """Pass the air step's sunlight below the mixed layer's base to the layers below, add the fluxes the mixed layer
         keeps to the mixing's sums, and freshen or salt it with rain, evaporation and the sea ice's change (kg/m²/s, kg/m²)."""
         g, c, R = self.dg, self.cfg, self.dg.dtype.type
         if evap is not None:
             self.k['ocn_fresh'](*grid_dims(g.N), (np.int32(g.N), self.h, self.S, evap, rain, ice, self.ice_prev, R(c['S_ref']),
-                                                 R(c['rho']), R(dt), self.fw_acc))
+                                                 R(c['rho']), R(dt), self.fw_acc, self._land()) + self.river
+                                                + (runoff if self.land is not None else NULL,))
         self.k['ocn_pen'](*grid_dims(g.N), (np.int32(g.N), np.int32(self.L), self.h, self.T, self.qocean, self.qsw, R(c['rho'] * c['cw']),
-                                           R(c['sw_R']), R(c['sw_z1']), R(c['sw_z2']), R(dt), self.q_acc, self.sun_acc))
+                                           R(c['sw_R']), R(c['sw_z1']), R(c['sw_z2']), R(dt), self.q_acc, self.sun_acc, self._land()))
 
     def step(self, mix=True):
         """One ocean step: the layers move and T is carried; with mix, the mixed layer then overturns / entrains /
         shoals on the forcing summed since the last mixing (mix_dt)."""
         g, c, i32, R = self.dg, self.cfg, np.int32, self.dg.dtype.type
-        self.k['ocn_overturn'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.T, self.S) + self.eos())
+        self.k['ocn_overturn'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.T, self.S) + self.eos() + (self._land(),))
         if self.conv is not None:
             self._heat(-1.0)
         self.core.step(self.h, self.u, c['dt'], self.nfast, self._Fm)
@@ -173,7 +217,7 @@ class Ocean:
         self.k['ocn_column'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.T, self.S, self.taum, self.q_acc, self.fw_acc,
                                                self.sun_acc) + self.eos() + (R(c['S_ref']), R(ALPHA_REF), R(c['rho']), R(c['cw']),
                                                R(c['m_kt']), R(c['n_kt']), R(c['hmin']), R(c['hmax']), R(c['dTmin']), R(c['sw_R']),
-                                               R(c['sw_z1']), R(c['sw_z2']), R(dt), self.wx))
+                                               R(c['sw_z1']), R(c['sw_z2']), R(dt), self.wx, self._land()))
         self.k['ocn_xch_salt'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.wx, self.h, self.S))
         self.core.exchange(self.wx, self.h, self.u, self.M, self.T)
         self.tau_acc.fill(0)
@@ -185,11 +229,16 @@ class Ocean:
     def heat(self):
         """The ocean's heat content (J, relative to 0 K): ρ_w c_w Σ A h T."""
         A = cp.asarray(self.dg.host.areaCell)
-        return float(cp.sum(A * cp.sum(self.h * self.T, axis=0))) * self.cfg['rho'] * self.cfg['cw']
+        rc = self.cfg['rho'] * self.cfg['cw']
+        if self.land is None:
+            return float(cp.sum(A * cp.sum(self.h * self.T, axis=0))) * rc
+        return float(cp.sum(A * ((1 - self.land) * rc * cp.sum(self.h * self.T, axis=0) + self.land * self.c_land * self.T[0])))
 
     def salt(self):
         """The ocean's salt (kg): ρ_w Σ A h S / 1000."""
         A = cp.asarray(self.dg.host.areaCell)
+        if self.land is not None:
+            A = A * (1 - self.land)
         return float(cp.sum(A * cp.sum(self.h * self.S, axis=0))) * self.cfg['rho'] / 1000.0
 
     def momentum(self):

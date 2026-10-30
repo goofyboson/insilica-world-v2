@@ -8,7 +8,7 @@ import math
 
 import numpy as np
 
-from .constants import GRAV, KAPPA, OMEGA, P0, R_PLANET
+from .constants import CP_DRY, GRAV, KAPPA, OMEGA, P0, R_PLANET
 
 
 def edge_east_north(g):
@@ -261,6 +261,37 @@ PRESETS['coupled'] = dict(PRESETS['aqua'], stress=[0.0, 0.0, 0.0], ocean=dict(su
 # One ocean basin (decision #79): the coupled world with a thin pole-to-pole wall at 180° that the ocean cannot cross, so
 # that gyres, western boundary currents and an east–west tilt of the equatorial thermocline can form; the air is unchanged.
 PRESETS['basin'] = dict(PRESETS['coupled'], ocean=dict(surface_drag=SURFACE_DRAG, walls=(180.0,)))
+
+
+def _over_terrain(g, b):
+    """The aquaplanet's start over terrain b (m): upper interfaces flat, the bottom layer thinned so the air is at rest in
+    hydrostatic balance (g b + θ π(p_s) unchanged), the surface colder by 6.5 K/km, the vapor as the aquaplanet's."""
+    h, _, u, x = aqua(g)
+    h = h.copy()
+    ps0 = h.sum(0) * GRAV
+    pi0 = (ps0 / P0) ** KAPPA
+    ps = P0 * np.maximum(pi0 - GRAV * b / (CP_DRY * x['theta'][2]), 1e-3) ** (1 / KAPPA)
+    h[2] -= (ps0 - ps) / GRAV
+    return h, b, u, dict(x, Ts=x['Ts'] - 6.5e-3 * b)
+
+
+def ridge_height(g):
+    """v1's T3.6 ridge at 35–55° in both hemispheres: 2 km within 5° of longitude 0, 1 km out to 15° (m)."""
+    lat, lon = np.degrees(g.lat), np.degrees(np.angle(np.exp(1j * g.lon)))
+    band = (np.abs(lat) >= 35) & (np.abs(lat) <= 55)
+    return np.where(band & (np.abs(lon) < 5), 2000.0, np.where(band & (np.abs(lon) < 15), 1000.0, 0.0))
+
+
+def continent_height(g):
+    """One land mass within 30° of longitude 0 and 70° of the equator, 500 m high, open sea at the poles (m)."""
+    lat, lon = np.degrees(g.lat), np.degrees(np.angle(np.exp(1j * g.lon)))
+    return np.where((np.abs(lat) < 70) & (np.abs(lon) < 30), 500.0, 0.0)
+
+
+# V2-4a (#84): land. `ridge`: mountains in the westerlies on the slab aquaplanet; `continent`: one land mass in the coupled ocean.
+PRESETS['ridge'] = dict(PRESETS['aqua'], build=lambda g: _over_terrain(g, ridge_height(g)), land=lambda g: ridge_height(g) > 0)
+PRESETS['continent'] = dict(PRESETS['coupled'], build=lambda g: _over_terrain(g, continent_height(g)),
+                            land=lambda g: continent_height(g) > 0)
 PRESETS['rce'] = dict(build=aqua_dry, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True, physics=AIR3), dynamics=False)
 
 

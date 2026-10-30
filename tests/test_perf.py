@@ -8,7 +8,7 @@ from insilica import probe
 from insilica.grid import CACHE_DIR
 
 GATE_NS = 16.0                                   # n = 8 slow step: 2× the plan's worst estimate of 8 ns
-GATE_MODEL_HOUR = {'air': 0.040, 'coupled': 0.050, 'ocean': 0.180}  # s per model hour: moist three-layer air with physics (#61; 0.030 dry, #42), the air over the walled ocean (#82), ocean the plan's estimate (§5)
+GATE_MODEL_HOUR = {'air': 0.040, 'coupled': 0.050, 'land': 0.050, 'ocean': 0.180}  # s per model hour: moist three-layer air with physics (#61; 0.030 dry, #42), the air over the walled ocean (#82), ocean the plan's estimate (§5)
 
 
 @pytest.mark.perf
@@ -26,6 +26,6 @@ def test_perf(record):
     ok = (worst8 <= GATE_NS and all(s['s_per_model_hour'] <= GATE_MODEL_HOUR[s['name']] for s in out['showcase'])
           and all(x['finite'] for x in out['runs'] + out['showcase']))
     record('PERF', f'slow step, ns per layer-edge: {table}. Launch {out["launch_us"]:.1f} µs. {show}',
-           f'n = 8 ≤ {GATE_NS:.0f} ns; air ≤ {GATE_MODEL_HOUR["air"] * 1000:.0f} ms (#61), coupled ≤ {GATE_MODEL_HOUR["coupled"] * 1000:.0f} ms (#82), '
+           f'n = 8 ≤ {GATE_NS:.0f} ns; air ≤ {GATE_MODEL_HOUR["air"] * 1000:.0f} ms (#61), coupled ≤ {GATE_MODEL_HOUR["coupled"] * 1000:.0f} ms (#82), land ≤ {GATE_MODEL_HOUR["land"] * 1000:.0f} ms (#84), '
            f'ocean ≤ {GATE_MODEL_HOUR["ocean"] * 1000:.0f} ms per model hour', ok)
     assert ok

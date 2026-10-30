@@ -1,4 +1,7 @@
 """CONSERVE (exact budgets) and REPRO (bit-reproducibility, save/load, independence of cell numbering)."""
+import os
+import tempfile
+
 import numpy as np
 import cupy as cp
 import pytest
@@ -56,8 +59,50 @@ def test_conserve(record, n, days):
     air_ok = cpl_ok = True
     if n == 4:
         air_ok = conserve_air(record)
-        cpl_ok = conserve_coupled(record)
+        cpl_ok = conserve_coupled(record) and conserve_land(record)
     assert ok and air_ok and cpl_ok
+
+
+def conserve_land(record, days=2):
+    """The land's budgets (V2-4a, `continent` from its cached spin-up, every step): the column's energy ledger with land; the
+    land's water (soil and ice change = rain − evaporation − runoff); the ocean's salt against its fresh water, runoff included;
+    no water across a coast; total energy against TOA; and a save/load continuation."""
+    import sys
+    sys.path.insert(0, str(__import__('pathlib').Path(__file__).parent))
+    from test_climate import coupled_spun
+    w = coupled_spun(4, 'continent')
+    g, sea = w.grid, w.sea
+    A, At = cp.asarray(g.areaCell), float(np.sum(g.areaCell))
+    rho, Sr, land = sea.cfg['rho'], sea.cfg['S_ref'], w.land
+    water = lambda: float(cp.sum(A * land * (w.soil + w.ice)))
+    icesea = lambda: float(cp.sum(A * (1 - land) * w.ice))
+    salt = sea.salt
+    W0, I0, S0, flux_l, fw, res, col = water(), icesea(), salt(), 0.0, 0.0, 0.0, 0.0
+    for _ in range(int(days * 86400 / w.dt)):
+        e0 = w.energy()
+        w.step(1, graph=False)
+        p = w.physics
+        toa = float(cp.sum(A * (p.sw_abs - p.olr))) * w.dt
+        res += w.energy() - e0 - toa
+        col = max(col, abs(float(cp.sum(A * p.stored)) - toa) / abs(e0))
+        flux_l += float(cp.sum(A * land * (p.rain - p.evap - p.runoff))) * w.dt
+        fw += float(cp.sum(A * ((1 - land) * (p.rain - p.evap) + land * p.runoff))) * w.dt
+    fw -= icesea() - I0
+    wland = abs(water() - W0 - flux_l) / W0
+    sflux = abs((salt() - S0) + Sr * fw / 1000.0) / S0
+    coast = float(cp.abs(sea.u[:, cp.asarray(sea.wall == 0)]).max())
+    energy = res / At / (days * 86400)
+    f = os.path.join(tempfile.gettempdir(), f'land{os.getpid()}.iw2')
+    w.save(f)
+    r = World.load(f)
+    w.step(48); r.step(48)
+    same = w.state_hash() == r.state_hash()
+    os.remove(f)
+    ok = col <= 1e-13 and wland <= 1e-13 and sflux <= 1e-13 and coast == 0 and abs(energy) <= 0.1 and same
+    record('CONSERVE land', f'continent, {days} d after the spin-up: column energy {fmt(col)} of the energy stored; land water {fmt(wland)}; salt against fresh water '
+           f'and runoff {fmt(sflux)}; fastest water across a coast {coast:.1f} m/s; energy change − TOA {energy:+.4f} W/m²; reload continues {"identically" if same else "DIFFERENTLY"}',
+           '≤ 1e-13; ≤ 1e-13; ≤ 1e-13; 0; |energy − TOA| ≤ 0.1 W/m²; identical', ok)
+    return ok
 
 
 def conserve_coupled(record, days=2):

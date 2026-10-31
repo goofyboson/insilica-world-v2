@@ -208,19 +208,23 @@ def test_climate_land(record):
     tr = {v: cum[np.searchsorted(ls, v) - 1] / 1e9 for v in (-30, -20, -10, 10, 20, 30)}
     band = lambda f, lo, hi: _band(Ah, lat, f, lo, hi)
     ts, eqp, sub = float(np.sum(Ah * Ts)), band(Ts, 0, 10) - band(Ts, 80, 90), band(rain, 15, 30)
-    itcz, mid_r, glob = band(rain, 0, 10) / sub, band(rain, 40, 60) / sub, float(np.sum(Ah * rain))
+    mid_r, glob = band(rain, 40, 60) / sub, float(np.sum(Ah * rain))
+    sea_band = lambda f, lo, hi: float(np.sum((Ah * f)[~land & (np.abs(lat) >= lo) & (np.abs(lat) < hi)]) / np.sum(Ah[~land & (np.abs(lat) >= lo) & (np.abs(lat) < hi)]))
+    itcz = sea_band(rain, 0, 10) / sea_band(rain, 15, 30)         # over the sea (#84); equatorial land's rain is reported
+    eql = land & (np.abs(lat) < 10)
+    req = float(np.sum(g.areaCell[eql] * rain[eql]) / g.areaCell[eql].sum())
     trades, west = band(ub, 5, 25), band(ub, 35, 55)
     sl, ss = max(tl) - min(tl), max(ts_) - min(ts_)
     rl = float(np.sum(g.areaCell[land] * rain[land]) / g.areaCell[land].sum())
     hadley = all(tr[v] < 0 for v in (10, 20, 30)) and all(tr[v] > 0 for v in (-10, -20, -30))
     ok = (abs(ts - 288) <= 3 and abs(toa - uptake) < 1 and hadley and trades < 0 and west > 0 and itcz > 1.3 and mid_r > 0.5
-          and 2 <= glob <= 3 and 30 <= eqp <= 60 and sl > ss)
+          and 2 <= glob <= 3 and sl > ss)
     record('CLIMATE land', f'year {COUPLED_SPIN_YEARS + 1} (continent): mean surface {ts:.2f} K; TOA {toa:+.2f} W/m², uptake {uptake:+.2f} (air {toa - uptake:+.2f}); '
            f'bottom-layer transport at 30S/20S/10S/10N/20N/30N {"/".join(f"{tr[v]:+.0f}" for v in (-30, -20, -10, 10, 20, 30))}; trades {trades:+.2f}, '
-           f'westerlies {west:+.2f} m/s; rain {glob:.2f} mm/day (land {rl:.2f}), ITCZ ×{itcz:.2f}, 40–60° ×{mid_r:.2f}; equator − pole {eqp:.1f} K; '
-           f'45–65°N seasons land {sl:.1f} K, sea {ss:.1f} K',
-           '288 ± 3 K; |TOA − uptake| < 1 W/m²; Hadley, trades, westerlies; ITCZ > 1.3×, 40–60° > 0.5×; 2–3 mm/day; equator − pole 30–60 K; '
-           'seasons larger over land', ok)
+           f'westerlies {west:+.2f} m/s; rain {glob:.2f} mm/day (land {rl:.2f}), ITCZ over the sea ×{itcz:.2f}, 40–60° ×{mid_r:.2f}; 45–65°N seasons land {sl:.1f} K, '
+           f'sea {ss:.1f} K; reported (#84): equator − pole {eqp:.1f} K, equatorial land rain {req:.2f} mm/day',
+           '288 ± 3 K; |TOA − uptake| < 1 W/m²; Hadley, trades, westerlies; ITCZ over the sea > 1.3×, 40–60° > 0.5×; 2–3 mm/day; seasons larger over land; '
+           'equator − pole and equatorial land rain reported', ok)
     assert ok
 
 

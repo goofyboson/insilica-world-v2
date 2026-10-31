@@ -65,6 +65,7 @@ def main():
     for f in RESULTS.glob('*.jsonl'):
         rows += [json.loads(l) for l in f.read_text(encoding='utf8').splitlines() if l.strip()]
     rows.sort(key=sort_key)
+    sys.stdout.reconfigure(encoding='utf8', errors='replace')     # redirected on Windows it would be cp1252
     passed = sum(r['passed'] for r in rows)
     print()
     print(f'{"test":<16} {"pass":<5} value  [threshold]')

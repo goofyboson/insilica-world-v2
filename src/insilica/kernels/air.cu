@@ -21,7 +21,7 @@ struct Par {
   real S0, asw, tau0, mu_ref, eps_s, h_sens, u0, alb, c_slab, mu_bl, theta_star, floor_, sigma, grav, cp, kappa, p0;
   real tilt, year_s, day_s, tau_lin, theta_star2;
   real moist, Lv, Lf, Tf, k_evap, tau_conv, alb_ice, rho_ice, ice_cover, k_ice, Rv, sat_layer, sw_tau;
-  real alb_dry, alb_wet, soil_beta;
+  real alb_dry, alb_wet, soil_beta, k_inf, pond_cover;
 };
 
 // The parameters arrive as an array in this order (atmosphere.PAR_ORDER).
@@ -32,7 +32,7 @@ __device__ Par unpack(const real* a) {
   P.kappa = a[15]; P.p0 = a[16]; P.tilt = a[17]; P.year_s = a[18]; P.day_s = a[19]; P.tau_lin = a[20]; P.theta_star2 = a[21];
   P.moist = a[22]; P.Lv = a[23]; P.Lf = a[24]; P.Tf = a[25]; P.k_evap = a[26]; P.tau_conv = a[27]; P.alb_ice = a[28];
   P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32]; P.sat_layer = a[33]; P.sw_tau = a[34];
-  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37];
+  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39];
   return P;
 }
 
@@ -257,14 +257,15 @@ __device__ __forceinline__ real tau_p(real p, real ps, const Par& P) {
 // (3 x N, kg/m^2/s: the rain from condensation in the layers above the bottom one, in the bottom one, and convection).
 // qv and ice are read and written only when moist. On land (land[i] > 0.5, moist air; decision #84) the surface has the heat
 // capacity cap and the albedo of its soil's wetness; it evaporates from the soil bucket (soil, capacity soilcap; kg/m^2),
-// at the full rate above soil_beta of capacity (Manabe's bucket); rain fills the bucket, or falls as snow on ground below
-// freezing (its latent heat to the ground) and lies as ice, whose melt fills the bucket; ground does not freeze into ice
-// by itself, as sea water does. What the bucket cannot hold is runoff (kg/m^2/s).
+// at the full rate above soil_beta of capacity (Manabe's bucket), and from surface water (pond, kg/m^2; decision #85), which
+// covers pond / pond_cover of the cell at the sea's albedo and evaporates at the full rate. Rain and the ice's melt reach the
+// pond, or rain falls as snow on ground below freezing (its latent heat to the ground) and lies as ice; a pond freezes on
+// such ground; otherwise it soaks in at k_inf (1 - soil / soilcap). What the bucket cannot hold comes back to the pond.
 extern "C" __global__ void air_column(int N, int L, const real* par, int mode, const real* t, const real* insol, const real* pos,
                                       const real* uabs, real* mu_in, real* theta, real* qv, real* Ts, real* ice, real dt,
                                       real* wx, real* olr, real* sw_abs, real* stored, real* rain, real* evap, real* conv,
                                       real* tsurf, real* rainp, real* dgo, const real* cap, real* qocean,
-                                      real* qsw, const real* land, const real* soilcap, real* soil, real* runoff) {
+                                      real* qsw, const real* land, const real* soilcap, real* soil, real* pond) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= N) return;
   const Par P = unpack(par);
@@ -300,7 +301,9 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
   const bool isl = moist && land && land[i] > (real)0.5;
   const real ice0 = m_ice;
   real wet = isl ? soil[i] : (real)0;
-  const real alb0 = isl ? P.alb_dry + (P.alb_wet - P.alb_dry) * wet / soilcap[i] : P.alb;
+  real pw = isl ? pond[i] : (real)0;
+  const real pcov = isl && pw > 0 ? fmin((real)1, pw / P.pond_cover) : (real)0;
+  const real alb0 = isl ? pcov * P.alb + (1 - pcov) * (P.alb_dry + (P.alb_wet - P.alb_dry) * wet / soilcap[i]) : P.alb;
   const real alb = fice * P.alb_ice + (1 - fice) * alb0;
   const real toAir = P.asw * (mt / P.mu_ref) * I;
   if (P.sw_tau > 1) {                  // split like the vapor part (s^4) of the longwave profile (decision #59)
@@ -384,8 +387,13 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
     E = def > 0 ? P.k_evap * (1 + uabs[i] / P.u0) * def * (1 - fice) : (real)0;   // kg/m^2/s, open water only
     if (isl) {
       const real full = P.soil_beta * soilcap[i];
-      if (wet < full) E *= wet / full;
-      if (E * dt > wet) E = wet / dt;
+      real Es = (1 - pcov) * E, Ep = pcov * E;
+      if (wet < full) Es *= wet / full;
+      if (Es * dt > wet) Es = wet / dt;
+      if (Ep * dt > pw) Ep = pw / dt;
+      E = Es + Ep;
+      wet -= Es * dt;
+      pw -= Ep * dt;
     }
     for (int k = 0; k < L; k++) q[k] += E * dt * wbl[k] / mb / mu[k];
   }
@@ -484,15 +492,26 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
   for (int j = 0; j + 1 < L; j++) wx[(size_t)j * N + i] = wxo[j];
   rain[i] = R / dt;
   if (isl) {
-    wet += (ice0 - m_ice) - E * dt;                             // the ice's melt, less the evaporation
+    pw += ice0 - m_ice;                                         // the ice's melt
     if (Ts[i] < P.Tf) {                                         // snow: its freezing warms the ground
       m_ice += R;
-      ice[i] = m_ice;
       Ts[i] += P.Lf * R / Cw;
-    } else wet += R;
-    const real over = wet > soilcap[i] ? wet - soilcap[i] : (real)0;
-    soil[i] = wet - over;
-    runoff[i] = over / dt;
+    } else pw += R;
+    if (Ts[i] < P.Tf && pw > 0) {                               // the pond freezes, warming the ground up to freezing
+      const real room = (P.Tf - Ts[i]) * Cw / P.Lf, m = pw < room ? pw : room;
+      pw -= m;
+      m_ice += m;
+      Ts[i] += P.Lf * m / Cw;
+    }
+    ice[i] = m_ice;
+    if (Ts[i] >= P.Tf) {                                        // soaking in; frozen ground takes none
+      const real room = P.k_inf * dt * (1 - wet / soilcap[i]);
+      const real m = pw < room ? pw : room;
+      if (m > 0) { pw -= m; wet += m; }
+    }
+    if (wet > soilcap[i]) { pw += wet - soilcap[i]; wet = soilcap[i]; }   // a spring
+    soil[i] = wet;
+    pond[i] = pw;
   }
   if (dgo) {
     int r = 0;

@@ -23,12 +23,13 @@ from .gpu import DeviceGrid, dsum, grid_dims, source_hash
 from .io import save as savefile
 from .atmosphere import AirPhysics
 from .constants import CP_DRY, GRAV, KAPPA, P0
+from .land import LandWater
 from .layers import DIV_DAMP, Layers
 from .transport import BETA, Transport
 
 THIN_WIND = 100.0     # kg/m² (~1 hPa): below it an air layer takes its neighbours' wind, fully at the floor (#83)
 FIELDS = ('h', 'z', 'eta', 'psi', 'speed', 'vort', 'theta', 'T', 'Ts', 'Tsurf', 'ps', 'q', 'rh', 'rain', 'evap', 'ice',
-          'sst', 'sss', 'mld', 'tthermo', 'tdeep', 'current', 'land', 'elev', 'soil')
+          'sst', 'sss', 'mld', 'tthermo', 'tdeep', 'current', 'land', 'elev', 'soil', 'pond')
 # z: height of the layer's top; eta: the free surface; theta, T, Ts, ps: air (potential temperature, temperature,
 # surface temperature, surface pressure in hPa); q, rh, rain, evap, ice: moist air (specific humidity in g/kg, relative
 # humidity, rain and evaporation in mm/day, sea ice in m, Tsurf the radiating surface: the ice skin over ice);
@@ -108,13 +109,16 @@ class World:
             self.moist = False
         # Land (V2-4a, #84): a mask from the preset, with a soil bucket whose capacity grows with height (v1's rule)
         land = spec['land'](self.grid) if spec.get('land') is not None else None
-        self.land = self.soil = self.soilcap = self.cap = None
+        self.land = self.soil = self.soilcap = self.cap = self.pond = self.routing = self.mouth = None
         if land is not None:
             p = self.physics.p
             self.land = cp.asarray(np.asarray(land, dtype=float))
             self.soilcap = cp.asarray(p['soil_base'] + p['soil_per_m'] * np.maximum(cp.asarray(b).get(), 0.0))
             self.soil = 0.5 * self.soilcap
-            self.STATE = self.STATE + ('soil',)
+            self.pond = cp.zeros(self.grid.N)
+            self.routing = LandWater(self.dg, self.b, self.land, self.soilcap, self.pond, self.soil, self.ice, rho_ice=p['rho_ice'])
+            self.mouth = self.routing.mouth
+            self.STATE = self.STATE + ('soil', 'pond', 'mouth')
             self.cap = self.land * p['c_land'] + (1 - self.land) * p['c_slab']   # (the ocean's own when coupled)
         # The ocean under the air (V2-3): its mixed layer's temperature is the air's surface temperature
         self.sea = None
@@ -183,13 +187,15 @@ class World:
                                 cap=self.sea.cap if self.sea is not None else self.cap,
                                 qocean=self.sea.qocean if self.sea is not None else None,
                                 qsw=self.sea.qsw if self.sea is not None else None,
-                                land=self.land, soilcap=self.soilcap, soil=self.soil)
+                                land=self.land, soilcap=self.soilcap, soil=self.soil, pond=self.pond)
             if self.sea is not None:
-                self.sea.accumulate(self.dt, self.physics.evap, self.physics.rain, self.ice, self.physics.runoff)
+                self.sea.accumulate(self.dt, self.physics.evap, self.physics.rain, self.ice, self.mouth)
             if self.L > 1:
                 self.core.exchange(self.physics.wx, self.h, self.u, self.M, self.psi, theta=self.theta)
         if kind:
             self.sea.step(mix=kind == 2)
+        if self.routing is not None and (kind or self.sea is None):     # on the ocean's step (1 h), or every step
+            self.routing.step(self.sea.cfg['dt'] if self.sea is not None else self.dt)
 
     def step(self, k=1, graph=True):
         """k ticks. The first tick runs directly (and compiles the kernels); after that the tick is captured once
@@ -269,7 +275,7 @@ class World:
             return base
         return (base + ['theta', 'T', 'Ts', 'ps'] + (['Tsurf', 'q', 'rh', 'rain', 'evap', 'ice'] if self.moist else [])
                 + (['sst', 'sss', 'mld', 'tthermo', 'tdeep', 'current'] if self.sea is not None else [])
-                + (['land', 'elev', 'soil'] if self.land is not None else []))
+                + (['land', 'elev', 'soil', 'pond'] if self.land is not None else []))
 
     def field(self, name, layer=0):
         """A cell field (CuPy, float64) for the viewer."""
@@ -295,6 +301,8 @@ class World:
             return self.b
         if name == 'soil':
             return self.soil
+        if name == 'pond':
+            return self.pond
         if name == 'sss':
             return self.sea.S[0]
         if name == 'tthermo':

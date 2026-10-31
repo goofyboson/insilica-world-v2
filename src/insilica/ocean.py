@@ -44,36 +44,6 @@ def wall_mask(g, walls):
     return m
 
 
-def river_map(g, land):
-    """Where each land cell's runoff enters the sea (#84, until rivers, V2-4b): the nearest ocean cell by grid steps, breadth
-    first from the coasts in cell order. As CSR per ocean cell: rstart (N + 1), rsrc (source cells), rw (A_src / A_cell)."""
-    nb = [[] for _ in range(g.N)]
-    for a, b in zip(g.eI, g.eJ):
-        nb[a].append(b); nb[b].append(a)
-    sink = np.full(g.N, -1, dtype=np.int64)
-    front = [i for i in range(g.N) if land[i] <= 0.5]
-    sink[front] = front
-    while front:
-        nxt = []
-        for i in front:
-            for j in sorted(nb[i]):
-                if sink[j] < 0:
-                    sink[j] = sink[i]
-                    nxt.append(j)
-        front = nxt
-    src = [i for i in range(g.N) if land[i] > 0.5 and sink[i] >= 0]
-    rstart = np.zeros(g.N + 1, dtype=np.int32)
-    for i in src:
-        rstart[sink[i] + 1] += 1
-    rstart = np.cumsum(rstart).astype(np.int32)
-    rsrc, rw, at = np.zeros(max(len(src), 1), dtype=np.int32), np.zeros(max(len(src), 1)), rstart[:-1].copy()
-    for i in src:
-        t = sink[i]
-        rsrc[at[t]], rw[at[t]] = i, g.areaCell[i] / g.areaCell[t]
-        at[t] += 1
-    return rstart, rsrc, rw
-
-
 class Ocean:
     def __init__(self, dg, cfg=None, Tsurf=None, state=None, land=None, c_land=2.0e6):
         """cfg overrides OCEAN; Tsurf (N, K) starts the mixed layer's temperature (from the air case's surface);
@@ -95,13 +65,12 @@ class Ocean:
         # sides carry no water — a basin's coasts, with no land cells (the air still sees open water there)
         self.wall = wall_mask(g, c['walls']) if len(c['walls']) else None
         self.c_land = c_land
-        self.land, self.river = None, (NULL, NULL, NULL)
+        self.land = None
         if land is not None:
             m = self.wall if self.wall is not None else np.ones(g.E)
             m[(land[g.eI] > 0.5) | (land[g.eJ] > 0.5)] = 0.0
             self.wall = m
             self.land = cp.asarray(np.asarray(land, dtype=float))
-            self.river = tuple(cp.asarray(a) for a in river_map(g, land))
         self.core = Layers(dg, L, b=self.b, gprime=list(c['gprime']), stress=[0.0] * (L - 1) + [c['bottom_stress']], nu4=nu4,
                            floor=c['hmin'], vmix=c['interface_stress'], thin=c['thin'], wall=self.wall)
         if nu4:
@@ -178,14 +147,13 @@ class Ocean:
         c, R = self.cfg, self.dg.dtype.type
         return R(GRAV), R(c['alpha']), R(c['alpha2']), R(c['beta'])
 
-    def accumulate(self, dt, evap=None, rain=None, ice=None, runoff=None):
+    def accumulate(self, dt, evap=None, rain=None, ice=None, mouth=None):
         """Pass the air step's sunlight below the mixed layer's base to the layers below, add the fluxes the mixed layer
         keeps to the mixing's sums, and freshen or salt it with rain, evaporation and the sea ice's change (kg/m²/s, kg/m²)."""
         g, c, R = self.dg, self.cfg, self.dg.dtype.type
         if evap is not None:
             self.k['ocn_fresh'](*grid_dims(g.N), (np.int32(g.N), self.h, self.S, evap, rain, ice, self.ice_prev, R(c['S_ref']),
-                                                 R(c['rho']), R(dt), self.fw_acc, self._land()) + self.river
-                                                + (runoff if self.land is not None else NULL,))
+                                                 R(c['rho']), R(dt), self.fw_acc, self._land(), mouth if mouth is not None else NULL))
         self.k['ocn_pen'](*grid_dims(g.N), (np.int32(g.N), np.int32(self.L), self.h, self.T, self.qocean, self.qsw, R(c['rho'] * c['cw']),
                                            R(c['sw_R']), R(c['sw_z1']), R(c['sw_z2']), R(dt), self.q_acc, self.sun_acc, self._land()))
 

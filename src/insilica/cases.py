@@ -288,10 +288,22 @@ def continent_height(g):
     return np.where((np.abs(lat) < 70) & (np.abs(lon) < 30), 500.0, 0.0)
 
 
+def relief_height(g):
+    """V2-4b's land (#85): a continent falling from 1500 m in the east to 150 m at its west coast, with a closed basin near 20°N,
+    and high polar land north of 68° rising to 1800 m at the pole (m)."""
+    lat, lon = np.degrees(g.lat), np.degrees(np.angle(np.exp(1j * g.lon)))
+    main = (np.abs(lon) < 35) & (lat > -55) & (lat < 60)
+    h = np.where(main, 150.0 + 1350.0 * (lon + 35.0) / 70.0, 0.0)
+    r = np.hypot(lon + 5.0, lat - 20.0)
+    h = np.where(main & (r < 12.0), np.minimum(h, 100.0 + 75.0 * r), h)
+    return np.where(lat > 68.0, 300.0 + 1500.0 * (lat - 68.0) / 22.0, h)
+
+
 # V2-4a (#84): land. `ridge`: mountains in the westerlies on the slab aquaplanet; `continent`: one land mass in the coupled ocean.
 PRESETS['ridge'] = dict(PRESETS['aqua'], build=lambda g: _over_terrain(g, ridge_height(g)), land=lambda g: ridge_height(g) > 0)
 PRESETS['continent'] = dict(PRESETS['coupled'], build=lambda g: _over_terrain(g, continent_height(g)),
                             land=lambda g: continent_height(g) > 0)
+PRESETS['relief'] = dict(PRESETS['coupled'], build=lambda g: _over_terrain(g, relief_height(g)), land=lambda g: relief_height(g) > 0)
 PRESETS['rce'] = dict(build=aqua_dry, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True, physics=AIR3), dynamics=False)
 
 

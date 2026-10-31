@@ -28,7 +28,7 @@ from .transport import BETA, Transport
 
 THIN_WIND = 100.0     # kg/m² (~1 hPa): below it an air layer takes its neighbours' wind, fully at the floor (#83)
 FIELDS = ('h', 'z', 'eta', 'psi', 'speed', 'vort', 'theta', 'T', 'Ts', 'Tsurf', 'ps', 'q', 'rh', 'rain', 'evap', 'ice',
-          'sst', 'sss', 'mld', 'tthermo', 'tdeep', 'current')
+          'sst', 'sss', 'mld', 'tthermo', 'tdeep', 'current', 'land', 'elev', 'soil')
 # z: height of the layer's top; eta: the free surface; theta, T, Ts, ps: air (potential temperature, temperature,
 # surface temperature, surface pressure in hPa); q, rh, rain, evap, ice: moist air (specific humidity in g/kg, relative
 # humidity, rain and evaporation in mm/day, sea ice in m, Tsurf the radiating surface: the ice skin over ice);
@@ -106,13 +106,24 @@ class World:
                 self.STATE = self.STATE + ('q', 'ice')
         else:
             self.moist = False
+        # Land (V2-4a, #84): a mask from the preset, with a soil bucket whose capacity grows with height (v1's rule)
+        land = spec['land'](self.grid) if spec.get('land') is not None else None
+        self.land = self.soil = self.soilcap = self.cap = None
+        if land is not None:
+            p = self.physics.p
+            self.land = cp.asarray(np.asarray(land, dtype=float))
+            self.soilcap = cp.asarray(p['soil_base'] + p['soil_per_m'] * np.maximum(cp.asarray(b).get(), 0.0))
+            self.soil = 0.5 * self.soilcap
+            self.STATE = self.STATE + ('soil',)
+            self.cap = self.land * p['c_land'] + (1 - self.land) * p['c_slab']   # (the ocean's own when coupled)
         # The ocean under the air (V2-3): its mixed layer's temperature is the air's surface temperature
         self.sea = None
         if spec.get('ocean') is not None:
             from .ocean import Ocean
             ocfg = dict(spec['ocean'], **P.get('ocean', {}))
             self.surface_drag = ocfg.pop('surface_drag')
-            self.sea = Ocean(self.dg, ocfg, Tsurf=extra['Ts'], state=extra.get('ocean'))
+            self.sea = Ocean(self.dg, ocfg, Tsurf=extra['Ts'], state=extra.get('ocean'), land=land,
+                             c_land=self.physics.p['c_land'])
             ratio = self.sea.cfg['dt'] / self.dt
             if abs(ratio - round(ratio)) > 1e-9 or round(ratio) < 1:
                 raise ValueError(f'the ocean step {self.sea.cfg["dt"]} s must be a whole number of air steps ({self.dt} s)')
@@ -169,11 +180,12 @@ class World:
         if self.air:
             self.physics.column(self.h, self.theta, self.Ts, self.u, self.time, self.dt,
                                 q=self.q if self.moist else None, ice=self.ice if self.moist else None,
-                                cap=self.sea.cap if self.sea is not None else None,
+                                cap=self.sea.cap if self.sea is not None else self.cap,
                                 qocean=self.sea.qocean if self.sea is not None else None,
-                                qsw=self.sea.qsw if self.sea is not None else None)
+                                qsw=self.sea.qsw if self.sea is not None else None,
+                                land=self.land, soilcap=self.soilcap, soil=self.soil)
             if self.sea is not None:
-                self.sea.accumulate(self.dt, self.physics.evap, self.physics.rain, self.ice)
+                self.sea.accumulate(self.dt, self.physics.evap, self.physics.rain, self.ice, self.physics.runoff)
             if self.L > 1:
                 self.core.exchange(self.physics.wx, self.h, self.u, self.M, self.psi, theta=self.theta)
         if kind:
@@ -238,7 +250,12 @@ class World:
         if self.air:
             A = cp.asarray(self.grid.areaCell)
             e = self.core.energy(self.h, self.u, self.theta)
-            e += self.sea.heat() if self.sea is not None else float(cp.sum(self.Ts * A)) * self.physics.p['c_slab']
+            if self.sea is not None:
+                e += self.sea.heat()
+            elif self.cap is not None:
+                e += float(cp.sum(self.Ts * A * self.cap))
+            else:
+                e += float(cp.sum(self.Ts * A)) * self.physics.p['c_slab']
             if self.moist:
                 e += (self.physics.p['Lv'] * float(cp.sum(A * cp.sum(self.h * self.q, axis=0)))
                       - self.physics.p['Lf'] * float(cp.sum(A * self.ice)))
@@ -251,7 +268,8 @@ class World:
         if not self.air:
             return base
         return (base + ['theta', 'T', 'Ts', 'ps'] + (['Tsurf', 'q', 'rh', 'rain', 'evap', 'ice'] if self.moist else [])
-                + (['sst', 'sss', 'mld', 'tthermo', 'tdeep', 'current'] if self.sea is not None else []))
+                + (['sst', 'sss', 'mld', 'tthermo', 'tdeep', 'current'] if self.sea is not None else [])
+                + (['land', 'elev', 'soil'] if self.land is not None else []))
 
     def field(self, name, layer=0):
         """A cell field (CuPy, float64) for the viewer."""
@@ -271,6 +289,12 @@ class World:
             return self.q[layer] * 1000.0                          # g/kg
         if name == 'sst':
             return self.sea.T[0] - 273.15
+        if name == 'land':
+            return self.land
+        if name == 'elev':
+            return self.b
+        if name == 'soil':
+            return self.soil
         if name == 'sss':
             return self.sea.S[0]
         if name == 'tthermo':

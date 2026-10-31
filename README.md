@@ -12,7 +12,13 @@ A planet simulator with two moving ocean layers and three moving air layers, run
 
 ## Current status
 
-**V2-3 Ocean closed 2026-10-28 (36/36 with PERF), merged to `main`. Next: V2-4 Land and coasts.** Three ocean layers
+**V2-4a Land closed 2026-10-31 (40/40 with PERF). Next: V2-4b (rivers, lakes, infiltration, seepage, snow, ice-sheet flow).**
+Land of any shape over the coupled ocean: ground heat, soil bucket, snow, runoff to the coast and terrain under the air. An
+ocean gyre intensifies in the west (×4.2, interior within 14% of Sverdrup), land's 45–65°N seasons reach 36 K against 8 K at
+sea, and every land budget closes. Land at n = 6 costs 44.7 ms per model hour. **Two known shortfalls stay open** (SPEC #84):
+the rain shadow is backwards (×0.57 against a target above 2×), and equatorial land is nearly dry (about 0.4 mm/day against
+2.8 at sea), not fixed by albedo, height or two changes to convection. Earlier:
+**V2-3 Ocean closed 2026-10-28 (36/36 with PERF).** Three ocean layers
 (mixed layer, thermocline, abyss) with fixed density steps, temperature and salinity under the three air layers:
 Kraus–Turner mixing with sunlight counted where it is absorbed, convection, sea ice with a polar halocline, exact wind
 stress. A `basin` preset (a thin pole-to-pole wall) gives gyres that carry ~0.5 PW poleward and an east–west tilt of the
@@ -44,7 +50,8 @@ bug carried over from v1; V2-0 ported v1's grid and solver to 64-bit CUDA.
 | V2-2a | Dry atmosphere: two air layers with an isentropic interface, radiation, slab surface, RCE and Held–Suarez | ✅ Done (32/32) |
 | V2-2b | Moist atmosphere: three air layers, vapor, evaporation, condensation, moist convection, rain, sea ice; climate and weather tests | ✅ Done (34/34) |
 | V2-3 | Ocean: three layers, wind stress, thermocline, entrainment, salinity, sea ice; aquaplanet and one basin | ✅ Done (36/36) |
-| V2-4 | Land and coasts: gyres and boundary currents, surface water, soil, ice sheets, terrain | ⏳ Next |
+| V2-4a | Land: masks, coasts, ground heat, soil bucket, snow, runoff to the coast, terrain; gyres; two known shortfalls (SPEC #84) | ✅ Done (40/40) |
+| V2-4b | Rivers, lakes, infiltration, seepage, snow, ice-sheet flow | ⏳ Next |
 | V2-5 | Two resolutions: air n = 6 coupled to ocean n = 8 | ⏳ Planned |
 | V2-6 | Moon and tides, geology, UI polish | ⏳ Planned |
 | V2-7 | Optimization and speedup: ensembles in one launch, 32-bit where safe, mixed time steps, faster spin-up; then approximations (reduced model, learned emulator) against the 64-bit reference ([plan §7.1](docs/v2-plan.md)) | ⏳ Planned |

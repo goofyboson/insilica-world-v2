@@ -107,8 +107,12 @@ __device__ __forceinline__ real kt_energy(real h, real us3, real B, real m_kt, r
 extern "C" __global__ void ocn_column(int N, int L, const real* h, real* T, real* S, const real* taum, const real* qns,
                                       const real* qfw, const real* qsun, real grav, real alpha, real alpha2, real beta, real S_ref,
                                       real alpha_ref, real rho_w, real cw, real m_kt, real n_kt, real hmin, real hmax, real dTmin,
-                                      real R, real z1, real z2, real dt, real* wx) {
+                                      real R, real z1, real z2, real dt, real* wx, const real* land) {
   LOOP1(i, N)
+  if (land && land[i] > (real)0.5) {                            // no water here (decision #84)
+    for (int k = 0; k < L - 1; k++) wx[(size_t)k * N + i] = 0;
+    return;
+  }
   const Eos q = {grav, alpha, alpha2, beta};
   adjust(N, L, i, h, T, S, q);
   const real h0 = h[i], h1 = h[(size_t)N + i];
@@ -144,19 +148,26 @@ extern "C" __global__ void ocn_column(int N, int L, const real* h, real* T, real
 // Convective adjustment before every ocean step (decision #66): heat mixed downward wherever surface cooling made a layer
 // colder than the one below (with T-dependent density, left for the daily mixing, g' went negative between mixings).
 extern "C" __global__ void ocn_overturn(int N, int L, const real* h, real* T, real* S, real grav, real alpha, real alpha2,
-                                        real beta) {
+                                        real beta, const real* land) {
   LOOP1(i, N)
+  if (land && land[i] > (real)0.5) return;
   const Eos q = {grav, alpha, alpha2, beta};
   adjust(N, L, i, h, T, S, q);
 }
 
 // Fresh water into the mixed layer every air step (decision #76): rain less evaporation, and less the water frozen into
 // sea ice (ice melting gives it back), as a virtual salt flux at the reference salinity: dS0 = -S_ref fw / (rho_w h0).
-// Salt is conserved up to S_ref times the water the air and the ice store. fw_acc sums fw (kg/m^2) for the mixing.
+// Salt is conserved up to S_ref times the water the air, the ice and the land store. fw_acc sums fw (kg/m^2) for the mixing.
+// A coast also receives the runoff of the land cells that drain to it (decision #84; rstart, rsrc, rw: for each ocean cell
+// its sources and their area ratios).
 extern "C" __global__ void ocn_fresh(int N, const real* h, real* S, const real* evap, const real* rain, const real* ice,
-                                     real* ice_prev, real S_ref, real rho_w, real dt, real* fw_acc) {
+                                     real* ice_prev, real S_ref, real rho_w, real dt, real* fw_acc, const real* land,
+                                     const int* rstart, const int* rsrc, const real* rw, const real* runoff) {
   LOOP1(i, N)
-  const real fw = (rain[i] - evap[i]) * dt - (ice[i] - ice_prev[i]);
+  if (land && land[i] > (real)0.5) return;
+  real fw = (rain[i] - evap[i]) * dt - (ice[i] - ice_prev[i]);
+  if (land)
+    for (int m = rstart[i]; m < rstart[i + 1]; m++) fw += rw[m] * runoff[rsrc[m]] * dt;
   S[i] -= S_ref * fw / (rho_w * h[i]);
   ice_prev[i] = ice[i];
   fw_acc[i] += fw;
@@ -181,8 +192,9 @@ extern "C" __global__ void ocn_xch_salt(int N, int L, const real* wx, const real
 // moved, not made. qns_acc and sun_acc sum the mixed layer's non-solar flux and the sunlight entering the water for the
 // mixing (decision #74).
 extern "C" __global__ void ocn_pen(int N, int L, const real* h, real* T, const real* qocean, const real* qsw, real rho_cw,
-                                   real R, real z1, real z2, real dt, real* qns_acc, real* sun_acc) {
+                                   real R, real z1, real z2, real dt, real* qns_acc, real* sun_acc, const real* land) {
   LOOP1(i, N)
+  if (land && land[i] > (real)0.5) return;
   real z = h[i];
   real f = sun_f(z, R, z1, z2);
   const real pen = qsw[i] * f;
@@ -208,7 +220,7 @@ extern "C" __global__ void ocn_heat(int N, int L, const real* h, const real* T, 
 }
 
 // The mixed layer's heat capacity per cell for the air's surface physics: rho_w c_w h0 (J/m^2/K).
-extern "C" __global__ void ocn_cap(int N, const real* h, real rho_cw, real* cap) {
+extern "C" __global__ void ocn_cap(int N, const real* h, real rho_cw, real* cap, const real* land, real c_land) {
   LOOP1(i, N)
-  cap[i] = rho_cw * h[i];
+  cap[i] = land && land[i] > (real)0.5 ? c_land : rho_cw * h[i];
 }

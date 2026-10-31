@@ -9,7 +9,8 @@ import pytest
 from conftest import fmt
 from insilica import cases
 from insilica import grid as gridmod
-from insilica.constants import GRAV
+from insilica.constants import GRAV, OMEGA
+from insilica.grid.trisk import cell_winds
 from insilica.gpu import DeviceGrid
 from insilica.ocean import OCEAN, Ocean
 from insilica.world import World
@@ -123,4 +124,40 @@ def test_baroclinic(record):
         out.append(f'{factor}× critical shear ({h.shape[0]} layers, g\' {gp:.3f}, shear {np.max(np.abs(u[0])):.1f} m/s): '
                    f'disturbance energy day 1 → 20 ×{growth:.3g}')
     record('BAROCLINIC', '; '.join(out), '≥ ×100 at 3×; ≤ ×2 at 0.3×', ok)
+    assert ok
+
+
+@pytest.mark.xdist_group('grid5')
+def test_gyre(record):
+    """GYRE Western intensification (n = 5): the ocean alone in a closed basin (15–55°N, 60° wide) under a prescribed wind stress, 3 years, the last one's mean: full-depth transport at 35°N against Sverdrup"""
+    g = gridmod.get(5)
+    lat, lon = np.degrees(g.lat), np.degrees(np.angle(np.exp(1j * g.lon)))
+    land = ~((np.abs(lon) < 30) & (lat > 15) & (lat < 55))
+    oc = Ocean(DeviceGrid(g), Tsurf=np.full(g.N, 293.15), land=land.astype(float))
+    tau0, c = 0.1, oc.cfg
+    elat = 0.5 * (lat[g.eI] + lat[g.eJ])
+    F = cp.asarray(-tau0 * np.cos(np.pi * (np.clip(elat, 15, 55) - 15) / 40) * cases.edge_east_north(g)[2] * c['dt'] / c['rho'] * oc.wall)
+    north = np.stack([-np.sin(g.lat) * np.cos(g.lon), -np.sin(g.lat) * np.sin(g.lon), np.cos(g.lat)], 1)
+    steps, V, nv = int(3 * 365 * 86400 / c['dt']), np.zeros(g.N), 0
+    for s in range(steps):
+        oc.u[0] += F / (0.5 * (oc.h[0][g.eI] + oc.h[0][g.eJ]))
+        oc.step(mix=False)
+        if s >= steps - 365 * 24 and s % 24 == 0:
+            h, u = oc.h.get(), oc.u.get()
+            V += sum(h[k] * np.sum(cell_winds(g, u[k]) * north, 1) for k in range(oc.L))
+            nv += 1
+    V /= nv
+    row = (np.abs(lat - 35) < 2.5) & ~land
+    dx = math.radians(1.0) * cases.R_PLANET * math.cos(math.radians(35))
+    x = lon + 30
+    prof = [float(V[row & (x >= a) & (x < a + 10)].mean()) * 10 * dx / 1e6 for a in range(0, 60, 10)]    # Sv per 10° bin
+    curl = -tau0 * (np.pi / math.radians(40)) / cases.R_PLANET * math.sin(np.pi / 2)
+    sverdrup = curl / (c['rho'] * 2 * OMEGA * math.cos(math.radians(35)) / cases.R_PLANET) * 60 * dx / 1e6
+    interior = sum(prof[1:])
+    ratio = prof[0] / (abs(interior) / 5)
+    finite = bool(cp.isfinite(oc.u).all())
+    ok = finite and abs(interior / sverdrup - 1) <= 0.3 and prof[0] > 0 and ratio > 3
+    record('GYRE', f'Sv by 10° from the west wall {" ".join(f"{v:+.1f}" for v in prof)}; interior {interior:+.1f} vs Sverdrup {sverdrup:+.1f} '
+           f'({(interior / sverdrup - 1) * 100:+.0f}%); west bin ×{ratio:.1f} the mean interior bin; max |u| {float(cp.abs(oc.u).max()):.2f} m/s',
+           'interior within 30% of Sverdrup; west bin northward, > 3× the mean interior bin', ok)
     assert ok

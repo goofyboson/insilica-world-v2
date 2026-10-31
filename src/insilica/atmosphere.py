@@ -34,7 +34,7 @@ DEFAULTS = dict(S0=1361.0, asw=0.2, tau0=0.9, mu_ref=P0 / GRAV, eps_s=0.95, h_se
                 grav=GRAV, cp=CP_DRY, kappa=KAPPA, p0=P0, tilt=TILT, year_s=YEAR_S, day_s=DAY_S, tau_lin=0.5, theta_star2=380.0,
                 moist=0.0, Lv=2.5e6, Lf=3.34e5, Tf=273.15, k_evap=4.0e-3, tau_conv=7200.0, alb_ice=0.6, rho_ice=917.0,
                 ice_cover=0.05, k_ice=2.2, Rv=461.5, sat_layer=1.0, sw_tau=2.0, alb_dry=0.30, alb_wet=0.18, soil_beta=0.75,
-                c_land=2.0e6, soil_base=150.0, soil_per_m=0.5, k_inf=0.005 / 3600.0, pond_cover=50.0)
+                c_land=2.0e6, soil_base=150.0, soil_per_m=0.5, k_inf=5.0 / 3600.0, pond_cover=50.0)
 PAR_ORDER = ('S0', 'asw', 'tau0', 'mu_ref', 'eps_s', 'h_sens', 'u0', 'alb', 'c_slab', 'mu_bl', 'theta_star', 'floor_', 'sigma',
              'grav', 'cp', 'kappa', 'p0', 'tilt', 'year_s', 'day_s', 'tau_lin', 'theta_star2',
              'moist', 'Lv', 'Lf', 'Tf', 'k_evap', 'tau_conv', 'alb_ice', 'rho_ice', 'ice_cover', 'k_ice', 'Rv', 'sat_layer', 'sw_tau',

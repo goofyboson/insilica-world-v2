@@ -83,6 +83,7 @@ def test_water(record):
     w.Ts[...] = cp.asarray(Ts); w.soil[...] = cp.asarray(soil); w.pond[...] = cp.asarray(pond)
     w.step(1, graph=False)
     s1, p1 = w.soil.get(), w.pond.get()
+    assert abs(w.physics.p['k_inf'] * 3600 - 5.0) < 1e-12              # v1's 5 mm per hour
     soak = w.physics.p['k_inf'] * w.dt * 0.75
     soak_err = float(np.abs((s1[warm] - soil[warm]) / soak - 1).max())
     frozen = float(np.max(s1[cold] - soil[cold]).clip(0))     # it may evaporate; it takes none in

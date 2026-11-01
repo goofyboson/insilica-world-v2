@@ -21,7 +21,7 @@ struct Par {
   real S0, asw, tau0, mu_ref, eps_s, h_sens, u0, alb, c_slab, mu_bl, theta_star, floor_, sigma, grav, cp, kappa, p0;
   real tilt, year_s, day_s, tau_lin, theta_star2;
   real moist, Lv, Lf, Tf, k_evap, tau_conv, alb_ice, rho_ice, ice_cover, k_ice, Rv, sat_layer, sw_tau;
-  real alb_dry, alb_wet, soil_beta, k_inf, pond_cover, alb_snow, alb_ice_melt, alb_snow_melt, alb_glacier, snow_cover, alb_ramp, land_exch, plume_deep;
+  real alb_dry, alb_wet, soil_beta, k_inf, pond_cover, alb_snow, alb_ice_melt, alb_snow_melt, alb_glacier, snow_cover, alb_ramp, land_exch, plume_deep, lw_w0, c_dry, c_wet;
 };
 
 // The parameters arrive as an array in this order (atmosphere.PAR_ORDER).
@@ -32,7 +32,7 @@ __device__ Par unpack(const real* a) {
   P.kappa = a[15]; P.p0 = a[16]; P.tilt = a[17]; P.year_s = a[18]; P.day_s = a[19]; P.tau_lin = a[20]; P.theta_star2 = a[21];
   P.moist = a[22]; P.Lv = a[23]; P.Lf = a[24]; P.Tf = a[25]; P.k_evap = a[26]; P.tau_conv = a[27]; P.alb_ice = a[28];
   P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32]; P.sat_layer = a[33]; P.sw_tau = a[34];
-  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47];
+  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50];
   return P;
 }
 
@@ -299,7 +299,7 @@ __device__ __forceinline__ real tau_p(real p, real ps, const Par& P) {
 extern "C" __global__ void air_column(int N, int L, const real* par, int mode, const real* t, const real* insol, const real* pos,
                                       const real* uabs, real* mu_in, real* theta, real* qv, real* Ts, real* ice, real dt,
                                       real* wx, real* olr, real* sw_abs, real* stored, real* rain, real* evap, real* conv,
-                                      real* tsurf, real* rainp, real* dgo, const real* cap, real* qocean,
+                                      real* tsurf, real* rainp, real* dgo, real* cap, real* qocean,
                                       real* qsw, const real* land, const real* soilcap, real* soil, real* pond, real* snow) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= N) return;
@@ -314,6 +314,12 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
   layer_exner(L, mu, P, pb, pib);
   real m_ice = moist ? ice[i] : (real)0;
   // the surface water's heat capacity (J/m^2/K): the ocean's mixed layer when coupled (cap), else the slab
+  // Land's by its soil water when c_wet is set (decision #90): wet soil stores and conducts heat better. The ground's heat relative to T_REF stays as the water changes.
+  if (cap && P.c_wet > 0 && moist && land && land[i] > (real)0.5) {
+    const real r = fmin((real)1, soil[i] / soilcap[i]), Cn = P.c_dry + (P.c_wet - P.c_dry) * r;
+    Ts[i] = P.Tf + (Ts[i] - P.Tf) * cap[i] / Cn;
+    cap[i] = Cn;
+  }
   const real Cw = cap ? cap[i] : P.c_slab;
   const real E0 = column_energy(L, mu, pib, th, q, P) + Cw * Ts[i] - P.Lf * m_ice;
   for (int k = 0; k < L; k++) T[k] = pib[k] * th[k] / P.cp;
@@ -376,6 +382,17 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
 
   // ---- longwave: each layer's emissivity from its share of the optical-depth profile; the downward longwave reaching
   // the surface ----
+  if (moist && P.lw_w0 > 0) {
+    // the longwave's vapor part from the column's own vapor (decision #89): its optical depth grows as the square root of the vapor
+    // path (strong lines), reference path lw_w0, shared among the layers by their vapor; the well-mixed part stays by pressure
+    real W = 0;
+    for (int k = 0; k < L; k++) W += mu[k] * (q[k] > 0 ? q[k] : (real)0);
+    const real tv = P.tau0 * (1 - P.tau_lin) * sqrt(W / P.lw_w0);
+    for (int k = 0; k < L; k++) {
+      const real sb = pb[k] / pb[bot], st = k ? pb[k - 1] / pb[bot] : (real)0;
+      eps[k] = 1 - exp(-(P.tau0 * P.tau_lin * (sb - st) + (W > 0 ? tv * mu[k] * (q[k] > 0 ? q[k] : (real)0) / W : (real)0)));
+    }
+  } else
   for (int k = 0; k < L; k++) eps[k] = 1 - exp(-(tau_p(pb[k], pb[bot], P) - tau_p(k ? pb[k - 1] : (real)0, pb[bot], P)));
   real ldown = 0;
   for (int k = 0; k < L; k++) {

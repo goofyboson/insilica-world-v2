@@ -219,5 +219,5 @@ extern "C" __global__ void ocn_heat(int N, int L, const real* h, const real* T, 
 // The mixed layer's heat capacity per cell for the air's surface physics: rho_w c_w h0 (J/m^2/K).
 extern "C" __global__ void ocn_cap(int N, const real* h, real rho_cw, real* cap, const real* land, real c_land) {
   LOOP1(i, N)
-  cap[i] = land && land[i] > (real)0.5 ? c_land : rho_cw * h[i];
+  cap[i] = land && land[i] > (real)0.5 ? (cap[i] > 0 ? cap[i] : c_land) : rho_cw * h[i];   // land's stays once set: the air's column may set it by its soil water
 }

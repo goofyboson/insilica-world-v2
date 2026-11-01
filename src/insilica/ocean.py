@@ -200,7 +200,7 @@ class Ocean:
         rc = self.cfg['rho'] * self.cfg['cw']
         if self.land is None:
             return float(cp.sum(A * cp.sum(self.h * self.T, axis=0))) * rc
-        return float(cp.sum(A * ((1 - self.land) * rc * cp.sum(self.h * self.T, axis=0) + self.land * self.c_land * self.T[0])))
+        return float(cp.sum(A * ((1 - self.land) * rc * cp.sum(self.h * self.T, axis=0) + self.land * self.cap * (self.T[0] - 273.15))))
 
     def salt(self):
         """The ocean's salt (kg): ρ_w Σ A h S / 1000."""

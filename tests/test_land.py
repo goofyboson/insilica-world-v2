@@ -4,6 +4,7 @@ import cupy as cp
 import pytest
 
 from insilica import grid as gridmod
+from insilica import runcache
 from insilica.gpu import DeviceGrid
 from insilica.land import LandWater, RIVER_SPEED
 from insilica.world import World
@@ -141,14 +142,36 @@ def island(wall):
     return abs(float(cp.sum(A * lw.ice)) / I0 - 1), calved / I0, float(cp.abs(lw.ice_prev - lw.calved).max()), float(lw.ice.min())
 
 
+def polar_balance():
+    """relief's land north of 68° (n = 4) after 2 years from nothing: the third year's ice change; then the same world with a 2 km snow-covered sheet started on that land: its third year's change (kg/m²)."""
+    w0 = World(4, 'relief')
+    per = int(round(86400 / w0.dt))
+    w, _ = runcache.spun_up('relief-n4', lambda: World(4, 'relief'), 2 * 365 * per)
+    g = w.grid
+    land = cp.asarray((w.land.get() > 0.5) & (np.degrees(g.lat) > 68.0))
+    pol = land * cp.asarray(g.areaCell)
+    mean = lambda: float(cp.sum(pol * w.ice) / cp.sum(pol))
+    i0 = mean()
+    w.step(365 * per)
+    bare = mean() - i0
+    w.ice += land * 2000.0 * w.physics.p['rho_ice']
+    w.snow += land * 2000.0 * w.physics.p['rho_ice']
+    w.step(2 * 365 * per)
+    i0 = mean()
+    w.step(365 * per)
+    return bare, mean() - i0
+
+
+@pytest.mark.xdist_group('grid4')
 def test_ice(record):
     """ICE Ice sheets (#86): a dome grown from nothing against the exact shallow-ice profile, closer as the grid refines; ice conserved, reaching the sea as sea ice the salt does not count, and not climbing a wall"""
     d5, v5 = dome(5, 10)
     d6, v6 = dome(6, 5)
-    err, gave, prev, low = island(False)
+    err, gave, prev, thin = island(False)
     werr, wgave, _, _ = island(True)
-    ok = (abs(d5) <= 0.1 and abs(v5) <= 0.1 and abs(d6) <= 0.1 and abs(v6) <= 0.1 and abs(d6) < abs(d5) and err <= 1e-13 and gave > 0 and prev <= 1e-9 and low >= 0
-          and werr <= 1e-13 and wgave == 0)
+    bare, sheet = polar_balance()
+    ok = (abs(d5) <= 0.1 and abs(v5) <= 0.1 and abs(d6) <= 0.1 and abs(v6) <= 0.1 and abs(d6) < abs(d5) and err <= 1e-13 and gave > 0 and prev <= 1e-9 and thin >= 0
+          and werr <= 1e-13 and wgave == 0 and sheet >= -50.0)
     record('ICE', f'dome height against the exact {d5 * 100:+.1f}% at n = 5, {d6 * 100:+.1f}% at n = 6; volume {v5 * 100:+.1f}%, {v6 * 100:+.1f}%; island ice conserved to {err:.1e}, {gave * 100:.1f}% reached the sea in 20 000 years, '
-           f'fresh-water count off by {prev:.1e} kg/m², thinnest ice {low:.1e}; behind a wall {wgave:.1e} reached it', 'height and volume within 10% at n = 5 and 6, height closer at n = 6; ice ≤ 1e-13; some reaches the sea; count ≤ 1e-9; ice ≥ 0; none past a wall', ok)
+           f'fresh-water count off by {prev:.1e} kg/m², thinnest ice {thin:.1e}; behind a wall {wgave:.1e} reached it; relief\'s polar land: a started 2 km sheet {sheet:+.0f} kg/m² a year; from nothing {bare:+.0f} (reported)', 'height and volume within 10% at n = 5 and 6, height closer at n = 6; ice ≤ 1e-13; some reaches the sea; count ≤ 1e-9; ice ≥ 0; none past a wall; a started polar sheet loses ≤ 50 kg/m² a year (#87)', ok)
     assert ok

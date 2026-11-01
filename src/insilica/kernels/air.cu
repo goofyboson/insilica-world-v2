@@ -21,7 +21,7 @@ struct Par {
   real S0, asw, tau0, mu_ref, eps_s, h_sens, u0, alb, c_slab, mu_bl, theta_star, floor_, sigma, grav, cp, kappa, p0;
   real tilt, year_s, day_s, tau_lin, theta_star2;
   real moist, Lv, Lf, Tf, k_evap, tau_conv, alb_ice, rho_ice, ice_cover, k_ice, Rv, sat_layer, sw_tau;
-  real alb_dry, alb_wet, soil_beta, k_inf, pond_cover;
+  real alb_dry, alb_wet, soil_beta, k_inf, pond_cover, alb_snow, alb_ice_melt, alb_snow_melt, alb_glacier, snow_cover, alb_ramp;
 };
 
 // The parameters arrive as an array in this order (atmosphere.PAR_ORDER).
@@ -32,7 +32,7 @@ __device__ Par unpack(const real* a) {
   P.kappa = a[15]; P.p0 = a[16]; P.tilt = a[17]; P.year_s = a[18]; P.day_s = a[19]; P.tau_lin = a[20]; P.theta_star2 = a[21];
   P.moist = a[22]; P.Lv = a[23]; P.Lf = a[24]; P.Tf = a[25]; P.k_evap = a[26]; P.tau_conv = a[27]; P.alb_ice = a[28];
   P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32]; P.sat_layer = a[33]; P.sw_tau = a[34];
-  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39];
+  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45];
   return P;
 }
 
@@ -261,11 +261,14 @@ __device__ __forceinline__ real tau_p(real p, real ps, const Par& P) {
 // covers pond / pond_cover of the cell at the sea's albedo and evaporates at the full rate. Rain and the ice's melt reach the
 // pond, or rain falls as snow on ground below freezing (its latent heat to the ground) and lies as ice; a pond freezes on
 // such ground; otherwise it soaks in at k_inf (1 - soil / soilcap). What the bucket cannot hold comes back to the pond.
+// Albedos by surface (decision #87): snow (the part of the land's ice that fell as snow, snow kg/m^2, melting first) from alb_snow
+// when cold to alb_snow_melt at freezing air, over alb_ramp K, covering snow / snow_cover of the ice; the rest is bare glacier ice,
+// alb_glacier. Sea ice goes from alb_ice to alb_ice_melt in the same way.
 extern "C" __global__ void air_column(int N, int L, const real* par, int mode, const real* t, const real* insol, const real* pos,
                                       const real* uabs, real* mu_in, real* theta, real* qv, real* Ts, real* ice, real dt,
                                       real* wx, real* olr, real* sw_abs, real* stored, real* rain, real* evap, real* conv,
                                       real* tsurf, real* rainp, real* dgo, const real* cap, real* qocean,
-                                      real* qsw, const real* land, const real* soilcap, real* soil, real* pond) {
+                                      real* qsw, const real* land, const real* soilcap, real* soil, real* pond, real* snow) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= N) return;
   const Par P = unpack(par);
@@ -283,6 +286,17 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
   const real E0 = column_energy(L, mu, pib, th, q, P) + Cw * Ts[i] - P.Lf * m_ice;
   for (int k = 0; k < L; k++) T[k] = pib[k] * th[k] / P.cp;
   const int top = 0, bot = L - 1;
+
+  // ---- the air touching the ground: the bottom mu_bl of the column ----
+  real wbl[LMAX], thb = 0, qb = 0, mb = 0;
+  {
+    real need = P.mu_bl;
+    for (int k = bot; k >= 0; k--) { const real m = mu[k] < need ? mu[k] : need; wbl[k] = m; need -= m; thb += m * th[k]; qb += m * q[k]; mb += m; }
+  }
+  thb /= mb; qb /= mb;
+  const real ps = pb[bot];
+  const real Tsa = thb * pow(ps / P.p0, P.kappa);
+  const real hs = P.h_sens * (1 + uabs[i] / P.u0);
 
   // ---- shortwave; the surface's albedo with the ice cover ----
   real I;
@@ -304,7 +318,13 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
   real pw = isl ? pond[i] : (real)0;
   const real pcov = isl && pw > 0 ? fmin((real)1, pw / P.pond_cover) : (real)0;
   const real alb0 = isl ? pcov * P.alb + (1 - pcov) * (P.alb_dry + (P.alb_wet - P.alb_dry) * wet / soilcap[i]) : P.alb;
-  const real alb = fice * P.alb_ice + (1 - fice) * alb0;
+  const real warm = fmax((real)0, fmin((real)1, (Tsa - P.Tf + P.alb_ramp) / P.alb_ramp));
+  real alb_i = P.alb_ice + (P.alb_ice_melt - P.alb_ice) * warm;
+  if (isl) {
+    const real fs = fmin((real)1, snow[i] / P.snow_cover);
+    alb_i = fs * (P.alb_snow + (P.alb_snow_melt - P.alb_snow) * warm) + (1 - fs) * P.alb_glacier;
+  }
+  const real alb = fice * alb_i + (1 - fice) * alb0;
   const real toAir = P.asw * (mt / P.mu_ref) * I;
   if (P.sw_tau > 1) {                  // split like the vapor part (s^4) of the longwave profile (decision #59)
     const real ps_ = pb[bot];
@@ -330,17 +350,6 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
     for (int j = k + 1; j < L; j++) dn -= eps[j] * dn;
     ldown += dn;
   }
-
-  // ---- the air touching the ground: the bottom mu_bl of the column ----
-  real wbl[LMAX], thb = 0, qb = 0, mb = 0;
-  {
-    real need = P.mu_bl;
-    for (int k = bot; k >= 0; k--) { const real m = mu[k] < need ? mu[k] : need; wbl[k] = m; need -= m; thb += m * th[k]; qb += m * q[k]; mb += m; }
-  }
-  thb /= mb; qb /= mb;
-  const real ps = pb[bot];
-  const real Tsa = thb * pow(ps / P.p0, P.kappa);
-  const real hs = P.h_sens * (1 + uabs[i] / P.u0);
 
   // ---- the surface: open water at Ts, or (ice thicker than ice_cover) a zero-heat-capacity skin at Tsk balancing
   // conduction through the ice against sunlight, longwave and sensible heat, capped at freezing (v1 SPEC 18 #11) ----
@@ -492,19 +501,30 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
   for (int j = 0; j + 1 < L; j++) wx[(size_t)j * N + i] = wxo[j];
   rain[i] = R / dt;
   if (isl) {
-    pw += ice0 - m_ice;                                         // the ice's melt
-    if (Ts[i] < P.Tf) {                                         // snow: its freezing warms the ground
+    pw += ice0 - m_ice;                                         // the ice's melt, from the snow first
+    real sn = snow[i] - (ice0 - m_ice);
+    if (skin) {                                                 // ice covers the ground: the skin decides, and the air takes the freezing's heat (#87)
+      if (tsk < P.Tf) {
+        const real m = R + (pw > 0 ? pw : (real)0);
+        m_ice += m;
+        sn = (sn > 0 ? sn : (real)0) + R;
+        pw -= m - R;
+        th[bot] += P.Lf * m / (mu[bot] * pib[bot]);
+      } else pw += R;
+    } else if (Ts[i] < P.Tf) {                                  // snow: its freezing warms the ground
       m_ice += R;
+      sn = (sn > 0 ? sn : (real)0) + R;
       Ts[i] += P.Lf * R / Cw;
     } else pw += R;
-    if (Ts[i] < P.Tf && pw > 0) {                               // the pond freezes, warming the ground up to freezing
+    if (!skin && Ts[i] < P.Tf && pw > 0) {                      // the pond freezes, warming the ground up to freezing
       const real room = (P.Tf - Ts[i]) * Cw / P.Lf, m = pw < room ? pw : room;
       pw -= m;
       m_ice += m;
       Ts[i] += P.Lf * m / Cw;
     }
     ice[i] = m_ice;
-    if (Ts[i] >= P.Tf) {                                        // soaking in; frozen ground takes none
+    snow[i] = fmax((real)0, fmin(sn, m_ice));                   // the ice's flow may have taken what it lay on
+    if (!skin && Ts[i] >= P.Tf) {                               // soaking in; frozen or ice-covered ground takes none
       const real room = P.k_inf * dt * (1 - wet / soilcap[i]);
       const real m = pw < room ? pw : room;
       if (m > 0) { pw -= m; wet += m; }

@@ -32,13 +32,14 @@ TILT = math.radians(23.44)
 DEFAULTS = dict(S0=1361.0, asw=0.2, tau0=0.9, mu_ref=P0 / GRAV, eps_s=0.95, h_sens=10.0, u0=10.0, alb=0.06,
                 c_slab=1000.0 * 4186.0 * 100.0, mu_bl=1.0e4 / GRAV, theta_star=300.0, floor_=10.0, sigma=SIGMA,
                 grav=GRAV, cp=CP_DRY, kappa=KAPPA, p0=P0, tilt=TILT, year_s=YEAR_S, day_s=DAY_S, tau_lin=0.5, theta_star2=380.0,
-                moist=0.0, Lv=2.5e6, Lf=3.34e5, Tf=273.15, k_evap=4.0e-3, tau_conv=7200.0, alb_ice=0.6, rho_ice=917.0,
+                moist=0.0, Lv=2.5e6, Lf=3.34e5, Tf=273.15, k_evap=4.0e-3, tau_conv=7200.0, alb_ice=0.7, rho_ice=917.0,
                 ice_cover=0.05, k_ice=2.2, Rv=461.5, sat_layer=1.0, sw_tau=2.0, alb_dry=0.30, alb_wet=0.18, soil_beta=0.75,
-                c_land=2.0e6, soil_base=150.0, soil_per_m=0.5, k_inf=5.0 / 3600.0, pond_cover=50.0)
+                c_land=2.0e6, soil_base=150.0, soil_per_m=0.5, k_inf=5.0 / 3600.0, pond_cover=50.0, alb_snow=0.8,
+                alb_ice_melt=0.45, alb_snow_melt=0.55, alb_glacier=0.35, snow_cover=30.0, alb_ramp=10.0)
 PAR_ORDER = ('S0', 'asw', 'tau0', 'mu_ref', 'eps_s', 'h_sens', 'u0', 'alb', 'c_slab', 'mu_bl', 'theta_star', 'floor_', 'sigma',
              'grav', 'cp', 'kappa', 'p0', 'tilt', 'year_s', 'day_s', 'tau_lin', 'theta_star2',
              'moist', 'Lv', 'Lf', 'Tf', 'k_evap', 'tau_conv', 'alb_ice', 'rho_ice', 'ice_cover', 'k_ice', 'Rv', 'sat_layer', 'sw_tau',
-             'alb_dry', 'alb_wet', 'soil_beta', 'k_inf', 'pond_cover')
+             'alb_dry', 'alb_wet', 'soil_beta', 'k_inf', 'pond_cover', 'alb_snow', 'alb_ice_melt', 'alb_snow_melt', 'alb_glacier', 'snow_cover', 'alb_ramp')
 
 
 def annual_mean_insolation(lat, S0=1361.0, tilt=TILT, days=365):
@@ -77,7 +78,7 @@ class AirPhysics:
         self.rainp = z(3, N)               # rain by source: condensation above the bottom layer, in it, convection
         self._none = z(1)                                     # q and ice for a dry column (never read)
 
-    def column(self, mu, theta, Ts, u, t, dt, q=None, ice=None, cap=None, qocean=None, qsw=None, land=None, soilcap=None, soil=None, pond=None):
+    def column(self, mu, theta, Ts, u, t, dt, q=None, ice=None, cap=None, qocean=None, qsw=None, land=None, soilcap=None, soil=None, pond=None, snow=None):
         """Radiation, surface exchange, heating, (moist: evaporation, condensation, sea ice, convection) and the θ*
         crossing for one step; the masses moved up go to self.wx (moved with momentum and tracers by Layers.exchange),
         rain and evaporation (kg/m²/s) to self.rain, self.evap. cap: the surface water's heat capacity per cell (J/m²/K;
@@ -96,7 +97,7 @@ class AirPhysics:
                                           self.tsurf, self.rainp, self.dgo if self.dgo is not None else NULL,
                                           cap if cap is not None else NULL, qocean if qocean is not None else NULL,
                                           qsw if qsw is not None else NULL, land if land is not None else NULL,
-                                          soilcap if soilcap is not None else NULL, soil if soil is not None else NULL, pond if pond is not None else NULL))
+                                          soilcap if soilcap is not None else NULL, soil if soil is not None else NULL, pond if pond is not None else NULL, snow if snow is not None else NULL))
         k['advance_time']((1,), (1,), (t, R(dt)))
 
 

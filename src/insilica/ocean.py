@@ -31,7 +31,7 @@ ALPHA_REF = 2.0e-4                                              # 1/K: dTmin's b
 OCEAN = dict(depth=4000.0, h_mixed=100.0, h_thermo=600.0, T_thermo=293.15, T_deep=273.15, alpha=0.52e-4, alpha2=1.0e-5, beta=7.6e-4, S_ref=35.0, rho=1025.0, cw=3990.0, dt=3600.0, mix_dt=86400.0,
              gprime=(0.016, 0.016),
              hmin=10.0, hmax=1000.0, dTmin=0.1, m_kt=0.5, n_kt=0.2, visc4_U=0.5, bottom_stress=2.5e-4,
-             interface_stress=5.0e-4, thin=2.0, walls=(), sw_R=0.58, sw_z1=0.35, sw_z2=23.0)
+             interface_stress=5.0e-4, thin=2.0, walls=(), sw_R=0.58, sw_z1=0.35, sw_z2=23.0, land_drag=1.0)
 
 
 def wall_mask(g, walls):
@@ -137,7 +137,7 @@ class Ocean:
         g, i32, R = self.dg, np.int32, self.dg.dtype.type
         self.k['couple_stress'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(air_h.shape[0]), air_h, air_u, self.h, self.u,
                                                   g.eI, g.eJ, R(c), R(self.cfg['rho']), R(dt), self.diss, self.tau_acc,
-                                                  self.core.wall if self.core.wall is not None else NULL))
+                                                  self.core.wall if self.core.wall is not None else NULL, R(self.cfg['land_drag'])))
 
     def _land(self):
         return self.land if self.land is not None else NULL

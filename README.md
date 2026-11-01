@@ -12,9 +12,8 @@ A planet simulator with two moving ocean layers and three moving air layers, run
 
 ## Current status
 
-**V2-4b in progress on `stage-v2-4b`: Step 1 of 2 done (41/41 with PERF).** Surface water, soaking in, seepage, springs and rivers that
-flow at the same speed on any grid (0.998–1.022 m/s against the set 1 m/s, n = 4–8), reaching the sea at real river mouths (SPEC #85). Next:
-Step 2, snow and ice-sheet flow. Earlier:
+**V2-4b Rivers, lakes and ice done on `stage-v2-4b` (42/42 with PERF), awaiting merge.** Rivers flow at the same speed on any grid (0.998–1.022 m/s against 1 m/s,
+n = 4–8; SPEC #85); ice sheets follow Glen's law, within 3.8% of the exact dome height at n = 6 (#86). Not yet by themselves: no lake forms on `relief`, and no ice sheet grows there. Earlier:
 **V2-4a Land closed 2026-10-31 (40/40 with PERF).**
 Land of any shape over the coupled ocean: ground heat, soil bucket, snow, runoff to the coast and terrain under the air. An
 ocean gyre intensifies in the west (×4.2, interior within 14% of Sverdrup), land's 45–65°N seasons reach 36 K against 8 K at
@@ -54,7 +53,7 @@ bug carried over from v1; V2-0 ported v1's grid and solver to 64-bit CUDA.
 | V2-2b | Moist atmosphere: three air layers, vapor, evaporation, condensation, moist convection, rain, sea ice; climate and weather tests | ✅ Done (34/34) |
 | V2-3 | Ocean: three layers, wind stress, thermocline, entrainment, salinity, sea ice; aquaplanet and one basin | ✅ Done (36/36) |
 | V2-4a | Land: masks, coasts, ground heat, soil bucket, snow, runoff to the coast, terrain; gyres; two known shortfalls (SPEC #84) | ✅ Done (40/40) |
-| V2-4b | Rivers, lakes, infiltration, seepage, snow, ice-sheet flow | 🚧 Step 1 of 2 done (41/41) |
+| V2-4b | Rivers, lakes, infiltration, seepage, snow, ice-sheet flow | ✅ Done (42/42), awaiting merge |
 | V2-5 | Two resolutions: air n = 6 coupled to ocean n = 8 | ⏳ Planned |
 | V2-6 | Moon and tides, geology, UI polish | ⏳ Planned |
 | V2-7 | Optimization and speedup: ensembles in one launch, 32-bit where safe, mixed time steps, faster spin-up; then approximations (reduced model, learned emulator) against the 64-bit reference ([plan §7.1](docs/v2-plan.md)) | ⏳ Planned |

@@ -4,11 +4,13 @@ speed, whatever the grid, lakes where it collects, seepage between soils, and th
 import numpy as np
 import cupy as cp
 
-from .gpu import grid_dims
+from .gpu import NULL, grid_dims
 
 RIVER_SPEED = 1.0     # m/s
 K_SEEP = 2.0e4 / 3600.0    # m²/s, v1's K_SEEP (2e4 m² per hour's tick)
 RHO_W = 1000.0        # kg/m³
+GLEN_A = 1.0e-16 / (365.0 * 86400.0)    # Pa⁻³ s⁻¹, Glen's flow law at about −10 °C, everywhere (#86)
+GRAV = 9.81           # m/s²
 
 
 class LandWater:
@@ -21,7 +23,10 @@ class LandWater:
         z = lambda: cp.zeros(N)
         self.mouth = z()                                  # kg/m² of the sea cell, waiting for the ocean
         self.z, self.zt, self.sp, self.ss, self.pond1, self.soil1 = z(), z(), z(), z(), z(), z()
-        self.k = {n: dg.kernel(n, 'land.cu') for n in ('land_heights', 'land_scale', 'land_apply')}
+        self.s, self.g2, self.si, self.ice1, self.calved = z(), z(), z(), z(), z()    # calved: ice given to each sea cell, summed (kg/m²)
+        self.ice_prev = None                              # the ocean's, when there is one
+        self.gam = 2.0 * GLEN_A * (rho_ice * GRAV) ** 3 / 5.0
+        self.k = {n: dg.kernel(n, 'land.cu') for n in ('land_heights', 'land_scale', 'land_apply', 'ice_surface', 'ice_slope', 'ice_scale', 'ice_apply')}
 
     def step(self, dt):
         """One routing step of dt seconds."""
@@ -35,3 +40,15 @@ class LandWater:
         self.k['land_apply'](*grid_dims(g.N), (i32,) + flow + (self.sp, self.ss, self.pond1, self.soil1, self.mouth))
         cp.copyto(self.pond, self.pond1)
         cp.copyto(self.soil, self.soil1)
+        self.ice_step(dt)
+
+    def ice_step(self, dt):
+        """The ice sheets' flow over dt seconds (#86)."""
+        g, R = self.dg, self.dg.dtype.type
+        i32, ri, gam = np.int32(g.N), R(self.rho_ice), R(self.gam * dt)
+        self.k['ice_surface'](*grid_dims(g.N), (i32, self.b, self.land, self.ice, ri, self.s))
+        self.k['ice_slope'](*grid_dims(g.N), (i32, self.land, self.s, g.cellEdge, g.eI, g.eJ, g.le, g.de, g.areaCell, self.g2))
+        flow = (self.land, self.s, self.g2, self.ice, g.cellEdge, g.eI, g.eJ, g.le, g.de, g.areaCell, ri, gam)
+        self.k['ice_scale'](*grid_dims(g.N), (i32,) + flow + (self.si,))
+        self.k['ice_apply'](*grid_dims(g.N), (i32,) + flow + (self.si, self.ice1, self.ice_prev if self.ice_prev is not None else NULL, self.calved))
+        cp.copyto(self.ice, self.ice1)

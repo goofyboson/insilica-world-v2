@@ -92,3 +92,79 @@ extern "C" __global__ void land_apply(int N, const real* land, const real* z, co
     mouth[i] += (gp + gs) / area[i];
   }
 }
+
+// Ice sheets (stage V2-4b, decision #86): Glen's shallow-ice flow, n = 3, without sliding. The surface s = b + ice / rho_ice falls
+// toward a neighbour across an edge; through it, a volume gam H^5 |grad s|^2 (head / de) le per step, H the donor's thickness, with
+// |grad s|^2 from the TRiSK kinetic energy's rule at each end, so that the flow does not depend on the edges' directions. At most
+// 1/12 of the head per edge. A sea cell's surface is 0: ice reaching it becomes that cell's sea ice, which melts as any other,
+// taking its latent heat from the sea, and the sea's fresh water counts its change from ice_prev, so the salt changes on melting.
+
+extern "C" __global__ void ice_surface(int N, const real* b, const real* land, const real* ice, real rho_ice, real* s) {
+  LOOP1(i, N)
+  s[i] = land[i] > (real)0.5 ? b[i] + ice[i] / rho_ice : (real)0;
+}
+
+extern "C" __global__ void ice_slope(int N, const real* land, const real* s, const int* cellEdge, const int* eI, const int* eJ,
+                                     const real* le, const real* de, const real* area, real* g2) {
+  LOOP1(i, N)
+  real sum = 0;
+  if (land[i] > (real)0.5)
+    for (int m = 0; m < 6; m++) {
+      const int e = cellEdge[i * 6 + m];
+      if (e < 0) break;
+      const int o = eI[e] == i ? eJ[e] : eI[e];
+      const real ds = (s[o] - s[i]) / de[e];
+      sum += (real)0.5 * le[e] * de[e] * ds * ds;
+    }
+  g2[i] = sum / area[i];
+}
+
+// The ice from cell a to cell b across edge e (kg per step), >= 0 when a gives. Only land gives.
+__device__ __forceinline__ real ice_flow(int a, int b, int e, const real* land, const real* s, const real* g2, const real* ice,
+                                         const real* le, const real* de, const real* area, real rho_ice, real gam) {
+  if (!(land[a] > (real)0.5) || !(ice[a] > 0)) return 0;
+  const real head = s[a] - s[b];
+  if (!(head > 0)) return 0;
+  const real H = ice[a] / rho_ice, H2 = H * H;
+  const real g = land[b] > (real)0.5 ? (real)0.5 * (g2[a] + g2[b]) : g2[a];
+  const real q = gam * H2 * H2 * H * g * head / de[e] * le[e];
+  const real ma = area[a] < area[b] ? area[a] : area[b], cap = head / 12 * ma;
+  return rho_ice * (q < cap ? q : cap);
+}
+
+extern "C" __global__ void ice_scale(int N, const real* land, const real* s, const real* g2, const real* ice, const int* cellEdge,
+                                     const int* eI, const int* eJ, const real* le, const real* de, const real* area, real rho_ice,
+                                     real gam, real* si) {
+  LOOP1(i, N)
+  si[i] = 1;
+  if (!(land[i] > (real)0.5)) return;
+  real out = 0;
+  for (int m = 0; m < 6; m++) {
+    const int e = cellEdge[i * 6 + m];
+    if (e < 0) break;
+    out += ice_flow(i, eI[e] == i ? eJ[e] : eI[e], e, land, s, g2, ice, le, de, area, rho_ice, gam);
+  }
+  const real have = ice[i] > 0 ? ice[i] * area[i] : (real)0;
+  if (out > have) si[i] = have / out;
+}
+
+extern "C" __global__ void ice_apply(int N, const real* land, const real* s, const real* g2, const real* ice, const int* cellEdge,
+                                     const int* eI, const int* eJ, const real* le, const real* de, const real* area, real rho_ice,
+                                     real gam, const real* si, real* ice1, real* ice_prev, real* calved) {
+  LOOP1(i, N)
+  real d = 0;
+  const bool li = land[i] > (real)0.5;
+  for (int m = 0; m < 6; m++) {
+    const int e = cellEdge[i * 6 + m];
+    if (e < 0) break;
+    const int o = eI[e] == i ? eJ[e] : eI[e];
+    if (li) d -= ice_flow(i, o, e, land, s, g2, ice, le, de, area, rho_ice, gam) * si[i];
+    d += ice_flow(o, i, e, land, s, g2, ice, le, de, area, rho_ice, gam) * si[o];
+  }
+  d /= area[i];
+  ice1[i] = ice[i] + d;
+  if (!li) {
+    calved[i] += d;
+    if (ice_prev) ice_prev[i] += d;
+  }
+}

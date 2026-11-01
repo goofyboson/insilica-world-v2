@@ -72,12 +72,14 @@ def conserve_land(record, days=2):
     from test_climate import coupled_spun
     w = coupled_spun(4, 'continent')
     g, sea = w.grid, w.sea
+    w.ice += cp.asarray(np.abs(g.lat) > np.radians(50.0)) * w.land * 3.0e6        # 3 km of ice on the far land, so that some flows into the sea (#86)
     A, At = cp.asarray(g.areaCell), float(np.sum(g.areaCell))
     rho, Sr, land = sea.cfg['rho'], sea.cfg['S_ref'], w.land
-    water = lambda: float(cp.sum(A * (land * (w.soil + w.ice + w.pond) + w.mouth)))
+    calved = w.routing.calved
+    water = lambda: float(cp.sum(A * (land * (w.soil + w.ice + w.pond) + w.mouth + calved)))
     icesea = lambda: float(cp.sum(A * (1 - land) * w.ice))
     salt = sea.salt
-    W0, I0, S0, flux_l, fw, res, col = water(), icesea(), salt(), 0.0, 0.0, 0.0, 0.0
+    W0, I0, S0, C0, flux_l, fw, res, col = water(), icesea(), salt(), float(cp.sum(A * calved)), 0.0, 0.0, 0.0, 0.0
     for _ in range(int(days * 86400 / w.dt)):
         e0 = w.energy()
         took = float(cp.sum(A * w.mouth))                      # the ocean takes what waits at the start of its tick
@@ -88,10 +90,11 @@ def conserve_land(record, days=2):
         col = max(col, abs(float(cp.sum(A * p.stored)) - toa) / abs(e0))
         flux_l += float(cp.sum(A * land * (p.rain - p.evap))) * w.dt - took
         fw += float(cp.sum(A * (1 - land) * (p.rain - p.evap))) * w.dt + took
-    fw -= icesea() - I0
+    fw -= icesea() - I0 - (float(cp.sum(A * calved)) - C0)          # ice from the land is not water the sea froze
     wland = abs(water() - W0 - flux_l) / W0
     sflux = abs((salt() - S0) + Sr * fw / 1000.0) / S0
     coast = float(cp.abs(sea.u[:, cp.asarray(sea.wall == 0)]).max())
+    gave = (float(cp.sum(A * calved)) - C0) / days / 86400.0 / float(cp.sum(A * land)) * 86400.0
     energy = res / At / (days * 86400)
     f = os.path.join(tempfile.gettempdir(), f'land{os.getpid()}.iw2')
     w.save(f)
@@ -99,8 +102,8 @@ def conserve_land(record, days=2):
     w.step(48); r.step(48)
     same = w.state_hash() == r.state_hash()
     os.remove(f)
-    ok = col <= 1e-13 and wland <= 1e-13 and sflux <= 1e-13 and coast == 0 and abs(energy) <= 0.1 and same
-    record('CONSERVE land', f'continent, {days} d after the spin-up: column energy {fmt(col)} of the energy stored; land water {fmt(wland)}; salt against fresh water '
+    ok = col <= 1e-13 and wland <= 1e-13 and sflux <= 1e-13 and coast == 0 and abs(energy) <= 0.1 and same and gave > 0
+    record('CONSERVE land', f'continent, {days} d after the spin-up, with 3 km of ice on land beyond 50° (it gives the sea {gave:.1e} mm/day of the land): column energy {fmt(col)} of the energy stored; land water {fmt(wland)}; salt against fresh water '
            f'and rivers {fmt(sflux)}; fastest water across a coast {coast:.1f} m/s; energy change − TOA {energy:+.4f} W/m²; reload continues {"identically" if same else "DIFFERENTLY"}',
            '≤ 1e-13; ≤ 1e-13; ≤ 1e-13; 0; |energy − TOA| ≤ 0.1 W/m²; identical', ok)
     return ok

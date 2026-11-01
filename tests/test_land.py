@@ -1,4 +1,4 @@
-"""WATER (stage V2-4b, #85): water over and through the land, without air where it can be, on any grid."""
+"""WATER and ICE (stage V2-4b, #85, #86): water and ice over and through the land, without air where it can be, on any grid."""
 import numpy as np
 import cupy as cp
 import pytest
@@ -94,4 +94,61 @@ def test_water(record):
     record('WATER', f'bowl level to {level * 1e3:.3f} mm after 3 years, water {bowl:.1e}; flow speed at n = 4/5/6 ' + '/'.join(f'{sp[n]:.3f}' for n in (4, 5, 6)) +
            f' m/s against {RIVER_SPEED} (×{spread:.3f} across grids); seepage to the sea {M / W0 * 100:.1f}% of the soil in a year, water {seep:.1e}; soaking in {soak_err:.1e} off the rule; '
            f'frozen ground takes {frozen:.1f} kg/m²; a spring returns ×{sprung:.3f} of the excess', 'level ≤ 1 mm; water ≤ 1e-13; speed within 20% at each n; soaking ≤ 1e-9; frozen ground 0; spring > 0.9', ok)
+    assert ok
+
+
+YEAR = 365 * 86400.0
+ICE_RATE, ICE_MARGIN = 0.3 / YEAR, np.radians(15.0)     # m of ice per second; the dome's edge, radians from the pole
+
+
+def dome_exact(ang, R, gam):
+    """The steady shallow-ice dome on a flat bed of the sphere (Vialov's, with the sphere's geometry): the flow out at angle t is
+    a R tan(t/2) = gam H^5 |H'|^3, so that H^(5/3) dH = (a R tan(t/2) / gam)^(1/3) R dt, integrated in from the margin."""
+    t = np.linspace(ICE_MARGIN, 0, 20001)
+    f = (ICE_RATE * R * np.tan(t / 2) / gam) ** (1 / 3) * R
+    H = (8 / 3 * np.concatenate([[0], np.cumsum(0.5 * (f[1:] + f[:-1]) * -np.diff(t))])) ** (3 / 8)
+    return np.interp(ang, t[::-1], H[::-1], right=0.0)
+
+
+def dome(n, dty, years=200000):
+    """Grow the dome from nothing: the snow falls inside the margin, and what crosses the margin is taken away. Its height and volume against the exact ones."""
+    g, lw = _water(n, np.ones(gridmod.get(n).N), np.zeros(gridmod.get(n).N))
+    A, R = g.areaCell, np.sqrt(g.areaCell.sum() / (4 * np.pi))
+    ang = np.arccos(np.clip(g.pos[:, 2], -1, 1))
+    inside = cp.asarray((ang < ICE_MARGIN).astype(float))
+    add = inside * ICE_RATE * dty * YEAR * lw.rho_ice
+    for _ in range(int(years / dty)):
+        lw.ice_step(dty * YEAR)
+        lw.ice += add
+        lw.ice *= inside
+    H, E = lw.ice.get() / lw.rho_ice, dome_exact(ang, R, lw.gam)
+    return H.max() / E.max() - 1, np.sum(A * H) / np.sum(A * E) - 1
+
+
+def island(wall):
+    """A kilometres-thick cap on an island, n = 4, for 20 000 years; a wall around it, or none. Returns the ice's error, what reached the sea, how far ice_prev is from that, and the thinnest ice."""
+    g = gridmod.get(4)
+    ang = np.degrees(np.arccos(np.clip(g.pos[:, 2], -1, 1)))
+    land = ang < 20.0
+    g, lw = _water(4, land, np.where(land, 100.0 + (5000.0 if wall else 0.0) * (np.abs(ang - 14.0) < 3.0), 0.0))
+    lw.ice_prev = cp.zeros(g.N)
+    lw.ice[cp.asarray(ang < (10.0 if wall else 18.0))] = 2.0e6
+    A = cp.asarray(g.areaCell)
+    I0 = float(cp.sum(A * lw.ice))
+    for _ in range(1000):
+        lw.ice_step(20.0 * YEAR)
+    calved = float(cp.sum(A * lw.calved))
+    return abs(float(cp.sum(A * lw.ice)) / I0 - 1), calved / I0, float(cp.abs(lw.ice_prev - lw.calved).max()), float(lw.ice.min())
+
+
+def test_ice(record):
+    """ICE Ice sheets (#86): a dome grown from nothing against the exact shallow-ice profile, closer as the grid refines; ice conserved, reaching the sea as sea ice the salt does not count, and not climbing a wall"""
+    d5, v5 = dome(5, 10)
+    d6, v6 = dome(6, 5)
+    err, gave, prev, low = island(False)
+    werr, wgave, _, _ = island(True)
+    ok = (abs(d5) <= 0.1 and abs(v5) <= 0.1 and abs(d6) <= 0.1 and abs(v6) <= 0.1 and abs(d6) < abs(d5) and err <= 1e-13 and gave > 0 and prev <= 1e-9 and low >= 0
+          and werr <= 1e-13 and wgave == 0)
+    record('ICE', f'dome height against the exact {d5 * 100:+.1f}% at n = 5, {d6 * 100:+.1f}% at n = 6; volume {v5 * 100:+.1f}%, {v6 * 100:+.1f}%; island ice conserved to {err:.1e}, {gave * 100:.1f}% reached the sea in 20 000 years, '
+           f'fresh-water count off by {prev:.1e} kg/m², thinnest ice {low:.1e}; behind a wall {wgave:.1e} reached it', 'height and volume within 10% at n = 5 and 6, height closer at n = 6; ice ≤ 1e-13; some reaches the sea; count ≤ 1e-9; ice ≥ 0; none past a wall', ok)
     assert ok

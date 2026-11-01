@@ -132,6 +132,8 @@ class World:
             if abs(ratio - round(ratio)) > 1e-9 or round(ratio) < 1:
                 raise ValueError(f'the ocean step {self.sea.cfg["dt"]} s must be a whole number of air steps ({self.dt} s)')
             self.ocean_every = int(round(ratio))
+            if self.routing is not None:
+                self.routing.ice_prev = self.sea.ice_prev
             self.Ts = self.sea.T[0]                          # a view: the air's surface physics heats the mixed layer
             self.oh, self.ou, self.oT, self.oM, self.oS = self.sea.h, self.sea.u, self.sea.T, self.sea.M, self.sea.S
             self.STATE = tuple(k for k in self.STATE if k != 'Ts') + ('oh', 'ou', 'oT', 'oM', 'oS')

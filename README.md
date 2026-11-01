@@ -13,7 +13,7 @@ A planet simulator with two moving ocean layers and three moving air layers, run
 ## Current status
 
 **V2-4b Rivers, lakes and ice done on `stage-v2-4b` (42/42 with PERF), awaiting merge.** Rivers flow at the same speed on any grid (0.998–1.022 m/s against 1 m/s,
-n = 4–8; SPEC #85); ice sheets follow Glen's law, within 3.8% of the exact dome height at n = 6 (#86). Not yet by themselves: no lake forms on `relief`, and no ice sheet grows there. Earlier:
+n = 4–8; SPEC #85); ice sheets follow Glen's law, within 3.8% of the exact dome height at n = 6 (#86). Snow, glacier ice and sea ice have their own albedos, and a started polar sheet sustains itself (#87). Not yet by themselves: no lake forms on `relief`, and no ice sheet grows there from nothing. Earlier:
 **V2-4a Land closed 2026-10-31 (40/40 with PERF).**
 Land of any shape over the coupled ocean: ground heat, soil bucket, snow, runoff to the coast and terrain under the air. An
 ocean gyre intensifies in the west (×4.2, interior within 14% of Sverdrup), land's 45–65°N seasons reach 36 K against 8 K at

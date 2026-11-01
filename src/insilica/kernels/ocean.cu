@@ -158,16 +158,13 @@ extern "C" __global__ void ocn_overturn(int N, int L, const real* h, real* T, re
 // Fresh water into the mixed layer every air step (decision #76): rain less evaporation, and less the water frozen into
 // sea ice (ice melting gives it back), as a virtual salt flux at the reference salinity: dS0 = -S_ref fw / (rho_w h0).
 // Salt is conserved up to S_ref times the water the air, the ice and the land store. fw_acc sums fw (kg/m^2) for the mixing.
-// A coast also receives the runoff of the land cells that drain to it (decision #84; rstart, rsrc, rw: for each ocean cell
-// its sources and their area ratios).
+// A coast also receives the water waiting at its mouth (kg/m^2; decision #85), which it empties.
 extern "C" __global__ void ocn_fresh(int N, const real* h, real* S, const real* evap, const real* rain, const real* ice,
-                                     real* ice_prev, real S_ref, real rho_w, real dt, real* fw_acc, const real* land,
-                                     const int* rstart, const int* rsrc, const real* rw, const real* runoff) {
+                                     real* ice_prev, real S_ref, real rho_w, real dt, real* fw_acc, const real* land, real* mouth) {
   LOOP1(i, N)
   if (land && land[i] > (real)0.5) return;
   real fw = (rain[i] - evap[i]) * dt - (ice[i] - ice_prev[i]);
-  if (land)
-    for (int m = rstart[i]; m < rstart[i + 1]; m++) fw += rw[m] * runoff[rsrc[m]] * dt;
+  if (mouth) { fw += mouth[i]; mouth[i] = 0; }
   S[i] -= S_ref * fw / (rho_w * h[i]);
   ice_prev[i] = ice[i];
   fw_acc[i] += fw;

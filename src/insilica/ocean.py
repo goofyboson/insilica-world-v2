@@ -31,7 +31,7 @@ ALPHA_REF = 2.0e-4                                              # 1/K: dTmin's b
 OCEAN = dict(depth=4000.0, h_mixed=100.0, h_thermo=600.0, T_thermo=293.15, T_deep=273.15, alpha=0.52e-4, alpha2=1.0e-5, beta=7.6e-4, S_ref=35.0, rho=1025.0, cw=3990.0, dt=3600.0, mix_dt=86400.0,
              gprime=(0.016, 0.016),
              hmin=10.0, hmax=1000.0, dTmin=0.1, m_kt=0.5, n_kt=0.2, visc4_U=0.5, bottom_stress=2.5e-4,
-             interface_stress=5.0e-4, thin=2.0, walls=(), sw_R=0.58, sw_z1=0.35, sw_z2=23.0, land_drag=1.0)
+             interface_stress=5.0e-4, thin=2.0, walls=(), sw_R=0.58, sw_z1=0.35, sw_z2=23.0, land_drag=1.0, bed=None, bed_min=800.0)
 
 
 def wall_mask(g, walls):
@@ -55,7 +55,10 @@ class Ocean:
         g = dg.host
         from .world import visc4                                 # (world imports this module lazily: no cycle)
         nu4 = visc4(g, c['visc4_U'])
-        self.b = cp.full(N, -c['depth'])
+        # the sea floor: flat, or bed(grid), depths in m, shaping the abyss only: it stays under the two upper layers, so shallower seas count as bed_min deep
+        # (a floor reaching a layer's interface makes that layer's pressure the floor's slope; shelves and shallow sills wait for that fix)
+        depth = np.full(N, float(c['depth'])) if c['bed'] is None else np.maximum(np.asarray(c['bed'](g), dtype=float), c['bed_min'])
+        self.b = cp.asarray(-depth)
         # the thermocline's turbulent stress carries the wind's momentum down (decision #69): c ~ C_d |du| ~ 1e-3 x 0.5
         # m/s; without it a mixed layer thinned to its floor by equatorial upwelling ran away toward the wind's speed
         # g' per interface (decision #64): g · 2e-4/K · ΔT for 8 K steps (≈ 20 → 12 → 4 °C), baroclinic gravity waves 3.1 and 1.2 m/s
@@ -82,7 +85,7 @@ class Ocean:
             # near where the subtropics' mixing pumps it (decision #75), its drift stays slow (~0.05 K/yr); the abyss at the
             # freezing point, where polar winters would take it over centuries, so polar ice can form (decision #77)
             Ts = np.asarray(Tsurf, dtype=float)
-            h = np.stack([np.full(N, c['h_mixed']), np.full(N, c['h_thermo']), np.full(N, c['depth'] - c['h_mixed'] - c['h_thermo'])])
+            h = np.stack([np.full(N, c['h_mixed']), np.full(N, c['h_thermo']), depth - c['h_mixed'] - c['h_thermo']])
             u = np.zeros((L, E))
             T = np.stack([Ts, np.clip(Ts, c['T_deep'], c['T_thermo']), np.full(N, c['T_deep'])])
             S = np.full((L, N), c['S_ref'])

@@ -273,6 +273,15 @@ def _over_terrain(g, b):
     pi0 = (ps0 / P0) ** KAPPA
     ps = P0 * np.maximum(pi0 - GRAV * b / (CP_DRY * x['theta'][2]), 1e-3) ** (1 / KAPPA)
     h[2] -= (ps0 - ps) / GRAV
+    # ground above the bottom layer's top: it keeps a thin 25 hPa, and the ground rises on through the middle layer's theta
+    high = h[2] < 2500.0 / GRAV
+    if high.any():
+        pi_i = (AQUA_P[1] / P0) ** KAPPA
+        z_i = CP_DRY * x['theta'][2] * (pi0 - pi_i) / GRAV
+        pst = P0 * np.maximum(pi_i - GRAV * (b - z_i) / (CP_DRY * x['theta'][1]), 1e-3) ** (1 / KAPPA)
+        ps_h = np.maximum(pst, h[0] * GRAV + 3000.0)
+        h[2] = np.where(high, 2500.0 / GRAV, h[2])
+        h[1] = np.where(high, (ps_h - 2500.0) / GRAV - h[0], h[1])
     return h, b, u, dict(x, Ts=x['Ts'] - 6.5e-3 * b)
 
 
@@ -312,7 +321,7 @@ _EARTH = {}
 
 def earth_land(g):
     """Modern Earth on grid g, from the 1-degree table of ETOPO1 (tools/make_earth_topo.py): each 1-degree cell goes to its nearest
-    grid cell by area; land where over half the grid cell is land, at its land's mean height (m). Returns (land, height)."""
+    grid cell by area; land where over half the grid cell is land, at its land's mean height (m); the sea's mean depth elsewhere (m). Returns (land, height, depth)."""
     if g.N not in _EARTH:
         d = np.load(Path(__file__).parent / 'data' / 'earth_topo_1deg.npz')
         lat, lon = np.radians(np.arange(180) - 89.5), np.radians(np.arange(360) - 179.5)
@@ -324,21 +333,39 @@ def earth_land(g):
         fl = np.bincount(near, w * f, g.N)
         hl = np.bincount(near, w * f * d['elev'].astype(float).ravel(), g.N)
         land = fl > 0.5 * np.maximum(A, 1e-30)
-        _EARTH[g.N] = land, np.where(land, hl / np.maximum(fl, 1e-30), 0.0)
+        sea = np.bincount(near, w * (1 - f) * d['depth'].astype(float).ravel(), g.N)
+        _EARTH[g.N] = land, np.where(land, hl / np.maximum(fl, 1e-30), 0.0), sea / np.maximum(A - fl, 1e-30)
     return _EARTH[g.N]
 
 
-def earth(g):
-    """The start over Earth's terrain, the ice sheets laid on Greenland and Antarctica (100 m; their height is already in the table)."""
-    land, b = earth_land(g)
-    h, b, u, x = _over_terrain(g, b)
+def earth(g, rise=5.0e-3):
+    """The start over Earth's terrain with the air bent over it: the top layer as the aquaplanet's and the rest of each column's
+    air shared between the middle and bottom layers as at sea level, so both thin over high ground; the bottom layer's theta rises
+    by `rise` (K/m, as theta_rise; decision #96) and the surface cools by 6.5 K/km. The ice sheets lie on Greenland and Antarctica (100 m;
+    their height is already in the table)."""
+    land, b, _ = earth_land(g)
+    h, _, u, x = aqua(g)
+    h, theta = h.copy(), x['theta'].copy()
+    theta[2] += rise * b
+    ps0 = h.sum(0) * GRAV
+    ps = P0 * np.maximum((ps0 / P0) ** KAPPA - GRAV * b / (CP_DRY * 0.5 * (theta[1] + theta[2])), 1e-3) ** (1 / KAPPA)
+    share = h[2] / (h[1] + h[2])
+    rest = ps / GRAV - h[0]
+    h[1], h[2] = rest * (1 - share), rest * share
     lat, lon = np.degrees(g.lat), np.degrees(np.angle(np.exp(1j * g.lon)))
     sheet = land & ((lat < -60) | ((lat > 60) & (lon > -75) & (lon < -10)))
-    return h, b, u, dict(x, ice=np.where(sheet, 100.0 * 917.0, 0.0))
+    return h, b, u, dict(x, theta=theta, Ts=x['Ts'] - 6.5e-3 * b, ice=np.where(sheet, 100.0 * 917.0, 0.0))
 
 
-# Modern Earth's land over the coupled ocean; its sea floor is flat for now.
-PRESETS['earth'] = dict(PRESETS['coupled'], build=earth, land=lambda g: earth_land(g)[0])
+def earth_bed(g):
+    """The sea floor (m below sea level; land cells, walled off, keep the mean depth)."""
+    land, _, depth = earth_land(g)
+    return np.where(land, 4000.0, depth)
+
+
+# Modern Earth's land and sea floor over the coupled ocean.
+PRESETS['earth'] = dict(PRESETS['coupled'], build=earth, land=lambda g: earth_land(g)[0], ocean=dict(surface_drag=SURFACE_DRAG, bed=earth_bed),
+                        air=dict(AIR, physics=dict(AIR3, moist=1.0, k_evap=4.8e-3, theta_rise=5.0e-3)))
 PRESETS['rce'] = dict(build=aqua_dry, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True, physics=AIR3), dynamics=False)
 
 

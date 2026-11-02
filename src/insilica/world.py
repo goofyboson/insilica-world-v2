@@ -196,7 +196,7 @@ class World:
                                 qocean=self.sea.qocean if self.sea is not None else None,
                                 qsw=self.sea.qsw if self.sea is not None else None,
                                 land=self.land, soilcap=self.soilcap, soil=self.soil, pond=self.pond, snow=self.snow,
-                                cw=self.cw if self.moist else None)
+                                cw=self.cw if self.moist else None, elev=self.b)
             if self.sea is not None:
                 self.sea.accumulate(self.dt, self.physics.evap, self.physics.rain, self.ice, self.mouth)
             if self.L > 1:

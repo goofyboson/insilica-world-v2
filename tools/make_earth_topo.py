@@ -1,6 +1,6 @@
 """Reduce NOAA's ETOPO1 ice-surface grid (ETOPO1_Ice_g_gmt4.grd.gz; 1 arc-minute, grid registered, public domain; Amante & Eakins
 2009) to a 1-degree table for the `earth` preset: src/insilica/data/earth_topo_1deg.npz with, on 180 x 360 cells from 90 S and
-180 W, `land` (the share of the cell above sea level) and `elev` (the mean height of that land, m). Run once, from the repository:
+180 W, `land` (the share of the cell above sea level) and `elev` (the mean height of that land, m), `depth` (the mean depth of its sea, m). Run once, from the repository:
     python tools/make_earth_topo.py cache/etopo/ETOPO1_Ice_g_gmt4.grd.gz
 """
 import gzip
@@ -41,7 +41,7 @@ def main(path, out='src/insilica/data/earth_topo_1deg.npz'):
         shape, dt, offset = read_classic_netcdf_var(f, 'z')
         f.seek(offset)
         assert len(shape) == 2 and shape == [10801, 21601], shape     # rows from 90 S, columns from 180 W
-        land, elev, count = np.zeros((180, 360)), np.zeros((180, 360)), np.zeros((180, 360))
+        land, elev, depth, count = np.zeros((180, 360)), np.zeros((180, 360)), np.zeros((180, 360)), np.zeros((180, 360))
         for j in range(shape[0]):
             row = np.frombuffer(f.read(shape[1] * dt.itemsize), dt).astype(float)[:-1]
             jj = min(j // 60, 179)
@@ -49,10 +49,12 @@ def main(path, out='src/insilica/data/earth_topo_1deg.npz'):
             np.add.at(count[jj], ii, 1.0)
             np.add.at(land[jj], ii, (row > 0) * 1.0)
             np.add.at(elev[jj], ii, np.maximum(row, 0.0))
+            np.add.at(depth[jj], ii, np.maximum(-row, 0.0))
     elev = np.where(land > 0, elev / np.maximum(land, 1.0), 0.0)
+    depth = np.where(count > land, depth / np.maximum(count - land, 1.0), 0.0)
     land = land / count
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    np.savez_compressed(out, land=land.astype(np.float32), elev=elev.astype(np.float32))
+    np.savez_compressed(out, land=land.astype(np.float32), elev=elev.astype(np.float32), depth=depth.astype(np.float32))
     cosw = np.cos(np.radians(np.arange(180) - 89.5))[:, None]
     print(f'land share {np.sum(land * cosw) / (360 * cosw.sum()):.4f} (Earth 0.29); mean land height {np.sum(elev * land * cosw) / np.sum(land * cosw):.0f} m; highest 1-degree mean {elev.max():.0f} m; {os.path.getsize(out) / 1024:.0f} KB')
 

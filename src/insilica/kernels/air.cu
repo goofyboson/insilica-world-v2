@@ -21,7 +21,7 @@ struct Par {
   real S0, asw, tau0, mu_ref, eps_s, h_sens, u0, alb, c_slab, mu_bl, theta_star, floor_, sigma, grav, cp, kappa, p0;
   real tilt, year_s, day_s, tau_lin, theta_star2;
   real moist, Lv, Lf, Tf, k_evap, tau_conv, alb_ice, rho_ice, ice_cover, k_ice, Rv, sat_layer, sw_tau;
-  real alb_dry, alb_wet, soil_beta, k_inf, pond_cover, alb_snow, alb_ice_melt, alb_snow_melt, alb_glacier, snow_cover, alb_ramp, land_exch, plume_deep, lw_w0, c_dry, c_wet, sat_prof, land_rs, sat_base, bl_bot;
+  real alb_dry, alb_wet, soil_beta, k_inf, pond_cover, alb_snow, alb_ice_melt, alb_snow_melt, alb_glacier, snow_cover, alb_ramp, land_exch, plume_deep, lw_w0, c_dry, c_wet, sat_prof, land_rs, sat_base, bl_bot, cloud, rh_crit, re_liq, re_ice, cloud_g, k_lw_liq, k_lw_ice, c_auto, q_auto, v_ice, l_det, tau_erode, k_revap;
 };
 
 // The parameters arrive as an array in this order (atmosphere.PAR_ORDER).
@@ -32,7 +32,7 @@ __device__ Par unpack(const real* a) {
   P.kappa = a[15]; P.p0 = a[16]; P.tilt = a[17]; P.year_s = a[18]; P.day_s = a[19]; P.tau_lin = a[20]; P.theta_star2 = a[21];
   P.moist = a[22]; P.Lv = a[23]; P.Lf = a[24]; P.Tf = a[25]; P.k_evap = a[26]; P.tau_conv = a[27]; P.alb_ice = a[28];
   P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32]; P.sat_layer = a[33]; P.sw_tau = a[34];
-  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54];
+  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67];
   return P;
 }
 
@@ -153,6 +153,57 @@ __device__ real condense_k(int k, const real* mu, real* th, real* q, const real*
   return condense(th[k], q[k], pib[k], p_of(pib[k], P), P);
 }
 
+// ---- clouds (decision #95): water that has condensed and not yet rained, cw (kg/kg) per layer ----
+// A layer's vapor capacity qs and its change with theta, dqs (as condense_layer and condense_spread have them).
+__device__ void layer_cap(int k, const real* mu, real th, const Par& P, real& qs, real& dqs) {
+  const real x[4] = {-0.8611363115940526, -0.3399810435848563, 0.3399810435848563, 0.8611363115940526};
+  const real wq[4] = {0.3478548451374538, 0.6521451548625461, 0.6521451548625461, 0.3478548451374538};
+  real pt = 0;
+  for (int j = 0; j < k; j++) pt += P.grav * mu[j];
+  const real pb = pt + P.grav * mu[k];
+  const bool spread = P.sat_prof > 0 && k == 1 && P.theta_star2 > P.theta_star && th < P.theta_star2;
+  const real s = spread ? edge_shape(P.theta_star, P.theta_star2, th) : (real)0;
+  qs = 0; dqs = 0;
+  for (int j = 0; j < 4; j++) {
+    const real p = (real)0.5 * (pt + pb) + (real)0.5 * (pb - pt) * x[j], m = (pb - p) / (pb - pt);
+    const real tn = !spread ? th : P.theta_star + (P.theta_star2 - P.theta_star) * (fabs(s) < (real)1e-6 ? m : log1p(m * expm1(s)) / s);
+    const real ex = pow(p / P.p0, P.kappa), T = tn * ex;
+    if (T < 160) continue;
+    const real v = qsat(T, p);
+    qs += (real)0.5 * wq[j] * v;
+    dqs += (real)0.5 * wq[j] * v * P.Lv / (P.Rv * T * T) * ex;
+  }
+}
+
+// The cell's water spread evenly over +-b about its mean qt, b = (1 - rh_crit) qs (Sundqvist-style statistics): its
+// saturated share f and the mean condensate l that share holds.
+__device__ void cloud_pdf(real qt, real qs, const Par& P, real& l, real& f) {
+  const real b = (1 - P.rh_crit) * qs, s = qt - qs;
+  if (s <= -b) { l = 0; f = 0; }
+  else if (s >= b) { l = s; f = 1; }
+  else { f = (s + b) / (2 * b); l = (s + b) * f / 2; }
+}
+
+// The layer's cloud cover: the statistics', or what plumes left, spread at the water content they leave it with.
+__device__ real cloud_cover(int k, const real* mu, const real* th, const real* q, const real* cw, const Par& P) {
+  real qs, dqs, l, f;
+  layer_cap(k, mu, th[k], P, qs, dqs);
+  cloud_pdf(q[k] + cw[k], qs, P, l, f);
+  return fmax(f, fmin((real)1, cw[k] / P.l_det));
+}
+
+// Condense up to the statistics' condensate, with the latent heat's feedback on the capacity; above it, cloud erodes over tau_erode.
+__device__ real cloud_adjust(int k, const real* mu, real* th, real* q, real* cw, const real* pib, real dt, const Par& P) {
+  real qs, dqs, l, f;
+  layer_cap(k, mu, th[k], P, qs, dqs);
+  if (!(qs > 0)) return 0;
+  cloud_pdf(q[k] + cw[k], qs, P, l, f);
+  const real dl = l > cw[k] ? (l - cw[k]) / (1 + P.Lv / pib[k] * dqs * f) : -(cw[k] - l) * (1 - exp(-dt / P.tau_erode));
+  cw[k] += dl; q[k] -= dl;
+  th[k] += P.Lv * dl / pib[k];
+  return dl;
+}
+
 // A parcel (theta, q) lifted to pressure p (Pa): its theta and vapor there after condensing what it can't hold.
 __device__ void parcel(real th, real q, real p, const Par& P, real& thp, real& qp) {  // th, q by value: thp, qp may be the same air
   thp = th; qp = q;
@@ -173,7 +224,7 @@ __device__ __forceinline__ real tstar(int j, int L, const Par& P) { return j == 
 // way). The column's energy is the same before and after up to rounding; that residual is booked into the receiving
 // layer.
 __device__ void move_mass(int L, const Par& P, real* mu, real* th, real* q, real* pib, int from, int to, real m,
-                          real th_leave, real th_arrive, real q_leave, real q_arrive) {
+                          real th_leave, real th_arrive, real q_leave, real q_arrive, real* cl = 0) {
   if (m == 0) return;
   real pb2[LMAX], pib2[LMAX], mu2[LMAX], th2[LMAX], q2[LMAX];
   const real Eb = column_energy(L, mu, pib, th, q, P);
@@ -184,6 +235,7 @@ __device__ void move_mass(int L, const Par& P, real* mu, real* th, real* q, real
   th2[to] = (mu[to] * th[to] + m * th_arrive) / mu2[to];
   q2[from] = (mu[from] * q[from] - m * q_leave) / mu2[from];
   q2[to] = (mu[to] * q[to] + m * q_arrive) / mu2[to];
+  if (cl) cl[to] = (mu[to] * cl[to] + m * cl[from]) / mu2[to];
   const real Ea = column_energy(L, mu2, pib2, th2, q2, P);
   th2[to] += (Eb - Ea) / (mu2[to] * pib2[to]);
   for (int k = 0; k < L; k++) { th[k] = th2[k]; mu[k] = mu2[k]; pib[k] = pib2[k]; q[k] = q2[k]; }
@@ -241,7 +293,7 @@ __device__ void plume_ascent(int bot, const real* mu, const real* th, real th0, 
 // own side of every interface. wxo[j] (j = 0..L-2) receives the mass moved up across interface j (kg/m^2); gross, if
 // given, the up and down parts at each interface before netting and limiting (gross[2j], gross[2j+1]; diagnostics).
 __device__ void crossing(int L, const Par& P, real* mu, real* th, real* q, const real* dth, real dth_up, real* pib,
-                         real* wxo, real* gross = 0) {
+                         real* wxo, real* gross = 0, real* cl = 0) {
   for (int j = 0; j + 1 < L; j++) wxo[j] = 0;
   if (P.theta_star <= 0) return;                           // theta_star <= 0: no crossing (diagnostics)
   real dmj[LMAX], thcj[LMAX];
@@ -281,8 +333,8 @@ __device__ void crossing(int L, const Par& P, real* mu, real* th, real* q, const
     const real maxup = mu[b] - P.floor_, maxdn = mu[a] - P.floor_;
     if (dm > maxup) dm = maxup > 0 ? maxup : (real)0;
     if (-dm > maxdn) dm = maxdn > 0 ? -maxdn : (real)0;
-    if (dm > 0) move_mass(L, P, mu, th, q, pib, b, a, dm, thcj[j], thcj[j], q[b], q[b]);
-    else if (dm < 0) move_mass(L, P, mu, th, q, pib, a, b, -dm, thcj[j], thcj[j], q[a], q[a]);
+    if (dm > 0) move_mass(L, P, mu, th, q, pib, b, a, dm, thcj[j], thcj[j], q[b], q[b], cl);
+    else if (dm < 0) move_mass(L, P, mu, th, q, pib, a, b, -dm, thcj[j], thcj[j], q[a], q[a], cl);
     wxo[j] = dm;
   }
   const real tiny = P.floor_ * (real)1.000001;
@@ -327,11 +379,12 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
                                       const real* uabs, real* mu_in, real* theta, real* qv, real* Ts, real* ice, real dt,
                                       real* wx, real* olr, real* sw_abs, real* stored, real* rain, real* evap, real* conv,
                                       real* tsurf, real* rainp, real* dgo, real* cap, real* qocean,
-                                      real* qsw, const real* land, const real* soilcap, real* soil, real* pond, real* snow) {
+                                      real* qsw, const real* land, const real* soilcap, real* soil, real* pond, real* snow, real* cloudw, real* cloudo) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= N) return;
   const Par P = unpack(par);
   const bool moist = P.moist > 0;
+  const bool cloudy = moist && P.cloud > 0 && cloudw;
   real mu[LMAX], th[LMAX], q[LMAX], pb[LMAX], pib[LMAX], Q[LMAX], T[LMAX], eps[LMAX];
   real mt = 0;
   for (int k = 0; k < L; k++) {
@@ -339,6 +392,8 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
     mt += mu[k]; Q[k] = 0;
   }
   layer_exner(L, mu, P, pb, pib);
+  real cl[LMAX], fc[LMAX], cwp[LMAX], eps0[LMAX], liq[LMAX];
+  for (int k = 0; k < L; k++) { cl[k] = cloudy ? cloudw[(size_t)k * N + i] : (real)0; fc[k] = 0; }
   real m_ice = moist ? ice[i] : (real)0;
   // the surface water's heat capacity (J/m^2/K): the ocean's mixed layer when coupled (cap), else the slab
   // Land's by its soil water when c_wet is set (decision #90): wet soil stores and conducts heat better. The ground's heat relative to T_REF stays as the water changes.
@@ -351,6 +406,13 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
   const real E0 = column_energy(L, mu, pib, th, q, P) + Cw * Ts[i] - P.Lf * m_ice;
   for (int k = 0; k < L; k++) T[k] = pib[k] * th[k] / P.cp;
   const int top = 0, bot = L - 1;
+  // each layer's cover, in-cloud water path (kg/m^2) and liquid share (all ice below -20 C)
+  if (cloudy)
+    for (int k = 0; k < L; k++) {
+      fc[k] = cloud_cover(k, mu, th, q, cl, P);
+      cwp[k] = fc[k] > (real)1e-6 ? mu[k] * cl[k] / fc[k] : (real)0;
+      liq[k] = fmax((real)0, fmin((real)1, (T[k] - P.Tf + 20) / 20));
+    }
 
   // ---- the air touching the ground: the bottom mu_bl of the column ----
   real wbl[LMAX], thb = 0, qb = 0, mb = 0;
@@ -406,7 +468,15 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
       Q[k] += toAir * (tau_p(pb[k], pb[bot], P) - tau_p(k ? pb[k - 1] : (real)0, pb[bot], P)) / P.tau0;
   else
     for (int k = 0; k < L; k++) Q[k] += toAir * mu[k] / mt;
-  const real swS = (I - toAir) * (1 - alb);
+  // clouds reflect: each layer's cloud by two-stream conservative scattering of its optical depth 3 W / (2 rho r), layers at random
+  // overlap, with the reflections between them and the ground
+  real Tc = 1;
+  if (cloudy)
+    for (int k = 0; k < L; k++) {
+      const real tau = (real)1.5 * cwp[k] * (liq[k] / (1000 * P.re_liq) + (1 - liq[k]) / (P.rho_ice * P.re_ice)), g1 = (1 - P.cloud_g) * tau;
+      Tc *= 1 - fc[k] * g1 / (2 + g1);
+    }
+  const real swS = (I - toAir) * Tc * (1 - alb) / (1 - alb * (1 - Tc));
 
   // ---- longwave: each layer's emissivity from its share of the optical-depth profile; the downward longwave reaching
   // the surface ----
@@ -422,6 +492,13 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
     }
   } else
   for (int k = 0; k < L; k++) eps[k] = 1 - exp(-(tau_p(pb[k], pb[bot], P) - tau_p(k ? pb[k - 1] : (real)0, pb[bot], P)));
+  // clouds absorb and emit by their water path, on top of the gas
+  if (cloudy)
+    for (int k = 0; k < L; k++) {
+      eps0[k] = eps[k];
+      const real kl = liq[k] * P.k_lw_liq + (1 - liq[k]) * P.k_lw_ice;
+      eps[k] = 1 - (1 - eps[k]) * (1 - fc[k] * (1 - exp(-kl * cwp[k])));
+    }
   real ldown = 0;
   for (int k = 0; k < L; k++) {
     real dn = eps[k] * P.sigma * T[k] * T[k] * T[k] * T[k];
@@ -460,6 +537,14 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
     up = up - a + em;
   }
   olr[i] = up;
+  if (cloudy && cloudo) {                                        // cover and the cloud effects at the top (W/m^2), diagnostics
+    real up0 = P.eps_s * P.sigma * tsk * tsk * tsk * tsk, clear = 1;
+    for (int k = bot; k >= 0; k--) up0 = up0 - eps0[k] * up0 + eps0[k] * P.sigma * T[k] * T[k] * T[k] * T[k];
+    for (int k = 0; k < L; k++) { cloudo[(size_t)k * N + i] = fc[k]; clear *= 1 - fc[k]; }
+    cloudo[(size_t)L * N + i] = 1 - clear;
+    cloudo[(size_t)(L + 1) * N + i] = swS - (I - toAir) * (1 - alb);
+    cloudo[(size_t)(L + 2) * N + i] = up0 - up;
+  }
   for (int k = 0; k < L; k++) {
     real dn = eps[k] * P.sigma * T[k] * T[k] * T[k] * T[k];
     for (int j = k + 1; j < L; j++) { const real a = eps[j] * dn; Q[j] += a; dn -= a; }
@@ -525,7 +610,39 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
   // ---- condensation: one-step saturation adjustment per layer (v1 SPEC 18 #25); the latent heat warms the layer and
   // counts as heating for the crossing of theta*; the water rains out ----
   real R = 0, Rk[2] = {0, 0}, Rc = 0;            // Rk: condensation in the layers above the bottom, in the bottom
-  if (moist)
+  if (cloudy) {
+    // cloud water forms and erodes; liquid turns to rain (Sundqvist 1989), ice falls out; rain evaporates in the clear air it falls through
+    real Fr = 0;
+    for (int k = 0; k < L; k++) {
+      const real dl = cloud_adjust(k, mu, th, q, cl, pib, dt, P);
+      dth[k] += P.Lv * dl / pib[k];
+      dgl[k] += P.Lv * mu[k] * dl / dt;
+      real qs, dqs, l, f;
+      layer_cap(k, mu, th[k], P, qs, dqs);
+      cloud_pdf(q[k] + cl[k], qs, P, l, f);
+      f = fmax(f, fmin((real)1, cl[k] / P.l_det));
+      const real inc = f > (real)1e-6 ? cl[k] / f : (real)0, r = inc / P.q_auto;
+      real pt_ = 0;
+      for (int j = 0; j < k; j++) pt_ += P.grav * mu[j];
+      const real pm = pt_ + (real)0.5 * P.grav * mu[k], Tk = pib[k] * th[k] / P.cp, depth = mu[k] / (pm / (287.0 * Tk));
+      const real rate = liq[k] * P.c_auto * (1 - exp(-r * r)) + (1 - liq[k]) * P.v_ice / depth;
+      const real loss = cl[k] * (1 - exp(-rate * dt));
+      cl[k] -= loss;
+      Fr += mu[k] * loss / dt;
+      real ev = 0;
+      if (Fr > 0 && qs > q[k]) {
+        ev = P.k_revap * (1 - f) * (1 - q[k] / qs) * sqrt(Fr) * mu[k];
+        ev = fmin(ev, fmin(Fr, (qs - q[k]) * mu[k] / dt / (1 + P.Lv / pib[k] * dqs)));
+        Fr -= ev;
+        q[k] += ev * dt / mu[k];
+        th[k] -= P.Lv * ev * dt / (mu[k] * pib[k]);
+        dth[k] -= P.Lv * ev * dt / (mu[k] * pib[k]);
+        dgl[k] -= P.Lv * ev;
+      }
+      Rk[k == bot ? 1 : 0] += mu[k] * loss - ev * dt;
+    }
+    R = Fr * dt;
+  } else if (moist)
     for (int k = 0; k < L; k++) {
       const real dq = condense_k(k, mu, th, q, pib, P);
       dth[k] += P.Lv * dq / pib[k];
@@ -536,7 +653,7 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
 
   // ---- dry crossing of the interfaces ----
   real wxo[LMAX];
-  crossing(L, P, mu, th, q, dth, dth[top], pib, wxo, gross);
+  crossing(L, P, mu, th, q, dth, dth[top], pib, wxo, gross, cloudy ? cl : (real*)0);
 
   // ---- moist convection (decisions #46, #49): a plume of bottom-layer air lifted to the interface above it, condensing
   // on the way, compared with the air there, which is at theta*. Buoyant (theta_p > theta*), it rises; it keeps rising
@@ -548,7 +665,13 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
   if (moist && P.theta_star > 0) {
     real pi_ = 0;
     for (int k = 0; k < bot; k++) pi_ += P.grav * mu[k];     // the bottom layer's top
-    const real th0 = th[bot], q0 = q[bot];
+    const real th0 = th[bot];
+    real q0 = q[bot];
+    if (cloudy) {                     // plumes root in the cell's moist air: its moistest, by the statistics
+      real qs, dqs;
+      layer_cap(bot, mu, th0, P, qs, dqs);
+      q0 = fmax(q0, fmin(qs, q0 + (1 - P.rh_crit) * qs));
+    }
     real thp, qc, thp2, qc2;
     if (P.plume_deep > 0 && bot >= 2) {
       // the air it rises through sinks to make room, warming each level by the theta it had below: over the ascent, A falls by
@@ -559,14 +682,21 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
         const real rise = thp - tstar(bot - 1, L, P);
         mc = fmin(A / (rise > 1 ? rise : (real)1), mu[bot] - P.floor_) * (1 - exp(-dt / P.tau_conv));
         if (mc > 0) {
-          R += mc * (q0 - qc);
-          Rc = mc * (q0 - qc);
-          move_mass(L, P, mu, th, q, pib, bot, kd, mc, th0, thp, q0, qc);
+          // the plume keeps l_det of its condensate and leaves it as cloud; the rest rains inside it
+          const real det = cloudy ? fmin(q0 - qc, P.l_det) : (real)0;
+          R += mc * (q0 - qc - det);
+          Rc = mc * (q0 - qc - det);
+          move_mass(L, P, mu, th, q, pib, bot, kd, mc, th0, thp, q0, qc, cloudy ? cl : (real*)0);
           for (int j = kd; j < bot; j++) wxo[j] += mc;
           cin[kd] += mc;
-          const real rt = mu[kd] * condense_k(kd, mu, th, q, pib, P);
-          R += rt;
-          Rc += rt;
+          if (cloudy) {
+            cl[kd] += mc * det / mu[kd];
+            cloud_adjust(kd, mu, th, q, cl, pib, dt, P);
+          } else {
+            const real rt = mu[kd] * condense_k(kd, mu, th, q, pib, P);
+            R += rt;
+            Rc += rt;
+          }
         } else mc = 0;
       }
     } else {
@@ -648,7 +778,7 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
   if (rainp) { rainp[i] = Rk[0] / dt; rainp[(size_t)N + i] = Rk[1] / dt; rainp[(size_t)2 * N + i] = Rc / dt; }
 
   const real E1 = column_energy(L, mu, pib, th, q, P) + Cw * Ts[i] - P.Lf * m_ice;
-  for (int k = 0; k < L; k++) { theta[(size_t)k * N + i] = th[k]; if (moist) qv[(size_t)k * N + i] = q[k]; }
+  for (int k = 0; k < L; k++) { theta[(size_t)k * N + i] = th[k]; if (moist) qv[(size_t)k * N + i] = q[k]; if (cloudy) cloudw[(size_t)k * N + i] = cl[k]; }
   stored[i] = E1 - E0;
 }
 

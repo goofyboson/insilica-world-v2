@@ -31,7 +31,7 @@ ALPHA_REF = 2.0e-4                                              # 1/K: dTmin's b
 OCEAN = dict(depth=4000.0, h_mixed=100.0, h_thermo=600.0, T_thermo=293.15, T_deep=273.15, alpha=0.52e-4, alpha2=1.0e-5, beta=7.6e-4, S_ref=35.0, rho=1025.0, cw=3990.0, dt=3600.0, mix_dt=86400.0,
              gprime=(0.016, 0.016),
              hmin=10.0, hmax=1000.0, dTmin=0.1, m_kt=0.5, n_kt=0.2, visc4_U=0.5, bottom_stress=2.5e-4,
-             interface_stress=5.0e-4, thin=2.0, walls=(), sw_R=0.58, sw_z1=0.35, sw_z2=23.0, land_drag=1.0, bed=None, bed_min=800.0)
+             interface_stress=5.0e-4, thin=2.0, walls=(), sw_R=0.58, sw_z1=0.35, sw_z2=23.0, land_drag=1.0, bed=None, bed_min=50.0, shelf=50.0)
 
 
 def wall_mask(g, walls):
@@ -75,7 +75,7 @@ class Ocean:
             self.wall = m
             self.land = cp.asarray(np.asarray(land, dtype=float))
         self.core = Layers(dg, L, b=self.b, gprime=list(c['gprime']), stress=[0.0] * (L - 1) + [c['bottom_stress']], nu4=nu4,
-                           floor=c['hmin'], vmix=c['interface_stress'], thin=c['thin'], wall=self.wall)
+                           floor=c['hmin'], vmix=c['interface_stress'], thin=c['thin'], wall=self.wall, shelf=c['shelf'] if c['bed'] is not None else 0.0)
         if nu4:
             lam = self.core.lap_max()
             assert nu4 * lam * lam * c['dt'] <= 1.0, 'ocean nu4 unstable at its step'
@@ -85,7 +85,9 @@ class Ocean:
             # near where the subtropics' mixing pumps it (decision #75), its drift stays slow (~0.05 K/yr); the abyss at the
             # freezing point, where polar winters would take it over centuries, so polar ice can form (decision #77)
             Ts = np.asarray(Tsurf, dtype=float)
-            h = np.stack([np.full(N, c['h_mixed']), np.full(N, c['h_thermo']), depth - c['h_mixed'] - c['h_thermo']])
+            h2 = np.maximum(depth - c['h_mixed'] - c['h_thermo'], c['hmin'])   # interfaces level at rest: a rising floor thins the abyss to its floor, then the thermocline's water, then the mixed layer
+            h1 = np.maximum(np.minimum(depth - c['h_mixed'] - h2, c['h_thermo']), c['hmin'])
+            h = np.stack([depth - h1 - h2, h1, h2])
             u = np.zeros((L, E))
             T = np.stack([Ts, np.clip(Ts, c['T_deep'], c['T_thermo']), np.full(N, c['T_deep'])])
             S = np.full((L, N), c['S_ref'])

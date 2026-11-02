@@ -25,11 +25,18 @@ extern "C" __global__ void lay_eta(int N, int L, const real* h, const real* b, r
   eta[i] = z;
 }
 
-extern "C" __global__ void lay_ubar(int N, int E, int L, const real* h, const real* u, const int* eI, const int* eJ, real* ubar) {
+// A layer's thickness at an edge (decision #97): the mean of its two cells; where a rising sea floor has squeezed it below `shelf` on one side,
+// the thinner: the rest of the thick side's water faces the floor's step, and cannot cross.
+__device__ __forceinline__ real edge_h(real a, real b, real shelf) {
+  const real m = a < b ? a : b;
+  return shelf > 0 && m < shelf ? m : (real)0.5 * (a + b);
+}
+
+extern "C" __global__ void lay_ubar(int N, int E, int L, const real* h, const real* u, const int* eI, const int* eJ, real shelf, real* ubar) {
   LOOP1(e, E)
   real H = 0, U = 0;
   for (int k = 0; k < L; k++) {
-    const real he = (real)0.5 * (h[(size_t)k * N + eI[e]] + h[(size_t)k * N + eJ[e]]);
+    const real he = edge_h(h[(size_t)k * N + eI[e]], h[(size_t)k * N + eJ[e]], shelf);
     H += he;
     U += he * u[(size_t)k * E + e];
   }
@@ -202,10 +209,10 @@ extern "C" __global__ void air_gfast(int N, int L, const real* h, const real* th
 // Per stage: each edge's layer thickness h_e and potential vorticity q_e (the mean of its two vertices), read by
 // lay_slow for every neighbour instead of being recomputed from cells and vertices there.
 extern "C" __global__ void lay_edge_hq(int N, int E, int NV, const real* h, const real* q, const int* eI, const int* eJ,
-                                       const int* ev1, const int* ev2, real* he, real* qe) {
+                                       const int* ev1, const int* ev2, real shelf, real* he, real* qe) {
   LOOP(e, E)
   const size_t o = (size_t)l * E + e;
-  he[o] = (real)0.5 * (h[(size_t)l * N + eI[e]] + h[(size_t)l * N + eJ[e]]);
+  he[o] = edge_h(h[(size_t)l * N + eI[e]], h[(size_t)l * N + eJ[e]], shelf);
   qe[o] = (real)0.5 * (q[(size_t)l * NV + ev1[e]] + q[(size_t)l * NV + ev2[e]]);
 }
 
@@ -217,7 +224,7 @@ extern "C" __global__ void lay_slow(int N, int E, int NV, int L, const real* hed
                                     const int* eoeStart, const int* eoe, const real* w, const int* eI, const int* eJ,
                                     const int* ev1, const int* ev2, const real* de, const real* drag, const real* stress,
                                     real floor_, real nu4, const real* lap4, const real* theta, const real* pibar,
-                                    real dts, real thin, real* Tp, real* G, real* He, real* ubs) {
+                                    real dts, real thin, real shelf, real* Tp, real* G, real* He, real* ubs) {
   LOOP1(e, E)
   real T[LMAX], hev[LMAX];
   real H = 0, U = 0, GT = 0;
@@ -240,7 +247,8 @@ extern "C" __global__ void lay_slow(int N, int E, int NV, int L, const real* hed
       const real F2 = h2 * ul[e2];
       Q += w[m] * F2 * (real)0.5 * (qa + ql[e2]);
     }
-    real d = Q - (Bl[eJ[e]] - Bl[eI[e]]) / de[e] - drag[k] * ul[e];
+    // a squeezed layer's interfaces there are the floor's slope, not a pressure force: it fades with the layer
+    real d = Q - (shelf > 0 && he < shelf ? he / shelf : (real)1) * (Bl[eJ[e]] - Bl[eI[e]]) / de[e] - drag[k] * ul[e];
     if (stress[k] != 0) {
       // exact exponential decay over the stage (rate r = c / h): the effective rate (1 - e^(-r dts)) / dts is r for
       // weak friction and never exceeds 1/dts, so a nearly massless layer is stopped, not overshot (decision #36)
@@ -298,9 +306,9 @@ extern "C" __global__ void bt_u(int E, const real* eta, const real* eta_prev, re
 // Layer thickness fluxes for the stage: each layer's baroclinic flux plus its share of the barotropic transport,
 // F_k = h_e,k (u_k - ubar*) + h_e,k ubar_avg, so sum_k F_k = H_e ubar_avg, the transport the fast mode moved.
 extern "C" __global__ void lay_flux(int N, int E, const real* h, const real* u, const real* ubs, const real* acc, real inv_n,
-                                    const int* eI, const int* eJ, real* F) {
+                                    const int* eI, const int* eJ, real shelf, real* F) {
   LOOP(e, E)
-  const real he = (real)0.5 * (h[(size_t)l * N + eI[e]] + h[(size_t)l * N + eJ[e]]);
+  const real he = edge_h(h[(size_t)l * N + eI[e]], h[(size_t)l * N + eJ[e]], shelf);
   F[(size_t)l * E + e] = he * (u[(size_t)l * E + e] - ubs[e]) + he * (acc[e] * inv_n);
 }
 

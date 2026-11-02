@@ -34,7 +34,7 @@ DIV_DAMP = 0.1              # divergence damping of the fast mode (decision #28)
 
 class Layers:
     def __init__(self, dg, layers=1, b=None, grav=GRAV, gprime=(), drag=0.0, stress=0.0, nu4=0.0, floor=1.0, rotation=1.0,
-                 div_damp=DIV_DAMP, air=None, vmix=0.0, thin=2.0, wall=None, thin_wind=0.0):
+                 div_damp=DIV_DAMP, air=None, vmix=0.0, thin=2.0, wall=None, thin_wind=0.0, shelf=0.0):
         """air: None for Boussinesq (ocean-like) layers, h in m; or a dict for air layers, h the layer's mass per area
         (kg/m²) with a potential temperature θ per layer passed to step() (decision #32). The fast mode then runs on
         the column mass with each cell's own coefficient Gc = R·T_s/μ (decision #37), at √(R·T_s). thin: the PV flux's cap on a
@@ -46,6 +46,7 @@ class Layers:
         self.real = dg.dtype.type
         self.grav, self.nu4, self.floor, self.div_damp, self.thin = grav, nu4, floor, div_damp, thin
         self.thin_wind = thin_wind
+        self.shelf = shelf                                 # sea floor: layers thinner than this take the thinner side's thickness at an edge (#97)
         assert wall is None or not air, 'walls are for Boussinesq layers'
         self.wall = None if wall is None else cp.asarray(wall, dtype=dg.dtype)
         N, E, NV, L, dt = dg.N, dg.E, dg.NV, layers, dg.dtype
@@ -127,11 +128,11 @@ class Layers:
             k['lay_bern'](*c1, (N, E, i32(L), hs, us, self.b, self.gp, g.cellEdge, g.le, g.de, g.areaCell, self.B))
         k['swe_vertex'](*grid_dims(g.NV, L), (N, E, NV, hs, us, g.vCell, g.vSlot, g.kite, g.vEdge, g.vEdgeSign, g.de, g.areaV,
                                               self.fV, self.q))
-        k['lay_edge_hq'](*grid_dims(g.E, L), (N, E, NV, hs, self.q, g.eI, g.eJ, g.ev1, g.ev2, self.hedge, self.qedge))
+        k['lay_edge_hq'](*grid_dims(g.E, L), (N, E, NV, hs, self.q, g.eI, g.eJ, g.ev1, g.ev2, R(self.shelf), self.hedge, self.qedge))
         k['lay_slow'](*e1, (N, E, NV, i32(L), self.hedge, us, self.qedge, self.B, g.eoeStart, g.eoe, g.w, g.eI, g.eJ, g.ev1, g.ev2, g.de,
                             self.drag, self.stress, R(self.floor), R(self.nu4), self.L2 if self.nu4 else NULL,
                             theta if self.air else NULL,
-                            self.pibar if self.air else NULL, R(c * dt), R(self.thin), self.Tp, self.G, self.He,
+                            self.pibar if self.air else NULL, R(c * dt), R(self.thin), R(self.shelf), self.Tp, self.G, self.He,
                             self.ubs))
         n = max(1, math.ceil(c * nfast))
         tau = R(c * dt / n)
@@ -160,7 +161,7 @@ class Layers:
             self.mask(self.ub, 1)
             self.mask(self.acc, 1)
         # layers
-        k['lay_flux'](*eL, (N, E, hs, us, self.ubs, self.acc, R(1.0 / n), g.eI, g.eJ, self.F))
+        k['lay_flux'](*eL, (N, E, hs, us, self.ubs, self.acc, R(1.0 / n), g.eI, g.eJ, R(self.shelf), self.F))
         self.mask(self.F, L)
         k['lay_scale'](*cL, (N, E, h0, self.F, g.cellEdgeAsc, g.eI, g.le, g.areaCell, R(c * dt), R(self.floor), self.scale))
         k['lay_limit'](*eL, (N, E, g.eI, g.eJ, self.scale, g.le, R(dt), self.F, Fm if Fm is not None else NULL))
@@ -177,7 +178,7 @@ class Layers:
             k['air_stiff'](*grid_dims(g.N), (i32(g.N), i32(L), h, theta, R(self.grav), R(CP_DRY), R(KAPPA), R(P0), self.S))
         else:
             k['lay_eta'](*grid_dims(g.N), (i32(g.N), i32(L), h, self.b, self.eta0))
-            k['lay_ubar'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(L), h, u, g.eI, g.eJ, self.ub0))
+            k['lay_ubar'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(L), h, u, g.eI, g.eJ, self.real(self.shelf), self.ub0))
             self.mask(self.ub0, 1)
         if self.nu4:
             self._lap(u, self.L1)

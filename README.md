@@ -55,8 +55,8 @@ bug carried over from v1; V2-0 ported v1's grid and solver to 64-bit CUDA.
 | V2-4a | Land: masks, coasts, ground heat, soil bucket, snow, runoff to the coast, terrain; gyres; two known shortfalls (SPEC #84) | ✅ Done (40/40) |
 | V2-4b | Rivers, lakes, infiltration, seepage, snow, ice-sheet flow | ✅ Done (42/42) |
 | V2-4c | Surface coupling, full plume, clouds, `earth` preset with sea floor, mixed-layer trial, all behind switches | ✅ Closed (41/42; ICE open, SPEC #100) |
-| V2-4d | General layers: any number of air and ocean layers from lists; 5-layer air prototype judged by storms and surface winds, then 7; ocean at 5 once winds are healthy | 🚧 Next |
-| V2-4e | Climate on the new layers: clouds, convection and rain by region on `earth`, then lightning | ⏳ Planned |
+| V2-4d | General layers: any number of air and ocean layers from lists; defaults stay at 3 and 3 (SPEC #101) | 🚧 Closing (41/42; ICE open) |
+| V2-4e | Weak surface winds first (SPEC #102), then clouds, convection and rain by region on `earth`, then lightning | ⏳ Planned |
 | V2-5 | Speed for development: ensembles in one launch, faster spin-up (the deep ocean's centuries), kernel profiling and removing wasted work, a first 32-bit trial; results unchanged or measured against 64-bit | ⏳ Planned |
 | V2-6 | Real physics for the stand-ins (radiation (air and haze scattering, vapor-dependent longwave, sunlight absorbed by vapor and ozone, stratosphere), ice in the air with freezing heat, mountain and gravity-wave drag, stability-dependent surface exchange, land cover map, plume entrainment and downdrafts, rain evaporation, Earth's orbit, sea-ice motion, deep-water formation, firn with stored cold (closes the ICE failure, SPEC #100), gas composition (H₂O, CO₂, CH₄, O₃, N₂O by amount, N₂ and O₂ setting heat capacity and molecular weight), transported composition tracers with exact budgets, per-world planet settings), Moon and tides, UI polish | ⏳ Planned |
 | V2-7 | Final optimization: mixed time steps, 32-bit sign-off, then approximations (reduced model, learned emulator) against the 64-bit reference ([plan §7.1](docs/v2-plan.md)) | ⏳ Planned |

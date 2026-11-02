@@ -137,29 +137,29 @@ Each stage keeps v1's rules: restate tests and plan, pause for go, commit as we 
 | **V2-0 Foundation** | Repo, Python package, CuPy + NVRTC kernels, grid (port v1's SCVT and TRiSK geometry), save/load, WebSocket viewer skeleton, parallel test runner, 64-bit performance probe on the 4070 | Measured ns per layer-edge (64-bit); a ported v1 kernel matches v1's JavaScript result; exact conservation of a transported tracer; save/load bit-identical continuation |
 | **V2-1 Fluid core** | Multi-layer TRiSK: variable thickness, ALE remap, split-explicit fast mode at true speeds, FCT transport | Williamson 1, 2, 5, 6 + Galewsky (v1's N1–N6) at n = 5–7; Phillips two-layer baroclinic instability; layer vanishing/outcrop handling; real-speed external waves (Lamb ~300 m/s) |
 | **V2-2 Atmosphere** | Air layers with θ (two in V2-2a; three in V2-2b, isentropic interfaces at 305 and 380 K, SPEC #45), port v1 radiation, convection, condensation, surface exchange | Two-layer radiative–convective equilibrium alone first; Held–Suarez dry benchmark (the standard test for atmosphere engines); v1 B1–B10 and climate tests T1.11/T1.12 equivalents |
-| **V2-3 Ocean** ✅ | Three fixed-density ocean layers (decided in stage, SPEC #64, #71), wind stress, heat and fresh water (salinity, #76), sea ice, entrainment; aquaplanet first, then one walled basin (#79) | Ocean Kelvin wave at c₁ (#78); ocean heat transport, thermocline tilt and east–west SST contrast in the basin (#80, replacing the equatorial cold tongue, which does not form with these trades); coupled budgets (#81); ocean baroclinic eddies at n = 8 moved to V2-5 |
+| **V2-3 Ocean** ✅ | Three fixed-density ocean layers (decided in stage, SPEC #64, #71), wind stress, heat and fresh water (salinity, #76), sea ice, entrainment; aquaplanet first, then one walled basin (#79) | Ocean Kelvin wave at c₁ (#78); ocean heat transport, thermocline tilt and east–west SST contrast in the basin (#80, replacing the equatorial cold tongue, which does not form with these trades); coupled budgets (#81); ocean baroclinic eddies at n = 8 moved to V2-7 |
 | **V2-4 Land and coasts** | Land masks, no-flow coastlines, v1 surface water, soil, ice sheets, terrain | Western intensification in a closed basin (gyres, boundary currents); rain shadow (v1 T3.6) |
 | | *V2-4a closed 2026-10-31: masks, coasts, soil bucket, snow, runoff, terrain; western intensification passes; rain shadow backwards and equatorial land dry, open (SPEC #84). V2-4b done 2026-11-01: rivers, lakes, infiltration, seepage, snow and albedos by surface, ice-sheet flow (SPEC #85–#87); no lake or ice sheet forms by itself on `relief` yet.* | |
-| | *Order changed 2026-11-02 (SPEC #99): after V2-4c come V2-6, then V2-7, and only then V2-5, so the physics is finished and optimized before the big slow-down. The numbers are kept so earlier references stay valid.* | |
-| **V2-6 Physics, Moon and tides** | Real physics for what is still a stand-in: radiation (air and haze scattering, vapor-dependent longwave, sunlight absorbed by vapor and ozone, stratosphere), ice in the air with freezing heat, mountain and gravity-wave drag, stability-dependent surface exchange, land cover map, plume entrainment and downdrafts, rain evaporation, Earth's orbit, sea-ice motion; Moon and tides, with tidal mixing; UI | Tuned constants retired (land drag ×8, exchange ×2, `tau0` set from gases); global energy budget and regional climate on `earth` against measured values; v1's tidal tests T1–T6; viewer controls |
-| **V2-7 Optimization and speedup** | Once the full air–ocean–land model exists, with the 64-bit model as the reference truth (§7.1): ensembles in one launch, 32-bit where safe, mixed time steps, faster spin-up, step engineering; then approximations (a reduced-complexity companion, a learned emulator) | Every climate and weather test passes within agreed tolerances of the 64-bit reference; speed per model year and per ensemble member against targets set at planning (~100× from speedups, more from approximations) |
-| **V2-5 Two resolutions** | Air n = 6 / ocean n = 8 with conservative remap coupling | Coupled conservation exact; speed target ~5–10 ticks/s |
-| **Geology (to be designed)** | Moved out of V2-6: a separate long-time-scale model; starts by evolving real Earth from ETOPO1 with prescribed plate motions, tested against measured uplift and sediment records; new planets can follow on the same engine (SPEC #99). Accumulators added in V2-6, built after V2-7 | Set with its design |
+| | *Reordered and renumbered 2026-11-02 (SPEC #99): the physics is finished and optimized before the big slow-down.* | |
+| **V2-5 Physics, Moon and tides** | Real physics for what is still a stand-in: radiation (air and haze scattering, vapor-dependent longwave, sunlight absorbed by vapor and ozone, stratosphere), ice in the air with freezing heat, mountain and gravity-wave drag, stability-dependent surface exchange, land cover map, plume entrainment and downdrafts, rain evaporation, Earth's orbit, sea-ice motion; Moon and tides, with tidal mixing; UI | Tuned constants retired (land drag ×8, exchange ×2, `tau0` set from gases); global energy budget and regional climate on `earth` against measured values; v1's tidal tests T1–T6; viewer controls |
+| **V2-6 Optimization and speedup** | Once the full air–ocean–land model exists, with the 64-bit model as the reference truth (§7.1): ensembles in one launch, 32-bit where safe, mixed time steps, faster spin-up, step engineering; then approximations (a reduced-complexity companion, a learned emulator) | Every climate and weather test passes within agreed tolerances of the 64-bit reference; speed per model year and per ensemble member against targets set at planning (~100× from speedups, more from approximations) |
+| **V2-7 Two resolutions** | Air n = 6 / ocean n = 8 with conservative remap coupling | Coupled conservation exact; speed target ~5–10 ticks/s |
+| **V2-8 Geology (to be designed)** | Moved out of the Moon and tides stage: a separate long-time-scale model; starts by evolving real Earth from ETOPO1 with prescribed plate motions, tested against measured uplift and sediment records; new planets can follow on the same engine (SPEC #99). Accumulators added in V2-5, built after V2-7 | Set with its design |
 
-### 7.1 Speed: the method as we go, and the V2-7 stage
+### 7.1 Speed: the method as we go, and the V2-6 stage
 
 **As we go (owner's rule, 2026-10-27):** take easy speedups now that don't sacrifice any of the phenomena the model is
 meant to show — kernel fusion, CUDA graphs, fewer host round-trips, cached and restartable spin-ups, cheaper
 equivalent arithmetic (one pow per interface, #42), measured with PERF broken out by component. Defer anything that
-changes results (32-bit, mixed time steps, approximations) to V2-7, so the accuracy work is done once on the finished
-model rather than repeated every stage. Keep the code ready for V2-7: column-local physics with no hidden host
+changes results (32-bit, mixed time steps, approximations) to V2-6, so the accuracy work is done once on the finished
+model rather than repeated every stage. Keep the code ready for V2-6: column-local physics with no hidden host
 round-trips (batchable), every kernel behind the `REAL` precision switch, and equilibrated states kept for restarts.
 
 **Where the time goes (2026-10-27).** n = 4 moist three-layer air: ~2 min per model year per process, the GPU mostly
 idle (2,562 cells; kernel launch overhead dominates). n = 6: 43 ms per model hour (~6 min per model year). The largest
 wait in practice is spin-up: a 100 m slab takes about a decade of model time to settle.
 
-**V2-7 levers, in order of payoff (estimates):**
+**V2-6 levers, in order of payoff (estimates):**
 
 1. **Ensembles in one launch** (~10–100× throughput at n = 4): many worlds (calibration members, sweeps, spin-ups) in
    the same kernels, since the GPU is idle at small grids. Same per-world speed, far more worlds.
@@ -173,7 +173,7 @@ wait in practice is spin-up: a 100 m slab takes about a decade of model time to 
    None of these touch the measured years.
 5. **Step engineering** (~1.5–3×): fuse the column physics with neighbouring kernels, many ticks per graph launch, no
    host synchronization inside loops.
-6. **Two resolutions** (V2-5): the fine grid only where it is needed.
+6. **Two resolutions** (V2-7): the fine grid only where it is needed.
 7. **CPU and GPU together** (owner's question, 2026-10-27): not by splitting one tick (the physics needs the dynamics'
    output and vice versa, so overlap needs the physics lagged a step, and hides at most its ~25% share: ≤ ~1.3×; six
    Ryzen cores and the 4070 have similar 64-bit peaks, ~0.4 TFLOPS, and the state crosses PCIe in ~0.1 ms at n = 6).
@@ -192,7 +192,7 @@ trained on). The full model stays the reference truth.
 - **64-bit speed on the 4070** is an estimate until V2-0 measures it; if it is closer to 1/64 than to 1/2–1/4 of 32-bit, the n = 8 ocean slows and the showcase may drop to n = 7.
 - **Variable-thickness air** drained the upper layer in v1's first 3c attempt; the remap with a target and minimum thickness is designed against that, and V2-1 tests it in isolation.
 - **Launch overhead at small grids** could make the n = 4 test suite slower than expected; mitigations are kernel fusion and CUDA graphs.
-- **Scale of work:** V2-0 through V2-3 is roughly the size of v1's Stages 1–3c. The showcase (eddying ocean) arrives at V2-3/V2-5.
+- **Scale of work:** V2-0 through V2-3 is roughly the size of v1's Stages 1–3c. The showcase (eddying ocean) arrives at V2-3/V2-7.
 - **Portability:** V2 runs where an NVIDIA GPU and CUDA are present; v1 stays the portable version.
 
 ## 9. Decisions

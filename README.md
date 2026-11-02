@@ -64,6 +64,7 @@ bug carried over from v1; V2-0 ported v1's grid and solver to 64-bit CUDA.
 | V2-9 | Geology: separate long-time-scale model in the same codebase and viewer (Climate, Geology and Coupled modes), starting from real Earth; controllable events (core heat, volcanoes, earthquakes and tsunamis, storm model, meteor impacts up to a supported size); rock and soil elements (C, N, P, S, Fe, Ca, K, Si and others), weathering, ocean chemistry | 💬 To design |
 | V2-10 | Other Worlds: stress-test and generalize the climate model and find its limits, on Mars, Venus, Jupiter, Saturn and invented worlds; hot-regime model for sterilizing impacts | 💬 To design |
 | V2-11 | Coming to Life: microbes, plants and ecosystems that change the air, ocean and land they live on, with every element's ledger closed. Target: **O₂ emerges from photosynthetic organisms** | 💬 To design |
+| V2-12 | Elemental Guardians: story mode where Air, Water, Fire and Earth, each with a personality, narrate from the model's data through a local LLM, read-only, on triggers of high balance and high imbalance and a regular heartbeat, with interactions from the ledgers' measured exchanges; early prototype after V2-5 | 💬 To design |
 
 ## Running it
 

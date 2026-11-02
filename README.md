@@ -54,7 +54,7 @@ bug carried over from v1; V2-0 ported v1's grid and solver to 64-bit CUDA.
 | V2-3 | Ocean: three layers, wind stress, thermocline, entrainment, salinity, sea ice; aquaplanet and one basin | ✅ Done (36/36) |
 | V2-4a | Land: masks, coasts, ground heat, soil bucket, snow, runoff to the coast, terrain; gyres; two known shortfalls (SPEC #84) | ✅ Done (40/40) |
 | V2-4b | Rivers, lakes, infiltration, seepage, snow, ice-sheet flow | ✅ Done (42/42) |
-| V2-4c | Surface coupling, full plume, clouds, `earth` preset with sea floor, mixed-layer trial, all behind switches | 🚧 Checkpoint |
+| V2-4c | Surface coupling, full plume, clouds, `earth` preset with sea floor, mixed-layer trial, all behind switches | ✅ Closed (41/42; ICE open, SPEC #100) |
 | V2-4d | General layers: any number of air and ocean layers from lists; 5-layer air prototype judged by storms and surface winds, then 7; ocean at 5 once winds are healthy | 🚧 Next |
 | V2-4e | Climate on the new layers: clouds, convection and rain by region on `earth`, then lightning | ⏳ Planned |
 | V2-5 | Speed for development: ensembles in one launch, faster spin-up (the deep ocean's centuries), kernel profiling and removing wasted work, a first 32-bit trial; results unchanged or measured against 64-bit | ⏳ Planned |

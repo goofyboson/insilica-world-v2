@@ -56,11 +56,12 @@ bug carried over from v1; V2-0 ported v1's grid and solver to 64-bit CUDA.
 | V2-4b | Rivers, lakes, infiltration, seepage, snow, ice-sheet flow | ✅ Done (42/42) |
 | V2-4c | Land convection, clouds, `earth` preset with sea floor, mixed bottom air layer, lightning | 🚧 In progress |
 | V2-5 | Speed for development: ensembles in one launch, faster spin-up (the deep ocean's centuries), kernel profiling and removing wasted work, a first 32-bit trial; results unchanged or measured against 64-bit | ⏳ Planned |
-| V2-6 | Real physics for the stand-ins (radiation (air and haze scattering, vapor-dependent longwave, sunlight absorbed by vapor and ozone, stratosphere), ice in the air with freezing heat, mountain and gravity-wave drag, stability-dependent surface exchange, land cover map, plume entrainment and downdrafts, rain evaporation, Earth's orbit, sea-ice motion, deep-water formation, gas composition (H₂O, CO₂, CH₄, O₃, N₂O by amount, N₂ and O₂ setting heat capacity and molecular weight), transported composition tracers with exact budgets), Moon and tides, UI polish | ⏳ Planned |
+| V2-6 | Real physics for the stand-ins (radiation (air and haze scattering, vapor-dependent longwave, sunlight absorbed by vapor and ozone, stratosphere), ice in the air with freezing heat, mountain and gravity-wave drag, stability-dependent surface exchange, land cover map, plume entrainment and downdrafts, rain evaporation, Earth's orbit, sea-ice motion, deep-water formation, gas composition (H₂O, CO₂, CH₄, O₃, N₂O by amount, N₂ and O₂ setting heat capacity and molecular weight), transported composition tracers with exact budgets, per-world planet settings), Moon and tides, UI polish | ⏳ Planned |
 | V2-7 | Final optimization: mixed time steps, 32-bit sign-off, then approximations (reduced model, learned emulator) against the 64-bit reference ([plan §7.1](docs/v2-plan.md)) | ⏳ Planned |
 | V2-8 | Two resolutions: air n = 6 coupled to ocean n = 8 | ⏳ Planned |
 | V2-9 | Geology: separate long-time-scale model, starting from real Earth; rock and soil elements (C, N, P, S, Fe, Ca, K, Si and others), weathering, ocean chemistry | 💬 To design |
-| V2-10 | Coming to Life: microbes, plants and ecosystems that change the air, ocean and land they live on, with every element's ledger closed. Target: **O₂ emerges from photosynthetic organisms** | 💬 To design |
+| V2-10 | Other Worlds: Mars, then Venus, with Jupiter and Saturn as optional goals that do not hold up later stages | 💬 To design |
+| V2-11 | Coming to Life: microbes, plants and ecosystems that change the air, ocean and land they live on, with every element's ledger closed. Target: **O₂ emerges from photosynthetic organisms** | 💬 To design |
 
 ## Running it
 

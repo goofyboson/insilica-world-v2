@@ -5,6 +5,7 @@ stacked-layer cases of V2-1: external and internal gravity waves, two-layer soli
 instability, a balanced ocean), and an outcrop over a ridge.
 """
 import math
+from pathlib import Path
 
 import numpy as np
 
@@ -304,6 +305,40 @@ PRESETS['ridge'] = dict(PRESETS['aqua'], build=lambda g: _over_terrain(g, ridge_
 PRESETS['continent'] = dict(PRESETS['coupled'], build=lambda g: _over_terrain(g, continent_height(g)),
                             land=lambda g: continent_height(g) > 0)
 PRESETS['relief'] = dict(PRESETS['coupled'], build=lambda g: _over_terrain(g, relief_height(g)), land=lambda g: relief_height(g) > 0)
+
+
+_EARTH = {}
+
+
+def earth_land(g):
+    """Modern Earth on grid g, from the 1-degree table of ETOPO1 (tools/make_earth_topo.py): each 1-degree cell goes to its nearest
+    grid cell by area; land where over half the grid cell is land, at its land's mean height (m). Returns (land, height)."""
+    if g.N not in _EARTH:
+        d = np.load(Path(__file__).parent / 'data' / 'earth_topo_1deg.npz')
+        lat, lon = np.radians(np.arange(180) - 89.5), np.radians(np.arange(360) - 179.5)
+        la, lo = np.meshgrid(lat, lon, indexing='ij')
+        xyz = np.stack([np.cos(la) * np.cos(lo), np.cos(la) * np.sin(lo), np.sin(la)], axis=-1).reshape(-1, 3)
+        near = np.concatenate([np.argmax(xyz[i:i + 2000] @ g.pos.T, axis=1) for i in range(0, len(xyz), 2000)])
+        w, f = np.cos(la).ravel(), d['land'].astype(float).ravel()
+        A = np.bincount(near, w, g.N)
+        fl = np.bincount(near, w * f, g.N)
+        hl = np.bincount(near, w * f * d['elev'].astype(float).ravel(), g.N)
+        land = fl > 0.5 * np.maximum(A, 1e-30)
+        _EARTH[g.N] = land, np.where(land, hl / np.maximum(fl, 1e-30), 0.0)
+    return _EARTH[g.N]
+
+
+def earth(g):
+    """The start over Earth's terrain, the ice sheets laid on Greenland and Antarctica (100 m; their height is already in the table)."""
+    land, b = earth_land(g)
+    h, b, u, x = _over_terrain(g, b)
+    lat, lon = np.degrees(g.lat), np.degrees(np.angle(np.exp(1j * g.lon)))
+    sheet = land & ((lat < -60) | ((lat > 60) & (lon > -75) & (lon < -10)))
+    return h, b, u, dict(x, ice=np.where(sheet, 100.0 * 917.0, 0.0))
+
+
+# Modern Earth's land over the coupled ocean; its sea floor is flat for now.
+PRESETS['earth'] = dict(PRESETS['coupled'], build=earth, land=lambda g: earth_land(g)[0])
 PRESETS['rce'] = dict(build=aqua_dry, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True, physics=AIR3), dynamics=False)
 
 

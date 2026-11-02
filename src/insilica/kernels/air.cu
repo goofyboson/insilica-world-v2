@@ -21,7 +21,7 @@ struct Par {
   real S0, asw, tau0, mu_ref, eps_s, h_sens, u0, alb, c_slab, mu_bl, theta_star, floor_, sigma, grav, cp, kappa, p0;
   real tilt, year_s, day_s, tau_lin, theta_star2;
   real moist, Lv, Lf, Tf, k_evap, tau_conv, alb_ice, rho_ice, ice_cover, k_ice, Rv, sat_layer, sw_tau;
-  real alb_dry, alb_wet, soil_beta, k_inf, pond_cover, alb_snow, alb_ice_melt, alb_snow_melt, alb_glacier, snow_cover, alb_ramp, land_exch, plume_deep, lw_w0, c_dry, c_wet;
+  real alb_dry, alb_wet, soil_beta, k_inf, pond_cover, alb_snow, alb_ice_melt, alb_snow_melt, alb_glacier, snow_cover, alb_ramp, land_exch, plume_deep, lw_w0, c_dry, c_wet, sat_prof;
 };
 
 // The parameters arrive as an array in this order (atmosphere.PAR_ORDER).
@@ -32,7 +32,7 @@ __device__ Par unpack(const real* a) {
   P.kappa = a[15]; P.p0 = a[16]; P.tilt = a[17]; P.year_s = a[18]; P.day_s = a[19]; P.tau_lin = a[20]; P.theta_star2 = a[21];
   P.moist = a[22]; P.Lv = a[23]; P.Lf = a[24]; P.Tf = a[25]; P.k_evap = a[26]; P.tau_conv = a[27]; P.alb_ice = a[28];
   P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32]; P.sat_layer = a[33]; P.sw_tau = a[34];
-  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50];
+  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51];
   return P;
 }
 
@@ -67,6 +67,31 @@ __device__ real condense(real& th, real& q, real pib, real p, const Par& P) {
   return dq;
 }
 
+__device__ real edge_shape(real a, real b, real m) {
+  const real W = b - a;
+  real x = (m - a) / W;
+  if (x < (real)1e-6) x = (real)1e-6;
+  if (x > 1 - (real)1e-6) x = 1 - (real)1e-6;
+  // safeguarded Newton on r(s) = x within a bracket (r rises with s; r'(s) = 1/s^2 - e^s/(e^s - 1)^2, 1/12 at s = 0)
+  real lo = -700, hi = 700, s = 12 * (x - (real)0.5);
+  for (int it = 0; it < 40; it++) {
+    real r, dr;
+    if (fabs(s) < (real)1e-4) { r = (real)0.5 + s / 12; dr = (real)1 / 12; }
+    else {
+      const real e1 = expm1(s);
+      r = 1 - 1 / s + 1 / e1;
+      dr = 1 / (s * s) - (e1 + 1) / (e1 * e1);
+    }
+    if (r < x) lo = s; else hi = s;
+    real sn = s - (r - x) / dr;
+    if (r == x) break;
+    if (!(sn >= lo && sn <= hi) || !(dr > 0)) sn = (real)0.5 * (lo + hi);
+    if (fabs(sn - s) < (real)1e-12 * (1 + fabs(s))) { s = sn; break; }
+    s = sn;
+  }
+  return s;
+}
+
 // Saturation adjustment of a layer of uniform theta spanning pressures [pt, pb] (Pa), against the layer's capacity: q_sat
 // averaged over its pressure range (4-point Gauss-Legendre; temperatures below 160 K hold no vapor worth counting), so
 // a deep layer's warm bottom counts, as it does when its relative humidity is uniform with height. One Newton step with
@@ -90,12 +115,37 @@ __device__ real condense_layer(real& th, real& q, real pib, real pt, real pb, co
   return dq;
 }
 
+// A middle layer's capacity with its theta spread between its edges as edge_shape has it (decision #91), not uniform: its base
+// is near the lower edge's theta, so far colder than the layer's mean. One Newton step, the whole spread shifting with the mean.
+__device__ real condense_spread(real a, real b, real& th, real& q, real pib, real pt, real pb, const Par& P) {
+  const real x[4] = {-0.8611363115940526, -0.3399810435848563, 0.3399810435848563, 0.8611363115940526};
+  const real wq[4] = {0.3478548451374538, 0.6521451548625461, 0.6521451548625461, 0.3478548451374538};
+  const real s = edge_shape(a, b, th);
+  real qs = 0, dqs = 0;
+  for (int j = 0; j < 4; j++) {
+    const real p = (real)0.5 * (pt + pb) + (real)0.5 * (pb - pt) * x[j], m = (pb - p) / (pb - pt);
+    const real tn = a + (b - a) * (fabs(s) < (real)1e-6 ? m : log1p(m * expm1(s)) / s);
+    const real ex = pow(p / P.p0, P.kappa), T = tn * ex;
+    if (T < 160) continue;
+    const real v = qsat(T, p);
+    qs += (real)0.5 * wq[j] * v;
+    dqs += (real)0.5 * wq[j] * v * P.Lv / (P.Rv * T * T) * ex;
+  }
+  if (!(q > qs)) return 0;
+  const real dq = (q - qs) / (1 + P.Lv / pib * dqs);
+  q -= dq;
+  th += P.Lv * dq / pib;
+  return dq;
+}
+
 // Condensation in layer k of the column (mass mu): the layer-integrated capacity when sat_layer, else v1's rule at the
 // layer's mass-mean pressure.
 __device__ real condense_k(int k, const real* mu, real* th, real* q, const real* pib, const Par& P) {
   if (P.sat_layer > 0) {
     real pt = 0;
     for (int j = 0; j < k; j++) pt += P.grav * mu[j];
+    if (P.sat_prof > 0 && k == 1 && P.theta_star2 > P.theta_star && th[k] < P.theta_star2)
+      return condense_spread(P.theta_star, P.theta_star2, th[k], q[k], pib[k], pt, pt + P.grav * mu[k], P);
     return condense_layer(th[k], q[k], pib[k], pt, pt + P.grav * mu[k], P);
   }
   return condense(th[k], q[k], pib[k], p_of(pib[k], P), P);
@@ -142,31 +192,6 @@ __device__ void move_mass(int L, const Par& P, real* mu, real* th, real* q, real
 // (1/2 at s = 0, rising with s), solved for s by bisection; the share of the layer's mass per kelvin at the edges is then
 // fa = s / (e^s - 1) / (b - a) and fb = s e^s / (e^s - 1) / (b - a). A layer whose mean sits near one edge holds most of
 // its air there and little at the other.
-__device__ real edge_shape(real a, real b, real m) {
-  const real W = b - a;
-  real x = (m - a) / W;
-  if (x < (real)1e-6) x = (real)1e-6;
-  if (x > 1 - (real)1e-6) x = 1 - (real)1e-6;
-  // safeguarded Newton on r(s) = x within a bracket (r rises with s; r'(s) = 1/s^2 - e^s/(e^s - 1)^2, 1/12 at s = 0)
-  real lo = -700, hi = 700, s = 12 * (x - (real)0.5);
-  for (int it = 0; it < 40; it++) {
-    real r, dr;
-    if (fabs(s) < (real)1e-4) { r = (real)0.5 + s / 12; dr = (real)1 / 12; }
-    else {
-      const real e1 = expm1(s);
-      r = 1 - 1 / s + 1 / e1;
-      dr = 1 / (s * s) - (e1 + 1) / (e1 * e1);
-    }
-    if (r < x) lo = s; else hi = s;
-    real sn = s - (r - x) / dr;
-    if (r == x) break;
-    if (!(sn >= lo && sn <= hi) || !(dr > 0)) sn = (real)0.5 * (lo + hi);
-    if (fabs(sn - s) < (real)1e-12 * (1 + fabs(s))) { s = sn; break; }
-    s = sn;
-  }
-  return s;
-}
-
 __device__ void edge_density(real a, real b, real m, real& fa, real& fb) {
   const real W = b - a, s = edge_shape(a, b, m);
   if (fabs(s) < (real)1e-6) { fa = (1 - s / 2) / W; fb = (1 + s / 2) / W; return; }

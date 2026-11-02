@@ -12,7 +12,7 @@ A planet simulator with two moving ocean layers and three moving air layers, run
 
 ## Current status
 
-**V2-4b Rivers, lakes and ice closed 2026-11-01 (42/42 with PERF). Next: V2-5 (two resolutions).** Rivers flow at the same speed on any grid (0.998–1.022 m/s against 1 m/s,
+**V2-4b Rivers, lakes and ice closed 2026-11-01 (42/42 with PERF). Now: V2-4c. Then V2-6, V2-7, and V2-5 last (order changed 2026-11-02, SPEC #99).** Rivers flow at the same speed on any grid (0.998–1.022 m/s against 1 m/s,
 n = 4–8; SPEC #85); ice sheets follow Glen's law, within 3.8% of the exact dome height at n = 6 (#86). Snow, glacier ice and sea ice have their own albedos, and a started polar sheet sustains itself (#87). Not yet by themselves: no lake forms on `relief`, and no ice sheet grows there from nothing. Earlier:
 **V2-4a Land closed 2026-10-31 (40/40 with PERF).**
 Land of any shape over the coupled ocean: ground heat, soil bucket, snow, runoff to the coast and terrain under the air. An
@@ -54,9 +54,11 @@ bug carried over from v1; V2-0 ported v1's grid and solver to 64-bit CUDA.
 | V2-3 | Ocean: three layers, wind stress, thermocline, entrainment, salinity, sea ice; aquaplanet and one basin | ✅ Done (36/36) |
 | V2-4a | Land: masks, coasts, ground heat, soil bucket, snow, runoff to the coast, terrain; gyres; two known shortfalls (SPEC #84) | ✅ Done (40/40) |
 | V2-4b | Rivers, lakes, infiltration, seepage, snow, ice-sheet flow | ✅ Done (42/42) |
-| V2-5 | Two resolutions: air n = 6 coupled to ocean n = 8 | ⏳ Planned |
-| V2-6 | Moon and tides, geology, UI polish | ⏳ Planned |
+| V2-4c | Land convection, clouds, `earth` preset with sea floor, mixed bottom air layer, lightning | 🚧 In progress |
+| V2-6 | Real physics for the stand-ins (radiation (air and haze scattering, vapor-dependent longwave, sunlight absorbed by vapor and ozone, stratosphere), ice in the air with freezing heat, mountain and gravity-wave drag, stability-dependent surface exchange, land cover map, plume entrainment and downdrafts, rain evaporation, Earth's orbit, sea-ice motion), Moon and tides, UI polish | ⏳ Planned |
 | V2-7 | Optimization and speedup: ensembles in one launch, 32-bit where safe, mixed time steps, faster spin-up; then approximations (reduced model, learned emulator) against the 64-bit reference ([plan §7.1](docs/v2-plan.md)) | ⏳ Planned |
+| V2-5 | Two resolutions: air n = 6 coupled to ocean n = 8 | ⏳ Planned |
+| Geology | Separate long-time-scale model; design under discussion | 💬 To design |
 
 ## Running it
 

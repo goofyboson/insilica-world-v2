@@ -15,7 +15,7 @@ typedef REAL real;
 // energy removed, 0.5 ma mo / (ma + mo) (du0^2 - du1^2) per unit area at the edge, goes to diss (J/m^2; booked as the
 // air's heat); the stress the ocean received (N/m^2) is added to tau_acc as tau^2 dt (for the mixed layer's u*).
 extern "C" __global__ void couple_stress(int N, int E, int La, const real* ha, real* ua, const real* ho, real* uo, const int* eI,
-                                         const int* eJ, real c, real rho_w, real dt, real* diss, real* tau_acc, const real* wall) {
+                                         const int* eJ, real c, real rho_w, real dt, real* diss, real* tau_acc, const real* wall, real land_drag) {
   LOOP1(e, E)
   const int b = La - 1;
   const real ma = (real)0.5 * (ha[(size_t)b * N + eI[e]] + ha[(size_t)b * N + eJ[e]]);
@@ -23,7 +23,7 @@ extern "C" __global__ void couple_stress(int N, int E, int La, const real* ha, r
   real* po = uo + e;
   const real a0 = *pa;
   if (wall && wall[e] == 0) {                     // a wall (#79): the water cannot move across it, the air drags on it
-    const real du1 = a0 * exp(-c / ma * dt);
+    const real du1 = a0 * exp(-land_drag * c / ma * dt);
     *pa = du1;
     diss[e] = (real)0.5 * ma * (a0 * a0 - du1 * du1);
   } else {
@@ -219,5 +219,5 @@ extern "C" __global__ void ocn_heat(int N, int L, const real* h, const real* T, 
 // The mixed layer's heat capacity per cell for the air's surface physics: rho_w c_w h0 (J/m^2/K).
 extern "C" __global__ void ocn_cap(int N, const real* h, real rho_cw, real* cap, const real* land, real c_land) {
   LOOP1(i, N)
-  cap[i] = land && land[i] > (real)0.5 ? c_land : rho_cw * h[i];
+  cap[i] = land && land[i] > (real)0.5 ? (cap[i] > 0 ? cap[i] : c_land) : rho_cw * h[i];   // land's stays once set: the air's column may set it by its soil water
 }

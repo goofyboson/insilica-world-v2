@@ -105,6 +105,10 @@ class World:
                 self.q = cp.asarray(np.asarray(extra['q'], dtype=float))
                 self.ice = cp.asarray(np.asarray(extra.get('ice', np.zeros(self.grid.N)), dtype=float))
                 self.STATE = self.STATE + ('q', 'ice')
+                self.cw = None
+                if self.physics.p['cloud'] > 0:              # cloud water per layer (kg/kg), #95
+                    self.cw = cp.zeros_like(self.q)
+                    self.STATE = self.STATE + ('cw',)
         else:
             self.moist = False
         # Land (V2-4a, #84): a mask from the preset, with a soil bucket whose capacity grows with height (v1's rule)
@@ -176,6 +180,8 @@ class World:
                 self.tr.step(self.M, self._M1, self._Fm, self.theta, order=3)
             if self.moist:
                 self.tr.step(self.M, self._M1, self._Fm, self.q, order=3)
+                if self.cw is not None:
+                    self.tr.step(self.M, self._M1, self._Fm, self.cw, order=3)
             cp.copyto(self.M, self._M1)
         if self.sea is not None:
             # the wind stress, exactly, with its kinetic energy back as the air's heat
@@ -189,7 +195,8 @@ class World:
                                 cap=self.sea.cap if self.sea is not None else self.cap,
                                 qocean=self.sea.qocean if self.sea is not None else None,
                                 qsw=self.sea.qsw if self.sea is not None else None,
-                                land=self.land, soilcap=self.soilcap, soil=self.soil, pond=self.pond, snow=self.snow)
+                                land=self.land, soilcap=self.soilcap, soil=self.soil, pond=self.pond, snow=self.snow,
+                                cw=self.cw if self.moist else None, elev=self.b)
             if self.sea is not None:
                 self.sea.accumulate(self.dt, self.physics.evap, self.physics.rain, self.ice, self.mouth)
             if self.L > 1:
@@ -249,8 +256,8 @@ class World:
         return out
 
     def water(self):
-        """The air's vapor (kg): Σ A Σ_k μ_k q_k."""
-        return dsum(cp.sum(self.h * self.q, axis=0), cp.asarray(self.grid.areaCell))
+        """The air's vapor and cloud water (kg): Σ A Σ_k μ_k (q_k + cw_k)."""
+        return dsum(cp.sum(self.h * (self.q if self.cw is None else self.q + self.cw), axis=0), cp.asarray(self.grid.areaCell))
 
     def energy(self):
         """Total energy (J): kinetic + potential (+ for air the enthalpy and the slab's heat C·Ts; for moist air the

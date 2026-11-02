@@ -1,6 +1,6 @@
 """The ocean under the air (stage V2-3, kernels/ocean.cu; decisions #64–#74).
 
-Three Boussinesq layers on the air's grid — the mixed layer (k = 0), the thermocline's water below it and the abyss
+Boussinesq layers (three by default; one per entry of gprime, plus one; #101) on the air's grid — the mixed layer (k = 0), the thermocline's water below it and the abyss
 (decision #71) — over a flat bottom. Each interface has a fixed density step, g' (decision #64): the interfaces move
 freely (wind-driven Ekman pumping, upwelling, Kelvin and Rossby waves), and each layer's temperature T (K) is heat only,
 carried with the water. (Density following T within a layer, tried first, grew a spurious instability in thick, weakly
@@ -31,7 +31,7 @@ ALPHA_REF = 2.0e-4                                              # 1/K: dTmin's b
 OCEAN = dict(depth=4000.0, h_mixed=100.0, h_thermo=600.0, T_thermo=293.15, T_deep=273.15, alpha=0.52e-4, alpha2=1.0e-5, beta=7.6e-4, S_ref=35.0, rho=1025.0, cw=3990.0, dt=3600.0, mix_dt=86400.0,
              gprime=(0.016, 0.016),
              hmin=10.0, hmax=1000.0, dTmin=0.1, m_kt=0.5, n_kt=0.2, visc4_U=0.5, bottom_stress=2.5e-4,
-             interface_stress=5.0e-4, thin=2.0, walls=(), sw_R=0.58, sw_z1=0.35, sw_z2=23.0, land_drag=1.0, bed=None, bed_min=50.0, shelf=50.0)
+             interface_stress=5.0e-4, thin=2.0, walls=(), sw_R=0.58, sw_z1=0.35, sw_z2=23.0, land_drag=1.0, bed=None, bed_min=50.0, shelf=50.0, h_layers=None)
 
 
 def wall_mask(g, walls):
@@ -62,8 +62,10 @@ class Ocean:
         # the thermocline's turbulent stress carries the wind's momentum down (decision #69): c ~ C_d |du| ~ 1e-3 x 0.5
         # m/s; without it a mixed layer thinned to its floor by equatorial upwelling ran away toward the wind's speed
         # g' per interface (decision #64): g · 2e-4/K · ΔT for 8 K steps (≈ 20 → 12 → 4 °C), baroclinic gravity waves 3.1 and 1.2 m/s
-        L = self.L = 3
-        assert len(c['gprime']) == L - 1
+        L = self.L = len(c['gprime']) + 1
+        # the starting thickness of every layer above the abyss: the mixed layer, then the rest (#101)
+        upper = list(c['h_layers'] or (c['h_mixed'], c['h_thermo']))
+        assert len(upper) == L - 1, 'one starting thickness per layer above the abyss'
         # thin walls (decision #79): at each longitude in walls (degrees), pole to pole, the edges between the cells on its two
         # sides carry no water — a basin's coasts, with no land cells (the air still sees open water there)
         self.wall = wall_mask(g, c['walls']) if len(c['walls']) else None
@@ -85,11 +87,19 @@ class Ocean:
             # near where the subtropics' mixing pumps it (decision #75), its drift stays slow (~0.05 K/yr); the abyss at the
             # freezing point, where polar winters would take it over centuries, so polar ice can form (decision #77)
             Ts = np.asarray(Tsurf, dtype=float)
-            h2 = np.maximum(depth - c['h_mixed'] - c['h_thermo'], c['hmin'])   # interfaces level at rest: a rising floor thins the abyss to its floor, then the thermocline's water, then the mixed layer
-            h1 = np.maximum(np.minimum(depth - c['h_mixed'] - h2, c['h_thermo']), c['hmin'])
-            h = np.stack([depth - h1 - h2, h1, h2])
+            # interfaces level at rest: a rising floor thins the abyss to its floor, then the layers above in turn, the mixed layer last
+            h = [None] * L
+            h[L - 1] = np.maximum(depth - sum(upper), c['hmin'])
+            below = h[L - 1]
+            for k in range(L - 2, 0, -1):
+                h[k] = np.maximum(np.minimum(depth - sum(upper[:k]) - below, upper[k]), c['hmin'])
+                below = below + h[k]
+            h[0] = depth - below
+            h = np.stack(h)
             u = np.zeros((L, E))
-            T = np.stack([Ts, np.clip(Ts, c['T_deep'], c['T_thermo']), np.full(N, c['T_deep'])])
+            # the layers between: evenly from T_thermo to the abyss's T_deep, no warmer than the surface
+            Tk = [c['T_thermo'] + (c['T_deep'] - c['T_thermo']) * (k - 1) / (L - 2) for k in range(1, L - 1)] if L > 2 else []
+            T = np.stack([Ts] + [np.clip(Ts, c['T_deep'], t) for t in Tk] + [np.full(N, c['T_deep'])])
             S = np.full((L, N), c['S_ref'])
         else:
             h, u, T = state[:3]

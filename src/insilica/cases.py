@@ -368,12 +368,10 @@ def earth(g, rise=5.0e-3):
     land, b, _ = earth_land(g)
     h, _, u, x = aqua(g)
     h, theta = h.copy(), x['theta'].copy()
-    theta[2] += rise * b
+    theta[-1] += rise * b
     ps0 = h.sum(0) * GRAV
-    ps = P0 * np.maximum((ps0 / P0) ** KAPPA - GRAV * b / (CP_DRY * 0.5 * (theta[1] + theta[2])), 1e-3) ** (1 / KAPPA)
-    share = h[2] / (h[1] + h[2])
-    rest = ps / GRAV - h[0]
-    h[1], h[2] = rest * (1 - share), rest * share
+    ps = P0 * np.maximum((ps0 / P0) ** KAPPA - GRAV * b / (CP_DRY * 0.5 * (theta[-2] + theta[-1])), 1e-3) ** (1 / KAPPA)
+    h[1:] = h[1:] * (ps / GRAV - h[0]) / h[1:].sum(0)
     lat, lon = np.degrees(g.lat), np.degrees(np.angle(np.exp(1j * g.lon)))
     sheet = land & ((lat < -60) | ((lat > 60) & (lon > -75) & (lon < -10)))
     return h, b, u, dict(x, theta=theta, Ts=x['Ts'] - 6.5e-3 * b, ice=np.where(sheet, 100.0 * 917.0, 0.0))

@@ -247,8 +247,10 @@ extern "C" __global__ void lay_slow(int N, int E, int NV, int L, const real* hed
       const real F2 = h2 * ul[e2];
       Q += w[m] * F2 * (real)0.5 * (qa + ql[e2]);
     }
-    // a squeezed layer's interfaces there are the floor's slope, not a pressure force: it fades with the layer
-    real d = Q - (shelf > 0 && he < shelf ? he / shelf : (real)1) * (Bl[eJ[e]] - Bl[eI[e]]) / de[e] - drag[k] * ul[e];
+    // a squeezed layer's interfaces there are the floor's slope, not a pressure force: it fades with the layer, gone at twice the floor, and the
+    // floor's step stops the water that is left within hours
+    const real sq = shelf > 0 && he < shelf ? (he - 2 * floor_ > 0 ? (he - 2 * floor_) / (shelf - 2 * floor_) : (real)0) : (real)1;
+    real d = Q - sq * (Bl[eJ[e]] - Bl[eI[e]]) / de[e] - (drag[k] + (1 - sq) / (real)21600) * ul[e];
     if (stress[k] != 0) {
       // exact exponential decay over the stage (rate r = c / h): the effective rate (1 - e^(-r dts)) / dts is r for
       // weak friction and never exceeds 1/dts, so a nearly massless layer is stopped, not overshot (decision #36)

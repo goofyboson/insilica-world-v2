@@ -25,6 +25,7 @@ import numpy as np
 from .constants import CP_DRY, GRAV, KAPPA, P0
 from .gpu import NULL, grid_dims
 
+LMAX = 8
 SIGMA = 5.670e-8
 DAY_S, YEAR_S = 86400.0, 365 * 86400.0
 TILT = math.radians(23.44)
@@ -60,7 +61,11 @@ class AirPhysics:
         θ toward Held & Suarez's equilibrium; no surface)."""
         self.dg, self.L, self.forcing = dg, layers, forcing
         self.p = dict(DEFAULTS, **(params or {}))
-        self.par = cp.asarray([float(self.p[k]) for k in PAR_ORDER])
+        # theta_stars: the interfaces' theta* from the top down, any number (#101); else two layers' or three's
+        stars = list(self.p.get('theta_stars') or ([self.p['theta_star2'], self.p['theta_star']] if layers > 2 else [self.p['theta_star']]))
+        assert len(stars) == layers - 1, 'one theta* per interface'
+        self.p['theta_star'] = stars[-1]
+        self.par = cp.asarray([float(self.p[k]) for k in PAR_ORDER] + [float(x) for x in stars] + [0.0] * (LMAX - len(stars)))
         self.mode = 1 if mean_sun else 0
         N = dg.N
         self.insol = cp.asarray(annual_mean_insolation(np.arcsin(np.clip(dg.host.pos[:, 2], -1, 1)), self.p['S0'], self.p['tilt'])) \

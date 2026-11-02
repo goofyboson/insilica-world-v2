@@ -253,7 +253,29 @@ AIR3 = dict(theta_star=305.0, theta_star2=380.0)             # the three-layer a
 SURFACE_DRAG = 0.15 * MU_REF / 86400.0
 PRESETS['aqua'] = dict(build=aqua, dt=lambda n: 900.0 * 2.0 ** (5 - n), visc4_U=15.0, stress=[0.0, 0.0, SURFACE_DRAG],
                        tracer=False, air=dict(AIR, physics=dict(AIR3, moist=1.0)))
+def aqua_layers(g, stars, edges, q_top=0.1, q_bot=0.7):
+    """The aquaplanet's start in L = len(stars) + 1 layers (#101): stars, the interfaces' theta* from the top down; edges, their starting pressures (Pa). Each layer's theta midway between its edges, the top layer's above its edge and the bottom's the aquaplanet's; vapor rising from q_top to q_bot of saturation down the column."""
+    L = len(stars) + 1
+    s2 = np.sin(g.lat) ** 2
+    e = np.array([0.0, *edges, MU_REF * GRAV])
+    h = np.repeat((np.diff(e) / GRAV)[:, None], g.N, axis=1)
+    th = [np.full(g.N, stars[0] + 35.0)] + [np.full(g.N, 0.5 * (stars[k - 1] + stars[k])) for k in range(1, L - 1)] + [290.0 - 30.0 * s2]
+    theta = np.stack(th)
+    Ts = np.maximum(288.0 - 40.0 * (s2 - 1.0 / 3.0), 274.0)
+    pm = (0.5 * (e[:-1] + e[1:]))[:, None]
+    T = theta * (pm / P0) ** KAPPA
+    q = np.linspace(q_top, q_bot, L)[:, None] * (0.622 * 611.0 * np.exp(17.27 * (T - 273.15) / (T - 35.85)) / pm)
+    return h, np.zeros(g.N), np.zeros((L, g.E)), dict(theta=theta, Ts=Ts, q=q, ice=np.zeros(g.N))
+
+
+def _aqua_n(stars, edges):
+    return dict(PRESETS['aqua'], build=lambda g: aqua_layers(g, stars, edges), stress=[0.0] * len(stars) + [SURFACE_DRAG],
+                air=dict(AIR, physics=dict(moist=1.0, theta_stars=stars)))
+
+
 PRESETS['aqua_dry'] = dict(PRESETS['aqua'], build=aqua_dry, air=dict(AIR, physics=AIR3))
+PRESETS['aqua5'] = _aqua_n([400.0, 350.0, 325.0, 305.0], [1.0e4, 2.5e4, 4.5e4, 8.0e4])
+PRESETS['aqua7'] = _aqua_n([420.0, 370.0, 345.0, 330.0, 317.0, 305.0], [0.8e4, 1.8e4, 3.0e4, 4.5e4, 6.2e4, 8.0e4])
 # V2-3: the moist three-layer air over the three-layer ocean (decisions #64–#79): the air's drag on the surface is the wind
 # stress on the ocean (exact, in Ocean.couple), so the air's own bottom stress is off. Air steps must divide the hour.
 # Evaporation recalibrated for the ocean's surface (K_EVAP 4.8e-3 against the slab's 4e-3: 2.0 → ~2.3 mm/day; #80).
@@ -346,12 +368,10 @@ def earth(g, rise=5.0e-3):
     land, b, _ = earth_land(g)
     h, _, u, x = aqua(g)
     h, theta = h.copy(), x['theta'].copy()
-    theta[2] += rise * b
+    theta[-1] += rise * b
     ps0 = h.sum(0) * GRAV
-    ps = P0 * np.maximum((ps0 / P0) ** KAPPA - GRAV * b / (CP_DRY * 0.5 * (theta[1] + theta[2])), 1e-3) ** (1 / KAPPA)
-    share = h[2] / (h[1] + h[2])
-    rest = ps / GRAV - h[0]
-    h[1], h[2] = rest * (1 - share), rest * share
+    ps = P0 * np.maximum((ps0 / P0) ** KAPPA - GRAV * b / (CP_DRY * 0.5 * (theta[-2] + theta[-1])), 1e-3) ** (1 / KAPPA)
+    h[1:] = h[1:] * (ps / GRAV - h[0]) / h[1:].sum(0)
     lat, lon = np.degrees(g.lat), np.degrees(np.angle(np.exp(1j * g.lon)))
     sheet = land & ((lat < -60) | ((lat > 60) & (lon > -75) & (lon < -10)))
     return h, b, u, dict(x, theta=theta, Ts=x['Ts'] - 6.5e-3 * b, ice=np.where(sheet, 100.0 * 917.0, 0.0))

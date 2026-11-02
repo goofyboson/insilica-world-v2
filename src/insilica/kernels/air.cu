@@ -770,11 +770,14 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
     real sn = snow[i] - (ice0 - m_ice);
     if (skin) {                                                 // ice covers the ground: the skin decides, and the air takes the freezing's heat (#87)
       if (tsk < P.Tf) {
-        const real m = R + (pw > 0 ? pw : (real)0);
+        // rain and snow freeze as they land; a pond only as fast as the cold ice and air take its heat, the rest stays liquid and runs on.
+        // The heat goes into the air touching the ground, not into however thin a bottom layer (#87; decision #100)
+        const real room = (P.k_ice / dice * (P.Tf - tsk) + hs * fmax((real)0, P.Tf - Tsa)) * dt / P.Lf;
+        const real mp = fmin(pw > 0 ? pw : (real)0, room), m = R + mp;
         m_ice += m;
         sn = (sn > 0 ? sn : (real)0) + R;
-        pw -= m - R;
-        th[bot] += P.Lf * m / (mu[bot] * pib[bot]);
+        pw -= mp;
+        for (int k = 0; k <= bot; k++) th[k] += P.Lf * m * (wbl[k] / mb) / (mu[k] * pib[k]);
       } else pw += R;
     } else if (Ts[i] < P.Tf) {                                  // snow: its freezing warms the ground
       m_ice += R;

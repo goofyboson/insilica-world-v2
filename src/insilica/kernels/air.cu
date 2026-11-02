@@ -772,9 +772,11 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
     real sn = snow[i] - (ice0 - m_ice);
     if (skin) {                                                 // ice covers the ground: the skin decides, and the air takes the freezing's heat (#87)
       if (tsk < P.Tf) {
-        // rain and snow freeze as they land; a pond only as fast as the cold ice and air take its heat, the rest stays liquid and runs on.
+        // rain and snow freeze as they land; a pond only as fast as the surface can lose the heat, to the cold ice, the cold air and the sky
+        // (overnight, in the sun it does not), the rest stays liquid and runs on.
         // The heat goes into the air touching the ground, not into however thin a bottom layer (#87; decision #100)
-        const real room = (P.k_ice / dice * (P.Tf - tsk) + hs * fmax((real)0, P.Tf - Tsa)) * dt / P.Lf;
+        const real room = (P.k_ice / dice * (P.Tf - tsk) + hs * fmax((real)0, P.Tf - Tsa) + fmax((real)0, P.eps_s * P.sigma * P.Tf * P.Tf * P.Tf * P.Tf - ldown - swS)) * dt / P.Lf
+                         + (sn > 0 ? (real)10.0 / 3600 * dt : (real)0);   // and into snow: meltwater soaks into firn, cold from the winter, at up to 10 mm/h (a stand-in until the firn has a temperature)
         const real mp = fmin(pw > 0 ? pw : (real)0, room), m = R + mp;
         m_ice += m;
         sn = (sn > 0 ? sn : (real)0) + R;

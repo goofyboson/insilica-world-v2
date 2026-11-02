@@ -62,7 +62,7 @@ bug carried over from v1; V2-0 ported v1's grid and solver to 64-bit CUDA.
 | V2-7 | Final optimization: mixed time steps, 32-bit sign-off, then approximations (reduced model, learned emulator) against the 64-bit reference ([plan §7.1](docs/v2-plan.md)) | ⏳ Planned |
 | V2-8 | Two resolutions: air n = 6 coupled to ocean n = 8 | ⏳ Planned |
 | V2-9 | Geology: separate long-time-scale model, starting from real Earth; rock and soil elements (C, N, P, S, Fe, Ca, K, Si and others), weathering, ocean chemistry | 💬 To design |
-| V2-10 | Other Worlds: Mars, then Venus, with Jupiter and Saturn as optional goals that do not hold up later stages | 💬 To design |
+| V2-10 | Other Worlds: stress-test and generalize the climate model and find its limits, on Mars, Venus, Jupiter, Saturn and invented worlds | 💬 To design |
 | V2-11 | Coming to Life: microbes, plants and ecosystems that change the air, ocean and land they live on, with every element's ledger closed. Target: **O₂ emerges from photosynthetic organisms** | 💬 To design |
 
 ## Running it

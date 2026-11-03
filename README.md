@@ -15,7 +15,8 @@ A planet simulator with two moving ocean layers and three moving air layers, run
 **Now: V2-5 Speed (in progress, docs/v2-5-speed.md).** `earth` n = 6 per step 8.89 → 5.28 ms (139 → 234 model years per
 day), n = 4 1.76 → 1.10 ms; ensembles of 8+ worlds ×2.9 at n = 4. Mixed precision by default (SPEC #106: 64-bit state and
 ledgers, 32-bit column math and transport stencil; the 64-bit reference stays bit-identical), its 16-year climate within
-noise of 64-bit and its budgets closing as 64-bit's. Suite 41/42 with PERF (ICE open). Next: deep-ocean spin-up.
+noise of 64-bit and its budgets closing as 64-bit's. Suite 41/42 with PERF (ICE open). Deep-ocean spin-up by asynchronous coupling (SPEC #107): ×3.4 toward equilibrium at
+n = 4; the ocean alone runs 2,167 model years per day at n = 6.
 
 **V2-4b Rivers, lakes and ice closed 2026-11-01 (42/42 with PERF).** Rivers flow at the same speed on any grid (0.998–1.022 m/s against 1 m/s,
 n = 4–8; SPEC #85); ice sheets follow Glen's law, within 3.8% of the exact dome height at n = 6 (#86). Snow, glacier ice and sea ice have their own albedos, and a started polar sheet sustains itself (#87). Not yet by themselves: no lake forms on `relief`, and no ice sheet grows there from nothing. Earlier:
@@ -62,7 +63,7 @@ bug carried over from v1; V2-0 ported v1's grid and solver to 64-bit CUDA.
 | V2-4c | Surface coupling, full plume, clouds, `earth` preset with sea floor, mixed-layer trial, all behind switches | ✅ Closed (41/42; ICE open, SPEC #100) |
 | V2-4d | General layers: any number of air and ocean layers from lists; defaults stay at 3 and 3 (SPEC #101) | ✅ Closed (41/42; ICE open) |
 | V2-4e | Clouds, convection and rain on `earth`, then lightning from storm physics; weak surface winds paused to V2-6 (SPEC #102) | ✅ Closed (41/42; ICE open; earth, clouds and lightning reported, untested) |
-| V2-5 | Speed for development: ensembles in one launch, faster spin-up (the deep ocean's centuries), kernel profiling and removing wasted work, a first 32-bit trial; results unchanged or measured against 64-bit; mixed precision now too (SPEC #106) | 🔨 In progress (levers 1–4 and 32-bit trial done) |
+| V2-5 | Speed for development: ensembles in one launch, faster spin-up (the deep ocean's centuries), kernel profiling and removing wasted work, a first 32-bit trial; results unchanged or measured against 64-bit; mixed precision now too (SPEC #106) | 🔨 In progress (levers 1–5 and mixed precision done) |
 | V2-6 | Real physics for the stand-ins (radiation (air and haze scattering, vapor-dependent longwave, sunlight absorbed by vapor and ozone, stratosphere), ice in the air with freezing heat, mountain and gravity-wave drag, stability-dependent surface exchange, land cover map, plume entrainment and downdrafts, rain evaporation, Earth's orbit, sea-ice motion, deep-water formation, firn with stored cold (closes the ICE failure, SPEC #100), gas composition (H₂O, CO₂, CH₄, O₃, N₂O by amount, N₂ and O₂ setting heat capacity and molecular weight), transported composition tracers with exact budgets, per-world planet settings), Moon and tides, UI polish | ⏳ Planned |
 | V2-7 | Final optimization: mixed time steps, 32-bit sign-off, then approximations (reduced model, learned emulator) against the 64-bit reference ([plan §7.1](docs/v2-plan.md)) | ⏳ Planned |
 | V2-8 | Two resolutions: air n = 6 coupled to ocean n = 8 | ⏳ Planned |

@@ -25,20 +25,21 @@ import lbl
 
 OUT = lbl.REF
 BANDS = lbl.BANDS
-NG = [4, 3, 4, 4, 3, 2, 3, 3, 3, 3]                  # g-points per band
+NG = [16, 8, 16, 16, 16, 8, 16, 16, 8, 16]          # g-points per band (the sweep: grouping errors against number)
 DNU = lbl.DNU
 COLUMNS = [('us_standard', 400e-6), ('tropical', 400e-6), ('subarctic_winter', 400e-6)]
 P_TAB = np.exp(np.linspace(np.log(110000.0), np.log(1.0), 31))      # Pa, 1100 hPa to 0.01 hPa, top last
 T_TAB = np.arange(150.0, 341.0, 10.0)
 T_PL = np.arange(140.0, 351.0, 1.0)
 X_H2O = (0.0, 0.04)                                  # H2O vmr of its two tables
-P_FEAT = np.array([10.0, 100.0, 1000.0, 5000.0, 10000.0, 20000.0, 40000.0, 70000.0, 100000.0])  # Pa
+P_FEAT = np.array([10.0, 100.0, 1000.0, 5000.0, 10000.0, 20000.0, 40000.0, 70000.0, 100000.0])  # Pa, from the top
+P_FEAT_UP = np.array([90000.0, 75000.0, 55000.0, 35000.0])                                     # Pa, from the surface
 GASES = ('H2O', 'CO2', 'O3', 'N2O', 'CH4')
 
 
 def cumulative_features(tau, pl):
-    """log10 of the optical depth from the top down to each of P_FEAT (interpolated in the levels' pressures pl, top
-    first), clipped to [-4, 2] (transparent / opaque), per wavenumber: (len(P_FEAT) x n)."""
+    """log10 of the optical depth from the top down to each of P_FEAT and from the surface up to each of P_FEAT_UP
+    (interpolated in the levels' pressures pl, top first), clipped to [-4, 2] (transparent / opaque), per wavenumber."""
     cum = cp.concatenate([cp.zeros((1, tau.shape[1]), cp.float32), cp.cumsum(tau, axis=0)])
     lp = np.log(pl)
     rows = []
@@ -46,6 +47,10 @@ def cumulative_features(tau, pl):
         j = int(np.clip(np.searchsorted(lp, np.log(p)) - 1, 0, len(pl) - 2))
         w = (np.log(p) - lp[j]) / (lp[j + 1] - lp[j])
         rows.append(cp.log10(cp.maximum(cum[j] * (1 - w) + cum[j + 1] * w, 1e-4)).clip(-4, 2))
+    for p in P_FEAT_UP:                               # from the surface up, which the surface's downward flux sees
+        j = int(np.clip(np.searchsorted(lp, np.log(p)) - 1, 0, len(pl) - 2))
+        w = (np.log(p) - lp[j]) / (lp[j + 1] - lp[j])
+        rows.append(cp.log10(cp.maximum(cum[-1] - (cum[j] * (1 - w) + cum[j + 1] * w), 1e-4)).clip(-4, 2))
     return cp.stack(rows)
 
 
@@ -57,11 +62,57 @@ def kmeans(X, k, iters=60):
     for _ in range(iters):
         cnt = cp.maximum(cp.bincount(lab, minlength=k), 1)
         C = (cp.stack([cp.bincount(lab, weights=X[f], minlength=k) for f in range(X.shape[0])]) / cnt).astype(cp.float32)
-        new = cp.argmin(((X[:, None, :] - C[:, :, None]) ** 2).sum(axis=0), axis=0).astype(cp.int32)
+        new = cp.argmin(cp.stack([((X - C[:, c:c + 1]) ** 2).sum(axis=0) for c in range(k)]), axis=0).astype(cp.int32)
         if bool((new == lab).all()):
             break
         lab = new
     return lab
+
+
+def rt(tau, B, Bs, mus=None, ws=None):
+    """Up and down fluxes (levels) summed over spectral points or g-points: tau (layers x m), B (levels x m) and Bs (m)
+    the Planck radiance times width (W m-2 sr-1) at the levels and the surface; cupy or numpy."""
+    xp = cp.get_array_module(tau)
+    mus, ws = (lbl.MU, lbl.WMU) if mus is None else (mus, ws)
+    nl = tau.shape[0]
+    up, dn = np.zeros(nl + 1), np.zeros(nl + 1)
+    for mu, w in zip(mus, ws):
+        I = xp.zeros(tau.shape[1])
+        for i in range(nl):
+            I = lbl.layer_through(I, tau[i], B[i + 1], B[i], mu) if xp is cp else through(I, tau[i], B[i + 1], B[i], mu)
+            dn[i + 1] += 2 * np.pi * w * mu * float(I.sum(dtype=xp.float64))
+        I = Bs
+        up[nl] += 2 * np.pi * w * mu * float(I.sum(dtype=xp.float64))
+        for i in range(nl - 1, -1, -1):
+            I = lbl.layer_through(I, tau[i], B[i], B[i + 1], mu) if xp is cp else through(I, tau[i], B[i], B[i + 1], mu)
+            up[i] += 2 * np.pi * w * mu * float(I.sum(dtype=xp.float64))
+    return up, dn
+
+
+def sweep(choices=(4, 8, 12, 16)):
+    """The grouping's own error (cluster-mean optical depths of the reference columns themselves, no tables) for each
+    number of g-points per band: OLR, surface down (W/m2) and the largest heating error (K/day) below 1 hPa."""
+    cols = [afgl.profile(c, co2=x) for c, x in COLUMNS]
+    lays = [lbl.layers(P['p'], P['T'], P['vmr']) for P in cols]
+    for b in range(len(NG)):
+        nu0, d, n, nu = band_grid(b)
+        taus = [lbl.optical_depth(*L, nu0, d, n) for L in lays]
+        X = cp.concatenate([cumulative_features(t, P['p']) for t, P in zip(taus, cols)])
+        Bl = [[(lbl.planck(nu, float(T)) * d).astype(cp.float32) for T in P['T']] for P in cols]
+        ref = [rt(t, B, B[-1]) for t, B in zip(taus, Bl)]
+        for k in choices:
+            lab = kmeans(X, k)
+            cnt = cp.bincount(lab, minlength=k)
+            row = []
+            for t, B, P, (u0, d0) in zip(taus, Bl, cols, ref):
+                tc = cp.stack([cp.bincount(lab, weights=t[i], minlength=k) / cnt for i in range(t.shape[0])])
+                Bc = [cp.bincount(lab, weights=x, minlength=k) for x in B]
+                u1, d1 = rt(tc, Bc, Bc[-1])
+                hr, hk = lbl.heating(u0, d0, P['p']), lbl.heating(u1, d1, P['p'])
+                ok = P['p'][1:] > 100.0
+                row.append(f'{u1[0] - u0[0]:+6.2f} {d1[-1] - d0[-1]:+6.2f} {np.abs(hk - hr)[ok].max():5.2f}')
+            print(f'band {BANDS[b]:4d}-{BANDS[b + 1]:4d} g {k:2d}:  ' + '   '.join(row), flush=True)
+        del taus, X
 
 
 def band_grid(b):
@@ -181,14 +232,20 @@ def check():
         up, dn = k_fluxes(t, P)
         hr, hk = lbl.heating(r['up'].sum(0), r['dn'].sum(0), P['p']), lbl.heating(up.sum(0), dn.sum(0), P['p'])
         trop = P['p'] > 10000.0
+        # heating over model-like sub-levels (boundaries at the AFGL levels nearest these pressures)
+        sub = sorted({int(np.argmin(np.abs(P['p'] - q * 100))) for q in (0, 1, 5, 20, 50, 100, 150, 200, 300, 400, 500,
+                                                                           600, 700, 800, 900, 1e4)})
+        hs = lambda U, D: lbl.heating(U.sum(0)[sub], D.sum(0)[sub], P['p'][sub])
+        es = np.abs(hs(up, dn) - hs(r['up'], r['dn']))
         print(f'{name} {co2 * 1e6:.0f} ppm: OLR lbl {r["up"][:, 0].sum():.2f} k {up[:, 0].sum():.2f} '
               f'({(up[:, 0].sum() / r["up"][:, 0].sum() - 1) * 100:+.2f}%), surface down lbl {r["dn"][:, -1].sum():.2f} '
               f'k {dn[:, -1].sum():.2f} ({(dn[:, -1].sum() / r["dn"][:, -1].sum() - 1) * 100:+.2f}%), heating max |err| '
-              f'{np.abs(hk - hr).max():.3f} K/day (below 100 hPa {np.abs(hk - hr)[trop[1:]].max():.3f})')
+              f'{np.abs(hk - hr).max():.3f} K/day (below 100 hPa {np.abs(hk - hr)[trop[1:]].max():.3f}); over sub-levels max '
+              f'{es.max():.3f} K/day, below 1 hPa {es[1:].max():.3f}: ' + ' '.join(f'{e:.2f}' for e in es))
         for b in range(len(t['ng'])):
             print(f'   band {BANDS[b]:4d}-{BANDS[b + 1]:4d}: OLR {r["up"][b, 0]:7.2f} {up[b, 0]:7.2f}  down '
                   f'{r["dn"][b, -1]:7.2f} {dn[b, -1]:7.2f}')
 
 
 if __name__ == '__main__':
-    {'map': build_map, 'tables': build_tables, 'check': check}[sys.argv[1]]()
+    {'map': build_map, 'tables': build_tables, 'check': check, 'sweep': sweep}[sys.argv[1]]()

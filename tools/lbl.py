@@ -21,9 +21,9 @@ H_PL = 6.62607015e-34
 NA, M_AIR, GRAV = 6.02214076e23, 28.9647e-3, 9.80665
 TREF, PREF = 296.0, 101325.0
 CUT = 25.0
-MOL = {'H2O': 1, 'CO2': 2, 'O3': 3, 'N2O': 4, 'CH4': 6}
+MOL = {'H2O': 1, 'CO2': 2, 'O3': 3, 'N2O': 4, 'CH4': 6, 'O2': 7}
 # column amounts (molecules/cm2) well above any planned case, for dropping lines too weak to matter (S*u < WMIN cm-1)
-UMAX = {'H2O': 3e23, 'CO2': 8e22, 'O3': 2e19, 'N2O': 2e19, 'CH4': 1e20}
+UMAX = {'H2O': 3e23, 'CO2': 8e22, 'O3': 2e19, 'N2O': 2e19, 'CH4': 1e20, 'O2': 6e24}
 WMIN = 1e-6
 
 

@@ -202,8 +202,8 @@ class World:
                                                        g.areaCell, R(GRAV), R(CP_DRY), R(KAPPA), R(P0), self.theta))
         if self.air:
             if rad:
-                self.physics.radiate(self.h, self.theta, self.Ts, q=self.q if self.moist else None,
-                                     cw=self.cw if self.moist else None)
+                self.physics.radiate(self.h, self.theta, self.Ts, self.time, self.rad_every * self.dt,
+                                     q=self.q if self.moist else None, cw=self.cw if self.moist else None)
             if rec:
                 rec.pre_column()
             self.physics.column(self.h, self.theta, self.Ts, self.u, self.time, self.dt,

@@ -528,7 +528,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
                                       real* wx, real* olr, real* sw_abs, real* stored, real* rain, real* evap, real* conv,
                                       real* tsurf, real* rainp, real* dgo, real* cap, real* qocean,
                                       real* qsw, const real* land, const real* soilcap, real* soil, real* pond, real* snow, real* cloudw, real* cloudo, const real* elev, real* flash,
-                                      const real* radf) {
+                                      const real* radf, const real* swf, real* swalb) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= N) return;
 #ifdef NL
@@ -634,8 +634,13 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
     alb_i = fs * (P.alb_snow + (P.alb_snow_melt - P.alb_snow) * warm) + (1 - fs) * P.alb_glacier;
   }
   const real alb = fice * alb_i + (1 - fice) * alb0;
-  const real toAir = P.asw * (mt / P.mu_ref) * I;
-  if (P.sw_tau > 1) {                  // split like the vapor part (s^4) of the longwave profile (decision #59)
+  if (swalb) swalb[i] = alb;                                     // for the next radiation step (k-tables)
+  // the k-tables' shortwave (sw_column at the last radiation step): each layer's and the surface's share of the sunlight
+  const real toAir = swf ? [&]() { real s = 0; for (int k = 0; k < L; k++) s += swf[(size_t)k * N + i]; return s * I; }()
+                         : P.asw * (mt / P.mu_ref) * I;
+  if (swf)
+    for (int k = 0; k < L; k++) Q[k] += I * swf[(size_t)k * N + i];
+  else if (P.sw_tau > 1) {                  // split like the vapor part (s^4) of the longwave profile (decision #59)
     const real ps_ = pb[bot];
     real st = 0;
     for (int k = 0; k < L; k++) {
@@ -656,7 +661,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
       const real tau = (real)1.5 * cwp[k] * (liq[k] / (1000 * P.re_liq) + (1 - liq[k]) / (P.rho_ice * P.re_ice)), g1 = (1 - P.cloud_g) * tau;
       Tc *= 1 - fc[k] * g1 / (2 + g1);
     }
-  const real swS = (I - toAir) * Tc * (1 - alb) / (1 - alb * (1 - Tc));
+  const real swS = swf ? I * swf[(size_t)L * N + i] : (I - toAir) * Tc * (1 - alb) / (1 - alb * (1 - Tc));
 
   // ---- longwave: each layer's emissivity from its share of the optical-depth profile; the downward longwave reaching
   // the surface ----
@@ -724,10 +729,13 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
       real clear = 1;
       for (int k = 0; k < L; k++) { cloudo[(size_t)k * N + i] = fc[k]; clear *= 1 - fc[k]; }
       cloudo[(size_t)L * N + i] = 1 - clear;
-      cloudo[(size_t)(L + 1) * N + i] = swS - (I - toAir) * (1 - alb);
+      cloudo[(size_t)(L + 1) * N + i] = swf ? I * (swf[(size_t)(L + 1) * N + i] - (1 - (toAir / fmax(I, (real)1e-30) + swf[(size_t)L * N + i])))
+                                            : swS - (I - toAir) * (1 - alb);
       cloudo[(size_t)(L + 2) * N + i] = radf[(size_t)(3 * RW) * N + i] + radf[(size_t)(3 * RW + 1) * N + i] * Es - up;
-      for (int k = 0; k < L; k++)                                // in-cloud longwave optical depth, for the next radiation step
+      for (int k = 0; k < L; k++) {                              // in-cloud longwave and shortwave optical depths, for the next radiation step
         cloudo[(size_t)(L + 3 + k) * N + i] = fc[k] > (real)1e-6 ? (liq[k] * P.k_lw_liq + (1 - liq[k]) * P.k_lw_ice) * cwp[k] : (real)0;
+        cloudo[(size_t)(2 * L + 3 + k) * N + i] = (real)1.5 * cwp[k] * (liq[k] / (1000 * P.re_liq) + (1 - liq[k]) / (P.rho_ice * P.re_ice));
+      }
     }
     #undef RF
   } else {
@@ -1099,13 +1107,16 @@ __device__ __forceinline__ fast lw_through(fast I, fast tau, fast Bn, fast Bf) {
   const fast lin = x > (fast)1e-3 ? 1 - (1 - t) / x : x * ((fast)0.5 - x / 6);
   return I * t + Bf * (1 - t) + (Bn - Bf) * lin;
 }
-// The sub-levels' properties for lw_column (one thread per layer of a column): per sub-level s of the column, sub[(s * NV
-// + v) * N + i] for v = edge temperatures (top, bottom), table positions (log p, T), amounts (H2O, CO2, O3, N2O, CH4;
-// molecules / cm^2), H2O's place between its two tables, cloud optical depth and cover.
-#define NV 12
+// The sub-levels' properties for lw_column and sw_column (one thread per layer of a column): per sub-level s of the
+// column, sub[(s * NV + v) * N + i] for v = edge temperatures (top, bottom), table positions (log p, T), amounts (H2O,
+// CO2, O3, N2O, CH4; molecules / cm^2), H2O's place between its two tables, cloud longwave optical depth and cover, air
+// (molecules / cm^2), the haze's share. A layer's cloud sits in one sub-level (CLOUD_SUB: the bottom layer's middle, a
+// middle layer's top, where the plumes' outflow is, the top layer's bottom), so its cover mixes once in each stream.
+#define NV 14
+__device__ __forceinline__ int cloud_sub(int k, int L) { return k == L - 1 ? 1 : (k == 0 ? NSUB - 1 : 0); }
 extern "C" __global__ void lw_setup(int N, int L_in, const real* par, int NP, int NT, real lp0, real dlp, real t0, real dtt,
                                     const float* o3, int NO3, real o3lp0, real o3dlp, real co2, real n2o, real ch4,
-                                    const real* mu_in, const real* theta, const real* qv, const real* cloudo, float* sub) {
+                                    const real* mu_in, const real* theta, const real* qv, const real* cloudo, real hs, float* sub) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x, k = blockIdx.y;
   if (i >= N) return;
 #ifdef NL
@@ -1157,7 +1168,9 @@ extern "C" __global__ void lw_setup(int N, int L_in, const real* par, int NP, in
       const int io = (int)yo;
       const fast xo3 = o3[io] + (o3[io + 1] - o3[io]) * (yo - (fast)io);
       W(s, 5) = (float)((fast)co2 * ua); W(s, 6) = (float)(xo3 * ua); W(s, 7) = (float)((fast)n2o * ua); W(s, 8) = (float)((fast)ch4 * ua);
-      W(s, 10) = (float)(tcl * (fast)((b - a) / (pbk - pt))); W(s, 11) = (float)fcl;
+      W(s, 10) = j == cloud_sub(k, L) ? (float)tcl : 0.f; W(s, 11) = (float)fcl;
+      W(s, 12) = (float)ua;
+      W(s, 13) = (float)(FPOW(b / pb[L - 1], (real)8000 / hs) - FPOW(a / pb[L - 1], (real)8000 / hs));
       uas[j] = ua;
     }
     for (int j = 0; j < NSUB; j++) {
@@ -1272,5 +1285,150 @@ extern "C" __global__ void lw_column(int N, int L_in, const real* par, int NG, c
     real v = sums[g];
     if ((g >= 2 * RW && g < 3 * RW) || g == 3 * RW + 1) v /= Bsum;     // shares of the surface's emission
     radf[(size_t)g * N + i] = v;
+  }
+}
+
+// ---- shortwave by the k-tables (V2-6a): one block per column, one thread per g-point, on lw_setup's sub-levels ----
+// Each sub-level: the gases' absorption from the tables, Rayleigh scattering (the g-point's cross section times the air),
+// the haze (tau550 times the g-point's spectral factor times the sub-level's share; ssa, asymmetry), and in its layer's
+// cloud sub-level the cloud (cover f: reflectances and transmittances mixed (1 - f) clear + f cloudy). Delta-Eddington
+// in each sub-level, adding over the surface's albedo. The sun at the mean of its cosine over the coming radiation
+// interval's daylight. swf rows (each N wide), per unit of sunlight on the horizontal at the top: each layer's absorbed
+// share, the surface's, the clear sky's reflected share; the reflected share is what the rest leaves, so the shares
+// close exactly.
+__device__ void sw_layer(fast tau, fast ssa, fast g, fast mu0, fast& Rd, fast& Td, fast& Rs, fast& Ts, fast& Tdd) {
+  const fast f = g * g;
+  tau = (1 - ssa * f) * tau;
+  ssa = (1 - f) * ssa / (1 - ssa * f);
+  g = (g - f) / (1 - f);
+  const fast g1 = (7 - ssa * (4 + 3 * g)) / 4, g2 = -(1 - ssa * (4 - 3 * g)) / 4, g3 = (2 - 3 * g * mu0) / 4, g4 = 1 - g3;
+  const fast a1 = g1 * g4 + g2 * g3, a2 = g1 * g3 + g2 * g4;
+  const fast k = sqrt(fmax((g1 - g2) * (g1 + g2), (fast)1e-12));
+  const fast e = (fast)FEXP(-k * tau), e2 = e * e, k2e = 2 * k * e;
+  fast rf = 1 / (k + g1 + (k - g1) * e2);
+  Rd = g2 * (1 - e2) * rf;
+  Td = k2e * rf;
+  Tdd = (fast)FEXP(-tau / mu0);
+  const fast km = k * mu0;
+  fast om = 1 - km * km;
+  if (fabs(om) < (fast)1e-3) om = om < 0 ? (fast)-1e-3 : (fast)1e-3;
+  rf = ssa * rf / om;
+  Rs = rf * ((1 - km) * (a2 + k * g3) - (1 + km) * (a2 - k * g3) * e2 - k2e * (g3 - a2 * mu0) * Tdd);
+  Ts = rf * (k2e * (g4 + a1 * mu0) - Tdd * ((1 + km) * (a1 + k * g4) - (1 - km) * (a1 - k * g4) * e2));
+  Rs = fmin(fmax(Rs, (fast)0), 1 - Tdd);
+  Ts = fmin(fmax(Ts, (fast)0), 1 - Tdd - Rs);
+}
+
+extern "C" __global__ void sw_column(int N, int L_in, const real* par, int NG, const float* lk, int NP, int NT, real yscale,
+                                     const float* sun, const float* ray, const float* hzf, const float* cssa,
+                                     real tau550, real hssa, real hg, const float* sub, int mode, const real* t, real interval,
+                                     const real* pos, const real* alb, const real* cloudo, real* swf) {
+  const int i = blockIdx.x, g = threadIdx.x;
+#ifdef NL
+  const int L = NL;
+#else
+  const int L = L_in;
+#endif
+  __shared__ fast su[NSMAX][7], sfh[NSMAX], sfp[NSMAX], sft[NSMAX], sr[NSMAX], sh[NSMAX], stc[NSMAX], sfc[NSMAX];
+  __shared__ int sip[NSMAX], sit[NSMAX];
+  __shared__ fast smu;
+  __shared__ float red[LMAX + 2][256];
+  __shared__ real sums[LMAX + 2];
+  const Par P = unpack(par);
+  if (g < NSUB * L) {
+    const int s = g, k = s / NSUB;
+    #define R_(v) sub[((size_t)s * NV + (v)) * N + i]
+    const fast x = R_(2), y = fminf((fast)R_(3) * (fast)yscale, (fast)(NT - 1) - 1e-4f);
+    sip[s] = (int)x; sfp[s] = x - (fast)sip[s]; sit[s] = (int)y; sft[s] = y - (fast)sit[s];
+    for (int c = 0; c < 5; c++) su[s][c] = R_(4 + c);
+    su[s][5] = (fast)0.2095 * R_(12);                         // O2
+    sfh[s] = R_(9); sr[s] = R_(12); sh[s] = R_(13);
+    const bool cs = s - k * NSUB == cloud_sub(k, L) && cloudo;
+    sfc[s] = cs ? (fast)cloudo[(size_t)k * N + i] : (fast)0;
+    stc[s] = cs ? (fast)cloudo[(size_t)(2 * L + 3 + k) * N + i] : (fast)0;
+    #undef R_
+  }
+  if (g == 0) {                                   // the sun: the mean of its cosine over the interval's daylight
+    fast m = 0.5;
+    if (mode == 0) {
+      fast sum = 0; int lit = 0;
+      for (int j = 0; j < 4; j++) {
+        const real tt = t[0] + (j + (real)0.5) * interval / 4;
+        const real ang = 2 * PI_ * tt / P.year_s, dec = asin(sin(P.tilt) * sin(ang)), rot = 2 * PI_ * fmod(tt, P.day_s) / P.day_s;
+        const real cz = pos[3 * i] * cos(dec) * cos(-rot) + pos[3 * i + 1] * cos(dec) * sin(-rot) + pos[3 * i + 2] * sin(dec);
+        if (cz > 0) { sum += (fast)cz; lit++; }
+      }
+      m = lit ? sum / lit : (fast)0.05;
+    }
+    smu = fmax(m, (fast)0.02);
+  }
+  __syncthreads();
+  const int NS = NSUB * L;
+  if (g < NG) {
+    const fast mu0 = smu, a = (fast)alb[i];
+    const size_t cs = (size_t)NP * NT * NG;
+    fast Rd[NSMAX], Td[NSMAX], Rs[NSMAX], Ts[NSMAX], Tdd[NSMAX], cRd[NSMAX], cTd[NSMAX], cRs[NSMAX], cTs[NSMAX], cTdd[NSMAX];
+    for (int s = 0; s < NS; s++) {
+      const size_t b0 = ((size_t)sip[s] * NT + sit[s]) * NG + g;
+      const fast fp = sfp[s], ft = sft[s];
+      fast lkc[7];
+      for (int c = 0; c < 7; c++) {
+        const float* K = lk + c * cs + b0;
+        const fast v00 = K[0], v01 = K[NG], v10 = K[(size_t)NT * NG], v11 = K[(size_t)NT * NG + NG];
+        lkc[c] = (fast)FEXP(v00 + (v10 - v00) * fp + (v01 - v00) * ft + (v00 - v01 - v10 + v11) * fp * ft);
+      }
+      const fast tg = su[s][0] * (lkc[0] + (lkc[1] - lkc[0]) * sfh[s]) + su[s][1] * lkc[2] + su[s][2] * lkc[3] +
+                      su[s][3] * lkc[4] + su[s][4] * lkc[5] + su[s][5] * lkc[6];
+      const fast tr = ray[g] * sr[s], th = (fast)tau550 * hzf[g] * sh[s];
+      const fast tt = tg + tr + th, sc = tr + (fast)hssa * th;
+      const fast ssa = tt > 0 ? fmin(sc / tt, (fast)(1 - 1e-6)) : (fast)0, ga = sc > 0 ? (fast)hg * (fast)hssa * th / sc : (fast)0;
+      sw_layer(tt, ssa, ga, mu0, cRd[s], cTd[s], cRs[s], cTs[s], cTdd[s]);
+      const fast f = sfc[s];
+      if (f > 0 && stc[s] > 0) {                  // the cloudy part: the cloud's scattering added
+        const fast tc = stc[s], cw = cssa[g], sc2 = sc + cw * tc, t2 = tt + tc;
+        const fast g2 = (ga * sc + (fast)P.cloud_g * cw * tc) / sc2;
+        fast r1, t1, r2, t3, d1;
+        sw_layer(t2, fmin(sc2 / t2, (fast)(1 - 1e-6)), g2, mu0, r1, t1, r2, t3, d1);
+        Rd[s] = (1 - f) * cRd[s] + f * r1; Td[s] = (1 - f) * cTd[s] + f * t1;
+        Rs[s] = (1 - f) * cRs[s] + f * r2; Ts[s] = (1 - f) * cTs[s] + f * t3; Tdd[s] = (1 - f) * cTdd[s] + f * d1;
+      } else { Rd[s] = cRd[s]; Td[s] = cTd[s]; Rs[s] = cRs[s]; Ts[s] = cTs[s]; Tdd[s] = cTdd[s]; }
+    }
+    // adding: the albedos of what lies below each level, then the fluxes down from the top
+    fast Ad[NSMAX + 1], As[NSMAX + 1];
+    auto add = [&](const fast* Rd, const fast* Td, const fast* Rs, const fast* Ts, const fast* Tdd, fast* absk, fast& surf) -> fast {
+      Ad[NS] = a; As[NS] = a;
+      for (int s = NS - 1; s >= 0; s--) {
+        const fast den = 1 / (1 - Ad[s + 1] * Rd[s]);
+        Ad[s] = Rd[s] + Td[s] * Td[s] * Ad[s + 1] * den;
+        As[s] = Rs[s] + (Tdd[s] * As[s + 1] + Ts[s] * Ad[s + 1]) * Td[s] * den;
+      }
+      fast Fdir = 1, Fdif = 0, net = 1 - As[0];
+      for (int k = 0; k < L; k++) absk[k] = 0;
+      for (int s = 0; s < NS; s++) {
+        const fast den = 1 / (1 - Ad[s + 1] * Rd[s]);
+        const fast Fdn = Fdir * Tdd[s];
+        Fdif = (Td[s] * Fdif + Rd[s] * As[s + 1] * Fdn + Ts[s] * Fdir) * den;
+        Fdir = Fdn;
+        const fast n2 = Fdir + Fdif - (Ad[s + 1] * Fdif + As[s + 1] * Fdir);
+        absk[s / NSUB] += net - n2;
+        net = n2;
+      }
+      surf = net;
+      return As[0];
+    };
+    fast absk[LMAX], surf, cabs[LMAX], csurf;
+    add(Rd, Td, Rs, Ts, Tdd, absk, surf);
+    const fast crefl = add(cRd, cTd, cRs, cTs, cTdd, cabs, csurf);
+    const fast w = sun[g];
+    for (int k = 0; k < L; k++) red[k][g] = w * absk[k];
+    red[L][g] = w * surf;
+    red[L + 1][g] = w * crefl;
+  }
+  __syncthreads();
+  if (g < L + 2) {
+    real sum = 0;
+    for (int j = 0; j < NG; j++) sum += (real)red[g][j];
+    sums[g] = sum;
+    swf[(size_t)g * N + i] = sum;
   }
 }

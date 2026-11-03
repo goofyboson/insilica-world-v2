@@ -111,9 +111,9 @@ def test_longwave(record):
     # the GPU kernels against the NumPy method on a world's own sub-columns (cloudy after a few steps)
     w = World(4, 'earth', params=dict(longwave='ktables'))
     w.step(24, graph=False)
-    w.physics.radiate(w.h, w.theta, w.Ts, q=w.q, cw=w.cw)
+    w.physics.radiate(w.h, w.theta, w.Ts, w.time, w.rad_every * w.dt, q=w.q, cw=w.cw)
     lw, L, N = w.physics.lw, w.L, w.grid.N
-    sub, radf, Ts = lw.sub.get().reshape(4 * L, 12, N), lw.radf.get(), w.Ts.get()
+    sub, radf, Ts = lw.sub.get().reshape(4 * L, 14, N), lw.radf.get(), w.Ts.get()
     RW = L + 1
     kern = 0.0
     cells = np.linspace(0, N - 1, 64).astype(int)

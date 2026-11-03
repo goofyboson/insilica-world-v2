@@ -14,7 +14,7 @@ import hapi
 DB = Path(__file__).resolve().parents[1] / 'cache' / 'hitran'
 # gas: (HITRAN molecule number, numin, numax cm⁻¹)
 GASES = {'H2O': (1, 10.0, 20000.0), 'CO2': (2, 10.0, 8000.0), 'O3': (3, 10.0, 3000.0), 'N2O': (4, 10.0, 3000.0),
-         'CH4': (6, 10.0, 3500.0)}
+         'CH4': (6, 10.0, 3500.0), 'O2': (7, 10.0, 20000.0)}
 
 
 def main():

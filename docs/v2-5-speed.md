@@ -96,7 +96,8 @@ and do the arithmetic in 32-bit, then measure again against these numbers.
 |---|---|---|---|---|---|
 | 2026-11-02 | Baseline | 19ee5b0 | 8.89 ms | 1.00 | — |
 | 2026-11-03 | Lever 1: column computed once where it repeated, compiled for its layer count (`air_column` 3.28 → 2.50 ms) | 24afdb8 | 8.19 ms | 1.09 | yes: 8 presets |
-| 2026-11-03 | Mixed precision (SPEC #106): column transcendentals and capacity in 32-bit (2.50 → 1.08 ms), transport stencil in 32-bit (2.30 → 1.69 ms) | (this) | 6.09 ms | 1.46 | no: measured below; 64-bit reference still identical |
+| 2026-11-03 | Mixed precision (SPEC #106): column transcendentals and capacity in 32-bit (2.50 → 1.08 ms), transport stencil in 32-bit (2.30 → 1.69 ms) | f141497 | 6.09 ms | 1.46 | no: measured below; 64-bit reference still identical |
+| 2026-11-03 | Lever 2: every tracer in the same launches (rows tracer × layer), each 3rd-order edge flux once per edge (was 8 evaluations per edge, now 3) (transport 1.69 → 0.95 ms) | (this) | 5.37 ms | 1.66 | yes: 8 presets, both precisions |
 
 ### Mixed precision (2026-11-03, SPEC #106)
 

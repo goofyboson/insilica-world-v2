@@ -129,52 +129,69 @@ __device__ __forceinline__ real hoflux(const real* Fml, const real* ps, const in
   return f * ((real)0.5 * (ps[eI[e]] + ps[eJ[e]]) - (real)(a + b)) + fabs(f) * ((real)(b - a) * beta);
 }
 
+// Rows y = tracer * Lm + layer: a row's tracer is psi + y N, its masses and fluxes are its layer's, y % Lm (V2-5: every
+// tracer of a world in the same launches). The 3rd-order edge fluxes are computed once per edge (tr_hflux, tr_aflux) and
+// summed by the cell passes in each cell's own edge order, as before.
+#define ROW(i, n) const int i = blockIdx.x * blockDim.x + threadIdx.x; if (i >= (n)) return; const int y = blockIdx.y, l = y % Lm;
+
 // The upwind solution td = (M0 psi - upwind fluxes) / M1.
-extern "C" __global__ void tr_td(int N, int E, const real* M0, const real* psi, const real* Fm, const real* M1,
+extern "C" __global__ void tr_td(int N, int E, int Lm, const real* M0, const real* psi, const real* Fm, const real* M1,
                                  const int* cellEdgeAsc, const int* eI, const int* eJ, real* td) {
-  LOOP(i, N)
-  const size_t o = (size_t)l * N + i;
-  const real* p = psi + (size_t)l * N;
+  ROW(i, N)
+  const size_t o = (size_t)y * N + i, om = (size_t)l * N + i;
+  const real* p = psi + (size_t)y * N;
   const real* Fml = Fm + (size_t)l * E;
-  real t = M0[o] * psi[o];
+  real t = M0[om] * psi[o];
   for (int k = 0; k < 6; k++) {
     const int e = cellEdgeAsc[i * 6 + k];
     if (e < 0) break;
     const real f = upwind(Fml, p, eI, eJ, e);
     if (eI[e] == i) t -= f; else t += f;
   }
-  td[o] = t / M1[o];
+  td[o] = t / M1[om];
 }
 
-// An RK stage of the high-order solution: out = (M0 psi - frac sum  H(src)) / (M0 - frac sum  Fm).
-extern "C" __global__ void tr_stage(int N, int E, const real* M0, const real* psi, const real* src, real frac, const real* Fm,
-                                    const int* idx, const fast* wt, const int* cellEdgeAsc, const int* eI, const int* eJ, real beta,
-                                    real* out) {
-  LOOP(i, N)
-  const size_t o = (size_t)l * N + i;
-  const real* s = src + (size_t)l * N;
+// An RK stage's high-order edge fluxes, frac H(src).
+extern "C" __global__ void tr_hflux(int E, int Lm, const real* src, real frac, const real* Fm, const int* idx, const fast* wt,
+                                    const int* eI, const int* eJ, int N, real beta, real* Hf) {
+  ROW(e, E)
+  Hf[(size_t)y * E + e] = frac * hoflux(Fm + (size_t)l * E, src + (size_t)y * N, idx, wt, eI, eJ, e, beta);
+}
+
+// An RK stage of the high-order solution: out = (M0 psi - sum frac H(src)) / (M0 - frac sum Fm).
+extern "C" __global__ void tr_stage(int N, int E, int Lm, const real* M0, const real* psi, const real* Hf, real frac, const real* Fm,
+                                    const int* cellEdgeAsc, const int* eI, real* out) {
+  ROW(i, N)
+  const size_t o = (size_t)y * N + i, om = (size_t)l * N + i;
+  const real* Hl = Hf + (size_t)y * E;
   const real* Fml = Fm + (size_t)l * E;
-  real t = M0[o] * psi[o];
-  real mx = M0[o];
+  real t = M0[om] * psi[o];
+  real mx = M0[om];
   for (int k = 0; k < 6; k++) {
     const int e = cellEdgeAsc[i * 6 + k];
     if (e < 0) break;
-    const real f = frac * hoflux(Fml, s, idx, wt, eI, eJ, e, beta);
+    const real f = Hl[e];
     const real m = frac * Fml[e];
     if (eI[e] == i) { t -= f; mx -= m; } else { t += f; mx += m; }
   }
   out[o] = t / mx;
 }
 
-// Zalesak ratios, with the antidiffusive fluxes A = H(p2) - upwind(psi) computed on the fly.
-extern "C" __global__ void tr_ratios(int N, int E, const real* psi, const real* td, const real* M1, const real* p2, const real* Fm,
-                                     const int* idx, const fast* wt, const int* nbr, const int* cellEdgeAsc, const int* eI,
-                                     const int* eJ, real beta, real* Rp, real* Rm) {
-  LOOP(i, N)
-  const real* p = psi + (size_t)l * N;
-  const real* t = td + (size_t)l * N;
-  const real* s = p2 + (size_t)l * N;
+// The antidiffusive fluxes A = H(p2) - upwind(psi), once per edge.
+extern "C" __global__ void tr_aflux(int E, int Lm, const real* psi, const real* p2, const real* Fm, const int* idx, const fast* wt,
+                                    const int* eI, const int* eJ, int N, real beta, real* A) {
+  ROW(e, E)
   const real* Fml = Fm + (size_t)l * E;
+  A[(size_t)y * E + e] = hoflux(Fml, p2 + (size_t)y * N, idx, wt, eI, eJ, e, beta) - upwind(Fml, psi + (size_t)y * N, eI, eJ, e);
+}
+
+// Zalesak ratios from the antidiffusive fluxes.
+extern "C" __global__ void tr_ratios(int N, int E, int Lm, const real* psi, const real* td, const real* M1, const real* A,
+                                     const int* nbr, const int* cellEdgeAsc, const int* eI, real* Rp, real* Rm) {
+  ROW(i, N)
+  const real* p = psi + (size_t)y * N;
+  const real* t = td + (size_t)y * N;
+  const real* Al = A + (size_t)y * E;
   real hi = fmax(p[i], t[i]), lo = fmin(p[i], t[i]);
   for (int k = 0; k < 6; k++) {
     const int j = nbr[i * 6 + k];
@@ -188,33 +205,29 @@ extern "C" __global__ void tr_ratios(int N, int E, const real* psi, const real* 
   for (int k = 0; k < 6; k++) {
     const int e = cellEdgeAsc[i * 6 + k];
     if (e < 0) break;
-    const real a = hoflux(Fml, s, idx, wt, eI, eJ, e, beta) - upwind(Fml, p, eI, eJ, e);
+    const real a = Al[e];
     if (eI[e] == i) { if (a > 0) Pm += a; else Pp -= a; }
     else { if (a > 0) Pp += a; else Pm -= a; }
   }
-  Rp[(size_t)l * N + i] = Pp > 0 ? fmin((real)1, qmax / Pp) : (real)0;
-  Rm[(size_t)l * N + i] = Pm > 0 ? fmin((real)1, qmin / Pm) : (real)0;
+  Rp[(size_t)y * N + i] = Pp > 0 ? fmin((real)1, qmax / Pp) : (real)0;
+  Rm[(size_t)y * N + i] = Pm > 0 ? fmin((real)1, qmin / Pm) : (real)0;
 }
 
-// The limited update: psi_out = (td M1 - sum  c A out + sum  c A in) / M1. Writes a separate array (neighbors still
-// read psi).
-extern "C" __global__ void tr_apply(int N, int E, const real* psi, const real* td, const real* M1, const real* p2, const real* Fm,
-                                    const real* Rp, const real* Rm, const int* idx, const fast* wt, const int* cellEdgeAsc,
-                                    const int* eI, const int* eJ, real beta, real* psi_out) {
-  LOOP(i, N)
-  const size_t o = (size_t)l * N + i;
-  const real* p = psi + (size_t)l * N;
-  const real* s = p2 + (size_t)l * N;
-  const real* Fml = Fm + (size_t)l * E;
-  const real* rp = Rp + (size_t)l * N;
-  const real* rm = Rm + (size_t)l * N;
-  real t = td[o] * M1[o];
+// The limited update: psi_out = (td M1 - sum c A out + sum c A in) / M1, into a separate array.
+extern "C" __global__ void tr_apply(int N, int E, int Lm, const real* td, const real* M1, const real* A, const real* Rp, const real* Rm,
+                                    const int* cellEdgeAsc, const int* eI, const int* eJ, real* psi_out) {
+  ROW(i, N)
+  const size_t o = (size_t)y * N + i, om = (size_t)l * N + i;
+  const real* Al = A + (size_t)y * E;
+  const real* rp = Rp + (size_t)y * N;
+  const real* rm = Rm + (size_t)y * N;
+  real t = td[o] * M1[om];
   for (int k = 0; k < 6; k++) {
     const int e = cellEdgeAsc[i * 6 + k];
     if (e < 0) break;
-    const real a = hoflux(Fml, s, idx, wt, eI, eJ, e, beta) - upwind(Fml, p, eI, eJ, e);
+    const real a = Al[e];
     const real c = a > 0 ? fmin(rp[eJ[e]], rm[eI[e]]) : fmin(rp[eI[e]], rm[eJ[e]]);
     if (eI[e] == i) t -= c * a; else t += c * a;
   }
-  psi_out[o] = t / M1[o];
+  psi_out[o] = t / M1[om];
 }

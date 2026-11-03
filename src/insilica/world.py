@@ -86,7 +86,7 @@ class World:
             if nu4 * lam * lam * self.dt > 1.0:
                 raise ValueError(f'nu4 {nu4:.3g} m^4/s is unstable at dt {self.dt:g} s on n = {n} (nu4*lambda^2*dt = '
                                  f'{nu4 * lam * lam * self.dt:.2f}; keep it <= 1: nu4 <= {1.0 / (lam * lam * self.dt):.3g})')
-        self.tr = Transport(self.dg, layers=self.L, beta=P.get('beta', BETA))
+        self.tr = Transport(self.dg, layers=self.L, beta=P.get('beta', BETA), tracers=4)
         self.h, self.u = cp.asarray(h), cp.asarray(u)
         self.M = self.h * cp.asarray(self.grid.areaCell)[None, :]
         self.psi = cp.asarray(np.tile(cosine_bell(self.grid), (self.L, 1)))
@@ -174,14 +174,10 @@ class World:
         if self.dynamics:
             self.core.step(self.h, self.u, self.dt, self.nfast, self._Fm, theta=self.theta if self.air else None)
             self.tr.mass_after(self.M, self._Fm, self._M1)
-            if self.tracer:
-                self.tr.step(self.M, self._M1, self._Fm, self.psi, order=3)
-            if self.air:
-                self.tr.step(self.M, self._M1, self._Fm, self.theta, order=3)
-            if self.moist:
-                self.tr.step(self.M, self._M1, self._Fm, self.q, order=3)
-                if self.cw is not None:
-                    self.tr.step(self.M, self._M1, self._Fm, self.cw, order=3)
+            # every tracer through the same launches (V2-5)
+            moved = ([self.psi] if self.tracer else []) + ([self.theta] if self.air else []) +                 ([self.q] + ([self.cw] if self.cw is not None else []) if self.moist else [])
+            if moved:
+                self.tr.step_many(self.M, self._M1, self._Fm, moved, order=3)
             cp.copyto(self.M, self._M1)
         if self.sea is not None:
             # the wind stress, exactly, with its kinetic energy back as the air's heat

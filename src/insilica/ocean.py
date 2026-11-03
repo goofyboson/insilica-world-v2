@@ -81,7 +81,7 @@ class Ocean:
         if nu4:
             lam = self.core.lap_max()
             assert nu4 * lam * lam * c['dt'] <= 1.0, 'ocean nu4 unstable at its step'
-        self.tr = Transport(dg, layers=L)
+        self.tr = Transport(dg, layers=L, tracers=2)
         if state is None:
             # the thermocline water at T_thermo, no warmer than the surface above it nor colder than the abyss: started warm,
             # near where the subtropics' mixing pumps it (decision #75), its drift stays slow (~0.05 K/yr); the abyss at the
@@ -181,10 +181,9 @@ class Ocean:
             self._heat(-1.0)
         self.core.step(self.h, self.u, c['dt'], self.nfast, self._Fm)
         self.tr.mass_after(self.M, self._Fm, self._M1)
-        self.tr.step(self.M, self._M1, self._Fm, self.T, order=3)
+        self.tr.step_many(self.M, self._M1, self._Fm, [self.T, self.S], order=3)     # (the heat below touches T only)
         if self.conv is not None:
             self._heat(1.0)
-        self.tr.step(self.M, self._M1, self._Fm, self.S, order=3)
         cp.copyto(self.M, self._M1)
         self.update_cap()
         if not mix:

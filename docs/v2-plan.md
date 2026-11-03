@@ -162,6 +162,10 @@ changes results (32-bit, mixed time steps, approximations) to V2-7, so the accur
 model rather than repeated every stage. Keep the code ready for V2-7: column-local physics with no hidden host
 round-trips (batchable), every kernel behind the `REAL` precision switch, and equilibrated states kept for restarts.
 
+**Changed by the owner, 2026-11-03 (SPEC #106):** result-changing speedups no longer wait for V2-7. V2-5 does the full
+optimization now, mixed precision first (64-bit state and ledgers, 32-bit arithmetic where measured safe), each change
+measured against the 64-bit reference (climate, budgets, tests); the accuracy is checked again after V2-6's physics.
+
 **Where the time goes (2026-10-27).** n = 4 moist three-layer air: ~2 min per model year per process, the GPU mostly
 idle (2,562 cells; kernel launch overhead dominates). n = 6: 43 ms per model hour (~6 min per model year). The largest
 wait in practice is spin-up: a 100 m slab takes about a decade of model time to settle.

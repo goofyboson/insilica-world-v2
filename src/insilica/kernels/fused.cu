@@ -8,6 +8,12 @@
 // Layout as in trisk.cu: layer-major arrays x[l * n + i], blockIdx.y = layer, int32 index tables.
 
 typedef REAL real;
+// Mixed precision (SPEC #106): the transport stencil's weights and sums in 32-bit; fluxes, means and every total 64-bit
+#if defined(MIXED)
+typedef float fast;
+#else
+typedef real fast;
+#endif
 
 #define LOOP(i, n) const int i = blockIdx.x * blockDim.x + threadIdx.x; if (i >= (n)) return; const int l = blockIdx.y;
 
@@ -114,13 +120,13 @@ __device__ __forceinline__ real upwind(const real* Fml, const real* p, const int
 }
 
 // 3rd-order flux with upwind weight beta (SPEC section 9 #20): f (mean - a - b) + |f| (b - a) beta.
-__device__ __forceinline__ real hoflux(const real* Fml, const real* ps, const int* idx, const real* wt, const int* eI,
+__device__ __forceinline__ real hoflux(const real* Fml, const real* ps, const int* idx, const fast* wt, const int* eI,
                                        const int* eJ, int e, real beta) {
   const real f = Fml[e];
   const int o = e * 8;
-  const real a = wt[o] * ps[idx[o]] + wt[o + 1] * ps[idx[o + 1]] + wt[o + 2] * ps[idx[o + 2]] + wt[o + 3] * ps[idx[o + 3]];
-  const real b = wt[o + 4] * ps[idx[o + 4]] + wt[o + 5] * ps[idx[o + 5]] + wt[o + 6] * ps[idx[o + 6]] + wt[o + 7] * ps[idx[o + 7]];
-  return f * ((real)0.5 * (ps[eI[e]] + ps[eJ[e]]) - (a + b)) + fabs(f) * ((b - a) * beta);
+  const fast a = wt[o] * (fast)ps[idx[o]] + wt[o + 1] * (fast)ps[idx[o + 1]] + wt[o + 2] * (fast)ps[idx[o + 2]] + wt[o + 3] * (fast)ps[idx[o + 3]];
+  const fast b = wt[o + 4] * (fast)ps[idx[o + 4]] + wt[o + 5] * (fast)ps[idx[o + 5]] + wt[o + 6] * (fast)ps[idx[o + 6]] + wt[o + 7] * (fast)ps[idx[o + 7]];
+  return f * ((real)0.5 * (ps[eI[e]] + ps[eJ[e]]) - (real)(a + b)) + fabs(f) * ((real)(b - a) * beta);
 }
 
 // The upwind solution td = (M0 psi - upwind fluxes) / M1.
@@ -142,7 +148,7 @@ extern "C" __global__ void tr_td(int N, int E, const real* M0, const real* psi, 
 
 // An RK stage of the high-order solution: out = (M0 psi - frac sum  H(src)) / (M0 - frac sum  Fm).
 extern "C" __global__ void tr_stage(int N, int E, const real* M0, const real* psi, const real* src, real frac, const real* Fm,
-                                    const int* idx, const real* wt, const int* cellEdgeAsc, const int* eI, const int* eJ, real beta,
+                                    const int* idx, const fast* wt, const int* cellEdgeAsc, const int* eI, const int* eJ, real beta,
                                     real* out) {
   LOOP(i, N)
   const size_t o = (size_t)l * N + i;
@@ -162,7 +168,7 @@ extern "C" __global__ void tr_stage(int N, int E, const real* M0, const real* ps
 
 // Zalesak ratios, with the antidiffusive fluxes A = H(p2) - upwind(psi) computed on the fly.
 extern "C" __global__ void tr_ratios(int N, int E, const real* psi, const real* td, const real* M1, const real* p2, const real* Fm,
-                                     const int* idx, const real* wt, const int* nbr, const int* cellEdgeAsc, const int* eI,
+                                     const int* idx, const fast* wt, const int* nbr, const int* cellEdgeAsc, const int* eI,
                                      const int* eJ, real beta, real* Rp, real* Rm) {
   LOOP(i, N)
   const real* p = psi + (size_t)l * N;
@@ -193,7 +199,7 @@ extern "C" __global__ void tr_ratios(int N, int E, const real* psi, const real* 
 // The limited update: psi_out = (td M1 - sum  c A out + sum  c A in) / M1. Writes a separate array (neighbors still
 // read psi).
 extern "C" __global__ void tr_apply(int N, int E, const real* psi, const real* td, const real* M1, const real* p2, const real* Fm,
-                                    const real* Rp, const real* Rm, const int* idx, const real* wt, const int* cellEdgeAsc,
+                                    const real* Rp, const real* Rm, const int* idx, const fast* wt, const int* cellEdgeAsc,
                                     const int* eI, const int* eJ, real beta, real* psi_out) {
   LOOP(i, N)
   const size_t o = (size_t)l * N + i;

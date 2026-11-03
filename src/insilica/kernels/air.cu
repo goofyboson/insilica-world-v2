@@ -21,6 +21,21 @@ typedef REAL real;
 #define LMAX 8
 #endif
 #define PI_ 3.14159265358979323846
+// Mixed precision (SPEC #106): these transcendentals in 32-bit, all sums, the state and the energy ledger in 64-bit.
+// Kept 64-bit: layer_exner (its p x - pt xt cancels for thin layers) and the edge shape's expm1/log1p (arguments to ±700).
+#if defined(MIXED)
+#define FEXP(x) ((real)expf((float)(x)))
+#define FPOW(x, y) ((real)powf((float)(x), (float)(y)))
+#define FLOG(x) ((real)logf((float)(x)))
+#define OMEXP(x) ((real)-expm1f(-(float)(x)))                  // 1 - e^-x, accurate for small x
+typedef float fast;                                              // the capacity, condensation and spread arithmetic
+#else
+#define FEXP(x) exp(x)
+#define FPOW(x, y) pow(x, y)
+#define FLOG(x) log(x)
+#define OMEXP(x) (1 - exp(-(x)))
+typedef real fast;
+#endif
 
 struct Par {
   real S0, asw, tau0, mu_ref, eps_s, h_sens, u0, alb, c_slab, mu_bl, theta_star, floor_, sigma, grav, cp, kappa, p0;
@@ -65,25 +80,25 @@ __device__ void node_exner(int L, const real* mu, const Par& P, real* gx) {
     const real pb = pt + P.grav * mu[k];
     for (int j = 0; j < 4; j++) {
       const real p = (real)0.5 * (pt + pb) + (real)0.5 * (pb - pt) * GX[j];
-      gx[4 * k + j] = pow(p / P.p0, P.kappa);
+      gx[4 * k + j] = FPOW(p / P.p0, P.kappa);
     }
   }
 }
 
 // Saturation specific humidity (v1's qsat: Tetens over water), at temperature T (K) and pressure p (Pa).
-__device__ __forceinline__ real qsat(real T, real p) {
-  return 0.622 * 611.0 * exp(17.27 * (T - 273.15) / (T - 35.85)) / p;
+__device__ __forceinline__ fast qsat(fast T, fast p) {
+  return (fast)0.622 * (fast)611.0 * (fast)FEXP((fast)17.27 * (T - (fast)273.15) / (T - (fast)35.85)) / p;
 }
 
 // The pressure whose Exner function is pib (a layer's representative pressure).
-__device__ __forceinline__ real p_of(real pib, const Par& P) { return pow(pib / P.cp, 1 / P.kappa) * P.p0; }
+__device__ __forceinline__ real p_of(real pib, const Par& P) { return FPOW(pib / P.cp, 1 / P.kappa) * P.p0; }
 
 // Saturation adjustment of air at Exner pib and pressure p in one Newton step: vapor beyond q_sat condenses and its
 // latent heat warms the air. Updates theta and q; returns the condensate (kg/kg).
 __device__ real condense(real& th, real& q, real pib, real p, const Par& P) {
-  const real T = pib * th / P.cp, qs = qsat(T, p);
+  const fast T = (fast)pib * (fast)th / (fast)P.cp, qs = qsat(T, (fast)p);
   if (!(q > qs)) return 0;
-  const real dq = (q - qs) / (1 + P.Lv * P.Lv * qs / (P.cp * P.Rv * T * T));
+  const real dq = (fast)(q - qs) / ((fast)1 + (fast)P.Lv * (fast)P.Lv * qs / ((fast)P.cp * (fast)P.Rv * T * T));
   q -= dq;
   th += P.Lv * dq / pib;
   return dq;
@@ -92,6 +107,49 @@ __device__ real condense(real& th, real& q, real pib, real p, const Par& P) {
 // The theta* of interface j (between layers j and j+1).
 __device__ __forceinline__ real tstar(int j, int L, const Par& P) { return j == L - 2 ? P.theta_star : P.ths[j]; }
 
+#if defined(MIXED)
+// Mixed precision: the same r(s) = x solved in 32-bit on |s| <= 30, its series near 0 (no cancellation), and beyond 30 the
+// exact asymptotes (e^-30 ~ 1e-13 left out): r = 1 - 1/s for s > 30, r = -1/s for s < -30.
+__device__ real edge_shape(real a, real b, real m) {
+  real xd = (m - a) / (b - a);
+  if (xd < (real)1e-6) xd = (real)1e-6;
+  if (xd > 1 - (real)1e-6) xd = 1 - (real)1e-6;
+  if (xd > 1 - (real)1 / 30) return 1 / (1 - xd);
+  if (xd < (real)1 / 30) return -1 / xd;
+  const float x = (float)xd;
+  float lo = -30.f, hi = 30.f, t = 12.f * (x - 0.5f);
+  for (int it = 0; it < 30; it++) {
+    float r, dr;
+    if (fabsf(t) < 0.5f) {
+      const float t2 = t * t;
+      r = 0.5f + t * (1.f / 12 + t2 * (-1.f / 720 + t2 * (1.f / 30240 - t2 / 1209600.f)));
+      dr = 1.f / 12 + t2 * (-1.f / 240 + t2 * (1.f / 6048 - t2 / 172800.f));
+    } else {
+      const float e1 = expm1f(t);
+      r = 1.f - 1.f / t + 1.f / e1;
+      dr = 1.f / (t * t) - (e1 + 1.f) / (e1 * e1);
+    }
+    if (r < x) lo = t; else hi = t;
+    float tn = t - (r - x) / dr;
+    if (r == x) break;
+    if (!(tn >= lo && tn <= hi) || !(dr > 0)) tn = 0.5f * (lo + hi);
+    if (fabsf(tn - t) < 1e-6f * (1.f + fabsf(t))) { t = tn; break; }
+    t = tn;
+  }
+  return t;
+}
+// The mass share m's theta in a layer of shape s, as a fraction of the way between the edges: ln(1 + m (e^s - 1)) / s.
+__device__ __forceinline__ fast spread_frac(fast m, fast s) {
+  if (fabsf(s) < 1e-6f) return m;
+  if (s > 30.f) return 1.f + logf(m) / s;
+  if (s < -30.f) return log1pf(-m) / s;
+  return log1pf(m * expm1f(s)) / s;
+}
+#define SPREAD(m, s, es) spread_frac((fast)(m), (fast)(s))
+#define ES(s) ((real)0)
+#else
+#define SPREAD(m, s, es) (fabs(s) < (real)1e-6 ? (m) : log1p((m) * (es)) / (s))
+#define ES(s) expm1(s)
 __device__ real edge_shape(real a, real b, real m) {
   const real W = b - a;
   real x = (m - a) / W;
@@ -116,6 +174,7 @@ __device__ real edge_shape(real a, real b, real m) {
   }
   return s;
 }
+#endif
 
 // Saturation adjustment of a layer of uniform theta spanning pressures [pt, pb] (Pa), against the layer's capacity: q_sat
 // averaged over its pressure range (4-point Gauss-Legendre; temperatures below 160 K hold no vapor worth counting), so
@@ -124,17 +183,17 @@ __device__ real edge_shape(real a, real b, real m) {
 __device__ real condense_layer(real& th, real& q, real pib, real pt, real pb, const Par& P) {
   const real x[4] = {-0.8611363115940526, -0.3399810435848563, 0.3399810435848563, 0.8611363115940526};
   const real wq[4] = {0.3478548451374538, 0.6521451548625461, 0.6521451548625461, 0.3478548451374538};
-  real qs = 0, dqs = 0;
+  fast qs = 0, dqs = 0;
   for (int j = 0; j < 4; j++) {
     const real p = (real)0.5 * (pt + pb) + (real)0.5 * (pb - pt) * x[j];
-    const real ex = pow(p / P.p0, P.kappa), T = th * ex;
+    const fast ex = FPOW(p / P.p0, P.kappa), T = (fast)th * ex;
     if (T < 160) continue;
-    const real s = qsat(T, p);
-    qs += (real)0.5 * wq[j] * s;
-    dqs += (real)0.5 * wq[j] * s * P.Lv / (P.Rv * T * T) * ex;
+    const fast s = qsat(T, (fast)p);
+    qs += (fast)0.5 * (fast)wq[j] * s;
+    dqs += (fast)0.5 * (fast)wq[j] * s * (fast)P.Lv / ((fast)P.Rv * T * T) * ex;
   }
   if (!(q > qs)) return 0;
-  const real dq = (q - qs) / (1 + P.Lv / pib * dqs);
+  const real dq = (fast)(q - qs) / ((fast)1 + (fast)P.Lv / (fast)pib * dqs);
   q -= dq;
   th += P.Lv * dq / pib;
   return dq;
@@ -146,18 +205,18 @@ __device__ real condense_spread(real a, real b, real& th, real& q, real pib, rea
   const real x[4] = {-0.8611363115940526, -0.3399810435848563, 0.3399810435848563, 0.8611363115940526};
   const real wq[4] = {0.3478548451374538, 0.6521451548625461, 0.6521451548625461, 0.3478548451374538};
   const real s = edge_shape(a, b, th);
-  real qs = 0, dqs = 0;
+  fast qs = 0, dqs = 0;
   for (int j = 0; j < 4; j++) {
     const real p = (real)0.5 * (pt + pb) + (real)0.5 * (pb - pt) * x[j], m = (pb - p) / (pb - pt);
-    const real tn = a + (b - a) * (fabs(s) < (real)1e-6 ? m : log1p(m * expm1(s)) / s);
-    const real ex = pow(p / P.p0, P.kappa), T = tn * ex;
+    const real tn = a + (b - a) * SPREAD(m, s, ES(s));
+    const fast ex = FPOW(p / P.p0, P.kappa), T = (fast)tn * ex;
     if (T < 160) continue;
-    const real v = qsat(T, p);
-    qs += (real)0.5 * wq[j] * v;
-    dqs += (real)0.5 * wq[j] * v * P.Lv / (P.Rv * T * T) * ex;
+    const fast v = qsat(T, (fast)p);
+    qs += (fast)0.5 * (fast)wq[j] * v;
+    dqs += (fast)0.5 * (fast)wq[j] * v * (fast)P.Lv / ((fast)P.Rv * T * T) * ex;
   }
   if (!(q > qs)) return 0;
-  const real dq = (q - qs) / (1 + P.Lv / pib * dqs);
+  const real dq = (fast)(q - qs) / ((fast)1 + (fast)P.Lv / (fast)pib * dqs);
   q -= dq;
   th += P.Lv * dq / pib;
   return dq;
@@ -172,7 +231,7 @@ __device__ real condense_k(int k, const real* mu, real* th, real* q, const real*
     if (P.sat_prof > 0 && k > 0 && k < P.Lm1 && th[k] < tstar(k - 1, P.Lm1 + 1, P))
       return condense_spread(tstar(k, P.Lm1 + 1, P), tstar(k - 1, P.Lm1 + 1, P), th[k], q[k], pib[k], pt, pt + P.grav * mu[k], P);
     // the bottom layer is mixed, its vapor even through its depth: clouds at its top aren't rain; it rains by itself only when saturated at its base, and plumes take the rest (decision #93)
-    if (P.sat_base > 0 && k == 2) { const real pb = pt + P.grav * mu[k]; return condense(th[k], q[k], P.cp * pow(pb / P.p0, P.kappa), pb, P); }
+    if (P.sat_base > 0 && k == 2) { const real pb = pt + P.grav * mu[k]; return condense(th[k], q[k], P.cp * FPOW(pb / P.p0, P.kappa), pb, P); }
     return condense_layer(th[k], q[k], pib[k], pt, pt + P.grav * mu[k], P);
   }
   return condense(th[k], q[k], pib[k], p_of(pib[k], P), P);
@@ -188,17 +247,18 @@ __device__ void layer_cap(int k, const real* mu, real th, const Par& P, real& qs
   const real pb = pt + P.grav * mu[k];
   const bool spread = P.sat_prof > 0 && k > 0 && k < P.Lm1 && th < tstar(k - 1, P.Lm1 + 1, P);
   const real ea = spread ? tstar(k, P.Lm1 + 1, P) : (real)0, eb = spread ? tstar(k - 1, P.Lm1 + 1, P) : (real)0;
-  const real s = spread ? edge_shape(ea, eb, th) : (real)0, es = spread ? expm1(s) : (real)0;
-  qs = 0; dqs = 0;
+  const real s = spread ? edge_shape(ea, eb, th) : (real)0, es = spread ? ES(s) : (real)0;
+  fast qf = 0, dqf = 0;
   for (int j = 0; j < 4; j++) {
     const real p = (real)0.5 * (pt + pb) + (real)0.5 * (pb - pt) * x[j], m = (pb - p) / (pb - pt);
-    const real tn = !spread ? th : ea + (eb - ea) * (fabs(s) < (real)1e-6 ? m : log1p(m * es) / s);
-    const real ex = gx ? gx[4 * k + j] : pow(p / P.p0, P.kappa), T = tn * ex;
+    const real tn = !spread ? th : ea + (eb - ea) * SPREAD(m, s, es);
+    const fast ex = gx ? (fast)gx[4 * k + j] : (fast)FPOW(p / P.p0, P.kappa), T = (fast)tn * ex;
     if (T < 160) continue;
-    const real v = qsat(T, p);
-    qs += (real)0.5 * wq[j] * v;
-    dqs += (real)0.5 * wq[j] * v * P.Lv / (P.Rv * T * T) * ex;
+    const fast v = qsat(T, (fast)p);
+    qf += (fast)0.5 * (fast)wq[j] * v;
+    dqf += (fast)0.5 * (fast)wq[j] * v * (fast)P.Lv / ((fast)P.Rv * T * T) * ex;
   }
+  qs = qf; dqs = dqf;
 }
 
 // The cell's water spread evenly over +-b about its mean qt, b = (1 - rh_crit) qs (Sundqvist-style statistics): its
@@ -227,7 +287,7 @@ __device__ real cloud_adjust(int k, const real* mu, real* th, real* q, real* cw,
   layer_cap(k, mu, th[k], P, qs, dqs, gx);
   if (!(qs > 0)) return 0;
   cloud_pdf(q[k] + cw[k], qs, P, l, f);
-  const real dl = l > cw[k] ? (l - cw[k]) / (1 + P.Lv / pib[k] * dqs * f) : -(cw[k] - l) * (1 - exp(-dt / P.tau_erode));
+  const real dl = l > cw[k] ? (l - cw[k]) / (1 + P.Lv / pib[k] * dqs * f) : -(cw[k] - l) * OMEXP(dt / P.tau_erode);
   cw[k] += dl; q[k] -= dl;
   th[k] += P.Lv * dl / pib[k];
   return dl;
@@ -236,7 +296,7 @@ __device__ real cloud_adjust(int k, const real* mu, real* th, real* q, real* cw,
 // A parcel (theta, q) lifted to pressure p (Pa): its theta and vapor there after condensing what it can't hold.
 __device__ real parcel(real th, real q, real p, const Par& P, real& thp, real& qp) {  // th, q by value: thp, qp may be the same air
   thp = th; qp = q;
-  const real ex = pow(p / P.p0, P.kappa);
+  const real ex = FPOW(p / P.p0, P.kappa);
   condense(thp, qp, P.cp * ex, p, P);
   return ex;                                     // (p / p0)^kappa, for the caller
 }
@@ -278,6 +338,10 @@ __device__ void move_mass(int L, const Par& P, real* mu, real* th, real* q, real
 __device__ void edge_density(real a, real b, real m, real& fa, real& fb) {
   const real W = b - a, s = edge_shape(a, b, m);
   if (fabs(s) < (real)1e-6) { fa = (1 - s / 2) / W; fb = (1 + s / 2) / W; return; }
+#if defined(MIXED)
+  if (s > 30) { fa = 0; fb = s / W; return; }                    // (e^-s left out, as in edge_shape)
+  if (s < -30) { fa = -s / W; fb = 0; return; }
+#endif
   const real e1 = expm1(s);
   fa = s / e1 / W;
   fb = s * (e1 + 1) / e1 / W;
@@ -299,13 +363,13 @@ __device__ void plume_ascent(int bot, const real* mu, const real* th, real th0, 
   for (int k = 0; k <= bot; k++) { qa[k] = 0; if (qx) qx[k] = 0; }
   for (int k = bot - 1; k >= 0; k--) {
     const real a = tstar(k, L, P), b = k > 0 ? tstar(k - 1, L, P) : (real)0, s = k > 0 ? edge_shape(a, b, th[k]) : (real)0;
-    const real es = k > 0 ? expm1(s) : (real)0;
-    const real f = q && P.plume_ent > 0 ? 1 - exp(-P.plume_ent * P.grav * mu[k] / M) : (real)0;   // the mixing per sub-level
+    const real es = k > 0 ? ES(s) : (real)0;
+    const real f = q && P.plume_ent > 0 ? OMEXP(P.plume_ent * P.grav * mu[k] / M) : (real)0;   // the mixing per sub-level
     bool last = false;
     for (int j = 0; j < M; j++) {
       const real x = (j + (real)0.5) / M, pl = pt - x * P.grav * mu[k];
       const real ex = parcel(tp, qp, pl, P, tp, qp);
-      const real te = k == 0 ? th[0] : a + (b - a) * (fabs(s) < (real)1e-6 ? x : log1p(x * es) / s);   // the top layer has no upper edge: its mean
+      const real te = k == 0 ? th[0] : a + (b - a) * SPREAD(x, s, es);   // the top layer has no upper edge: its mean
       // it mixes with the air it rises through, an equal mass going each way (decision #103): dry surroundings cool and dry it, so it stops sooner
       if (q && P.plume_ent > 0) {
         qa[k] += f * (qp - q[k]);
@@ -343,7 +407,7 @@ __device__ real storm_flashes(real mflux, const real* lt, const Par& P) {
   const real qi = lt[0], w = (real)0.5 * sqrt(2 * fmax((real)0, lt[3]));
   if (!(mflux > 0) || !(qi > 0) || !(w > P.graupel_v)) return 0;
   const real rho = lt[1] / (287.0 * P.Tf), phi = rho * w * P.storm_area, lift = 1 - P.graupel_v * P.graupel_v / (w * w);
-  const real H = 287.0 * (P.Tf - 20) / P.grav * log(lt[1] / lt[2]);
+  const real H = 287.0 * (P.Tf - 20) / P.grav * FLOG(lt[1] / lt[2]);
   const real up = phi * qi * lift, fnp = up * P.ice_small, fp = up * (1 - P.ice_small) * H / w * P.graupel_v;
   return mflux / phi * (real)9.0e-15 * fp * fnp / 60;       // flashes/s/m^2
 }
@@ -476,7 +540,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   if (elev && P.theta_rise > 0 && elev[i] > 0) P.theta_star += P.theta_rise * elev[i];
   const real ts_base = P.theta_star;
   P.Lm1 = L - 1;
-  P.bl_cap = 1 - exp(-dt / 86400.0);
+  P.bl_cap = OMEXP(dt / 86400.0);
   const bool moist = P.moist > 0;
   const bool cloudy = moist && P.cloud > 0 && cloudw;
   real mu[LMAX], th[LMAX], q[LMAX], pb[LMAX], pib[LMAX], Q[LMAX], T[LMAX], eps[LMAX];
@@ -509,7 +573,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
     for (int k = 0; k < L; k++) {
       // a middle layer's clouds, and the plumes' outflow, sit high in it: their phase by its upper part
       const real pc = k == bot ? (real)0.5 * (pb[k] + (k ? pb[k - 1] : (real)0)) : (k ? pb[k - 1] : (real)0) + (real)0.25 * (pb[k] - (k ? pb[k - 1] : (real)0));
-      liq[k] = fmax((real)0, fmin((real)1, (th[k] * pow(pc / P.p0, P.kappa) - P.Tf + 20) / 20));
+      liq[k] = fmax((real)0, fmin((real)1, (th[k] * FPOW(pc / P.p0, P.kappa) - P.Tf + 20) / 20));
       fc[k] = cloud_cover(k, mu, th, q, cl, liq[k], P, gx);
       cwp[k] = fc[k] > (real)1e-6 ? mu[k] * cl[k] / fc[k] : (real)0;
     }
@@ -603,16 +667,16 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
     const real tv = P.tau0 * (1 - P.tau_lin) * sqrt(W / P.lw_w0);
     for (int k = 0; k < L; k++) {
       const real sb = pb[k] / pb[bot], st = k ? pb[k - 1] / pb[bot] : (real)0;
-      eps[k] = 1 - exp(-(P.tau0 * P.tau_lin * (sb - st) + (W > 0 ? tv * mu[k] * (q[k] > 0 ? q[k] : (real)0) / W : (real)0)));
+      eps[k] = OMEXP((P.tau0 * P.tau_lin * (sb - st) + (W > 0 ? tv * mu[k] * (q[k] > 0 ? q[k] : (real)0) / W : (real)0)));
     }
   } else
-  for (int k = 0; k < L; k++) eps[k] = 1 - exp(-(tau_p(pb[k], pb[bot], P) - tau_p(k ? pb[k - 1] : (real)0, pb[bot], P)));
+  for (int k = 0; k < L; k++) eps[k] = OMEXP((tau_p(pb[k], pb[bot], P) - tau_p(k ? pb[k - 1] : (real)0, pb[bot], P)));
   // clouds absorb and emit by their water path, on top of the gas
   if (cloudy)
     for (int k = 0; k < L; k++) {
       eps0[k] = eps[k];
       const real kl = liq[k] * P.k_lw_liq + (1 - liq[k]) * P.k_lw_ice;
-      eps[k] = 1 - (1 - eps[k]) * (1 - fc[k] * (1 - exp(-kl * cwp[k])));
+      eps[k] = 1 - (1 - eps[k]) * (1 - fc[k] * OMEXP(kl * cwp[k]));
     }
   real ldown = 0;
   for (int k = 0; k < L; k++) {
@@ -741,8 +805,8 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
       real pt_ = 0;
       for (int j = 0; j < k; j++) pt_ += P.grav * mu[j];
       const real pm = pt_ + (real)0.5 * P.grav * mu[k], Tk = pib[k] * th[k] / P.cp, depth = mu[k] / (pm / (287.0 * Tk));
-      const real rate = liq[k] * P.c_auto * (1 - exp(-r * r)) + (1 - liq[k]) * P.v_ice / depth;
-      const real loss = cl[k] * (1 - exp(-rate * dt));
+      const real rate = liq[k] * P.c_auto * OMEXP(r * r) + (1 - liq[k]) * P.v_ice / depth;
+      const real loss = cl[k] * OMEXP(rate * dt);
       cl[k] -= loss;
       Fr += mu[k] * loss / dt;
       real ev = 0;
@@ -814,7 +878,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
       for (int k = 0; k <= bot; k++) xs += qx[k];
       if (kd >= 0 && A > 0) {
         const real rise = thp - tstar(bot - 1, L, P);
-        mc = fmin(A / (rise > 1 ? rise : (real)1), mu[bot] - P.floor_) * (1 - exp(-dt / P.tau_conv));
+        mc = fmin(A / (rise > 1 ? rise : (real)1), mu[bot] - P.floor_) * OMEXP(dt / P.tau_conv);
         if (mc > 0) {
           // the plume keeps l_det of its condensate and leaves it as cloud; the rest rains inside it
           const real cond = fmax((real)0, q0 - qc - xs), det = cloudy ? fmin(cond, P.l_det) : (real)0;
@@ -846,7 +910,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
       const real slope = (thp - thp2) / dp;                     // > 0: the buoyancy falls as the interface lowers
       const real maxup = mu[bot] - P.floor_;
       const real want = slope > 0 ? d / slope / P.grav : maxup;
-      mc = fmin(want, maxup) * (1 - exp(-dt / P.tau_conv));
+      mc = fmin(want, maxup) * OMEXP(dt / P.tau_conv);
       if (mc > 0) {
         int kd = bot - 1;                                       // the layer it detrains into
         real pj = pi_;

@@ -37,11 +37,11 @@ class Transport:
         if order == 1:
             cp.copyto(psi, self.td)
             return psi
-        k['tr_stage'](*cg, (i32(g.N), i32(g.E), M0, psi, psi, R(1 / 3), Fm, g.d2idx, g.d2wt, g.cellEdgeAsc, g.eI, g.eJ, R(self.beta), self.p1))
-        k['tr_stage'](*cg, (i32(g.N), i32(g.E), M0, psi, self.p1, R(1 / 2), Fm, g.d2idx, g.d2wt, g.cellEdgeAsc, g.eI, g.eJ, R(self.beta), self.p2))
-        k['tr_ratios'](*cg, (i32(g.N), i32(g.E), psi, self.td, M1, self.p2, Fm, g.d2idx, g.d2wt, g.nbr, g.cellEdgeAsc, g.eI, g.eJ,
+        k['tr_stage'](*cg, (i32(g.N), i32(g.E), M0, psi, psi, R(1 / 3), Fm, g.d2idx, g.d2wt_tr, g.cellEdgeAsc, g.eI, g.eJ, R(self.beta), self.p1))
+        k['tr_stage'](*cg, (i32(g.N), i32(g.E), M0, psi, self.p1, R(1 / 2), Fm, g.d2idx, g.d2wt_tr, g.cellEdgeAsc, g.eI, g.eJ, R(self.beta), self.p2))
+        k['tr_ratios'](*cg, (i32(g.N), i32(g.E), psi, self.td, M1, self.p2, Fm, g.d2idx, g.d2wt_tr, g.nbr, g.cellEdgeAsc, g.eI, g.eJ,
                              R(self.beta), self.Rp, self.Rm))
-        k['tr_apply'](*cg, (i32(g.N), i32(g.E), psi, self.td, M1, self.p2, Fm, self.Rp, self.Rm, g.d2idx, g.d2wt, g.cellEdgeAsc,
+        k['tr_apply'](*cg, (i32(g.N), i32(g.E), psi, self.td, M1, self.p2, Fm, self.Rp, self.Rm, g.d2idx, g.d2wt_tr, g.cellEdgeAsc,
                             g.eI, g.eJ, R(self.beta), self.out))
         cp.copyto(psi, self.out)
         return psi

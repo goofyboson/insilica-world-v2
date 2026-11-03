@@ -95,7 +95,31 @@ and do the arithmetic in 32-bit, then measure again against these numbers.
 | Date | Change | Commit | n = 6 per step | ×baseline | Identical? |
 |---|---|---|---|---|---|
 | 2026-11-02 | Baseline | 19ee5b0 | 8.89 ms | 1.00 | — |
-| 2026-11-03 | Lever 1: column computed once where it repeated, compiled for its layer count (`air_column` 3.28 → 2.50 ms) | (this) | 8.19 ms | 1.09 | yes: 8 presets |
+| 2026-11-03 | Lever 1: column computed once where it repeated, compiled for its layer count (`air_column` 3.28 → 2.50 ms) | 24afdb8 | 8.19 ms | 1.09 | yes: 8 presets |
+| 2026-11-03 | Mixed precision (SPEC #106): column transcendentals and capacity in 32-bit (2.50 → 1.08 ms), transport stencil in 32-bit (2.30 → 1.69 ms) | (this) | 6.09 ms | 1.46 | no: measured below; 64-bit reference still identical |
+
+### Mixed precision (2026-11-03, SPEC #106)
+
+`INSILICA_PRECISION` = `mixed` (the default) or `double` (the 64-bit reference, bit-identical to before: 8 presets).
+The state, every sum and the energy and water ledgers stay 64-bit. 32-bit: the column's `exp`, `pow`, `log` (`1 − e^−x` as
+`−expm1f(−x)`, accurate for small x), its capacity and condensation arithmetic, the edge-shape solve (32-bit Newton on
+|s| ≤ 30, its series near 0, the exact asymptotes beyond), and the transport stencil's weights and curvature sums. Kept 64-bit
+after measuring or on reasoning: `layer_exner` (its p x − pt xt cancels for thin layers), pressure gradients, and the PV flux
+sum (tried: 0.79 → 0.77 ms, memory-bound, reverted).
+
+| `earth`, per step | n = 4 | n = 5 | n = 6 |
+|---|---|---|---|
+| 64-bit, after lever 1 | 1.95 ms | 2.45 ms | 8.19 ms |
+| Mixed | 1.32 ms (3,750 model years per day) | 1.87 ms (1,319) | 6.09 ms (203) |
+
+Budgets (`earth` n = 4, 30 days, as for the 32-bit trial; 64-bit → mixed): air water worst step 3.8e-16 → 5.1e-16; land water
+over the run −2.0e-15 → −2.1e-15; energy worst step 1.0e-10 → 1.0e-10; energy change − TOA +0.103 → +0.104 W/m² (the air
+core's #81 in both). Plain 32-bit gave 6.4e-9, −2.7e-6 and −0.77 W/m². CONSERVE (n = 4 and 5, its limits unchanged): passed.
+
+Climate, 16 years (64-bit → mixed): Ts 289.15 → 289.14 K, TOA +4.76 → +4.68 W/m², rain 2.88 → 2.89 mm/day (convective 49 →
+49%), vapor 34.4 → 34.4 kg/m², cover 58 → 58%, cloud effect on sunlight −43.1 → −42.9 and longwave +28.8 → +28.5 W/m², albedo
+0.230 → 0.229, rain by band 0–10° 4.88 → 4.90, 15–30° 1.91 → 1.87, 40–60° 3.02 → 3.03, layer masses 156/588/232 → 156/587/233
+hPa, fastest wind 77 → 73 m/s; Amazon 0.36 → 0.25, E USA 4.63 → 4.78 mm/day (run-to-run noise in small regions).
 
 ### Lever 1 notes (2026-11-03)
 

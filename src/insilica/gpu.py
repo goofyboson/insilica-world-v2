@@ -13,6 +13,15 @@ NULL = np.uint64(0)          # a null device pointer as a kernel argument
 SUM_THREADS, SUM_CHUNK = 256, 8
 # --fmad=false: no fused multiply-adds, so every product is rounded as in v1's JavaScript and as NumPy does.
 NVRTC_OPTIONS = ('--std=c++17', '--fmad=false')
+# Precision (SPEC #106): 'mixed' keeps the state and ledgers 64-bit and does chosen arithmetic in 32-bit (kernels see
+# -DMIXED); 'double' is the 64-bit reference. Set before building a world (set_precision, or INSILICA_PRECISION).
+PRECISION = __import__('os').environ.get('INSILICA_PRECISION', 'mixed')
+
+
+def set_precision(p):
+    global PRECISION
+    assert p in ('mixed', 'double')
+    PRECISION = p
 
 
 def kernel_source(name):
@@ -20,8 +29,8 @@ def kernel_source(name):
 
 
 def source_hash():
-    """Hash of all kernel and Python engine sources (keys the spin-up cache)."""
-    h = hashlib.sha1()
+    """Hash of all kernel and Python engine sources and the precision (keys the spin-up cache)."""
+    h = hashlib.sha1(PRECISION.encode())
     root = Path(__file__).resolve().parent
     for f in sorted(list(root.rglob('*.py')) + list(KERNEL_DIR.glob('*.cu'))):
         h.update(f.relative_to(root).as_posix().encode())
@@ -52,6 +61,7 @@ class DeviceGrid:
         self.n, self.N, self.E, self.NV = grid.n, grid.N, grid.E, grid.NV
         self.dtype = np.dtype(dtype)
         self.real = 'double' if self.dtype == np.float64 else 'float'
+        self.mixed = PRECISION == 'mixed' and self.real == 'double'
         for k in self.INT32:
             setattr(self, k, cp.asarray(np.ascontiguousarray(getattr(grid, k), dtype=np.int32)))
         for k in self.INT8:
@@ -61,9 +71,10 @@ class DeviceGrid:
         idx, wt = d2_stencil(grid)
         self.d2idx = cp.asarray(idx)
         self.d2wt = cp.asarray(wt.astype(self.dtype))
+        self.d2wt_tr = cp.asarray(wt.astype(np.float32)) if self.mixed else self.d2wt   # transport's (32-bit when mixed)
 
     def kernel(self, name, file='trisk.cu', defines=()):
-        return module(file, self.real, tuple(defines)).get_function(name)
+        return module(file, self.real, tuple(defines) + (('-DMIXED',) if self.mixed else ())).get_function(name)
 
 
 def d2_stencil(g):

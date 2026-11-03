@@ -98,7 +98,7 @@ and do the arithmetic in 32-bit, then measure again against these numbers.
 | 2026-11-03 | Lever 1: column computed once where it repeated, compiled for its layer count (`air_column` 3.28 → 2.50 ms) | 24afdb8 | 8.19 ms | 1.09 | yes: 8 presets |
 | 2026-11-03 | Mixed precision (SPEC #106): column transcendentals and capacity in 32-bit (2.50 → 1.08 ms), transport stencil in 32-bit (2.30 → 1.69 ms) | f141497 | 6.09 ms | 1.46 | no: measured below; 64-bit reference still identical |
 | 2026-11-03 | Lever 2: every tracer in the same launches (rows tracer × layer), each 3rd-order edge flux once per edge (was 8 evaluations per edge, now 3) (transport 1.69 → 0.95 ms) | 7b5ca7d | 5.37 ms | 1.66 | yes: 8 presets, both precisions |
-| 2026-11-03 | Lever 3: the fast sub-step's mass and linear-potential passes in one kernel (`af_mu` + `af_phi` → `af_muphi`, 8 launches fewer per step) | (this) | 5.28 ms | 1.68 | yes: 8 presets, both precisions |
+| 2026-11-03 | Lever 3: the fast sub-step's mass and linear-potential passes in one kernel (`af_mu` + `af_phi` → `af_muphi`, 8 launches fewer per step) | 65f5a32 | 5.28 ms | 1.68 | yes: 8 presets, both precisions |
 
 ### Mixed precision (2026-11-03, SPEC #106)
 
@@ -166,3 +166,35 @@ queues every member's tick before waiting. Members are identical to single runs 
 ×2.9 at 8 or more members, short of the ×10 target: the target assumed one n = 4 world left the GPU about 90% idle, but
 it leaves it about two-thirds idle. At 8 members the GPU is full: 0.38 ms per member is the same work per cell as n = 6
 (5.28 ms for 16× the cells). Capturing a day of ticks per graph (fewer host launches) changed nothing and was removed.
+
+### Lever 5: deep-ocean spin-up by asynchronous coupling (2026-11-03, SPEC #107)
+
+`insilica.spinup.spin_up(world, cycles, ocean_years)`: each cycle a coupled year with a `Recorder`, then `ocean_years` of the
+ocean alone (`OceanOnly`) on that year's forcing, one slot a day, with the surface heat's feedback λ = 10 W/m²/K and the
+year's net fresh water balanced. Normal runs are unchanged (state hashes identical): the recording is off unless attached.
+
+A replayed year against the coupled year it was recorded from (`earth` n = 4, after 1 year):
+
+| | Coupled | Ocean alone, 24 slots | Ocean alone, daily slots |
+|---|---|---|---|
+| Mixed layer depth | 75.6 m | 108.1 m | 80.8 m |
+| Heat gained over the sea | +8.59 W/m² | +4.55 W/m² | +7.97 W/m² |
+| SST against coupled | — | +0.24 K mean, 0.65 K rms | +0.02 K mean, 0.24 K rms |
+| Thermocline change | +0.179 K | +0.093 K | +0.169 K |
+
+Spin-up from the `earth` start, n = 4 (layer means: mixed layer / thermocline):
+
+| Run | Year 50 | Cost per model year (alone on the GPU) |
+|---|---|---|
+| Plain, coupled | 19.83 / 17.06 °C, S 34.75 / 34.90 | 20 s |
+| 1 + 9, λ = 40 (fresh water balanced) | 18.61 / 16.24 °C | 5.4 s (×3.7) |
+| 1 + 4, λ = 40 | 19.19 / 16.65 °C | 7.0 s (×2.8) |
+| 1 + 9, λ = 10 | 19.29 / 16.81 °C, S 34.86 / 34.98 | 5.4 s (×3.7) |
+
+With λ = 10 the thermocline is 0.25 K behind plain's +2.9 K at year 50: about ×3.4 toward equilibrium. Without the
+fresh-water balance (λ = 40, 100 years) the thermocline freshened to 34.57 psu against plain's 34.89.
+
+**For V2-8:** the ocean alone, `earth` sea floor and land, 3 layers: n = 6 4.6 ms per 1-h step (2,167 model years per day),
+n = 8 147.5 ms (67 model years per day; 102 fast sub-steps an hour against 24). The 1,000-year target at V2-8 is met by
+spinning the deep ocean up at n = 6 (asynchronously, about half a day) and moving it to n = 8 for the last decades; the
+remapping is V2-8's work. The n = 8 barotropic sub-steps are the next ocean speed target.

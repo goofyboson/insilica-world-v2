@@ -21,7 +21,7 @@ struct Par {
   real S0, asw, tau0, mu_ref, eps_s, h_sens, u0, alb, c_slab, mu_bl, theta_star, floor_, sigma, grav, cp, kappa, p0;
   real tilt, year_s, day_s, tau_lin, theta_star2;
   real moist, Lv, Lf, Tf, k_evap, tau_conv, alb_ice, rho_ice, ice_cover, k_ice, Rv, sat_layer, sw_tau;
-  real alb_dry, alb_wet, soil_beta, k_inf, pond_cover, alb_snow, alb_ice_melt, alb_snow_melt, alb_glacier, snow_cover, alb_ramp, land_exch, plume_deep, lw_w0, c_dry, c_wet, sat_prof, land_rs, sat_base, bl_bot, cloud, rh_crit, re_liq, re_ice, cloud_g, k_lw_liq, k_lw_ice, c_auto, q_auto, v_ice, l_det, tau_erode, k_revap, mu_cloud, theta_rise, bl_mix, mu_night, bl_ent, bl_cap, bulk_c, bulk_gust, bulk_z, bulk_w;
+  real alb_dry, alb_wet, soil_beta, k_inf, pond_cover, alb_snow, alb_ice_melt, alb_snow_melt, alb_glacier, snow_cover, alb_ramp, land_exch, plume_deep, lw_w0, c_dry, c_wet, sat_prof, land_rs, sat_base, bl_bot, cloud, rh_crit, re_liq, re_ice, cloud_g, k_lw_liq, k_lw_ice, c_auto, q_auto, v_ice, l_det, tau_erode, k_revap, mu_cloud, theta_rise, bl_mix, mu_night, bl_ent, bl_cap, bulk_c, bulk_gust, bulk_z, bulk_w, plume_ent;
   int Lm1;                                         // the column's bottom layer
   real ths[LMAX];                                  // the theta* of the interfaces above the lowest one, from the top (decision #101)
 };
@@ -34,7 +34,7 @@ __device__ Par unpack(const real* a) {
   P.kappa = a[15]; P.p0 = a[16]; P.tilt = a[17]; P.year_s = a[18]; P.day_s = a[19]; P.tau_lin = a[20]; P.theta_star2 = a[21];
   P.moist = a[22]; P.Lv = a[23]; P.Lf = a[24]; P.Tf = a[25]; P.k_evap = a[26]; P.tau_conv = a[27]; P.alb_ice = a[28];
   P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32]; P.sat_layer = a[33]; P.sw_tau = a[34];
-  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; for (int j = 0; j < LMAX; j++) P.ths[j] = a[78 + j];
+  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; P.plume_ent = a[78]; for (int j = 0; j < LMAX; j++) P.ths[j] = a[79 + j];
   return P;
 }
 
@@ -263,12 +263,14 @@ __device__ void edge_density(real a, real b, real m, real& fa, real& fb) {
 // share x above its lower edge a is a + (b - a) ln(1 + x (e^s - 1)) / s). A: the buoyancy summed by mass up to the highest level
 // it beats (K kg/m^2), negative stretches included, the bottom layer's stretch as a triangle up to its buoyancy at the
 // interface. kd, thd, qd: the layer it detrains into and its theta and vapor there.
-__device__ void plume_ascent(int bot, const real* mu, const real* th, real th0, real q0, real pi_, const Par& P, real& A, int& kd, real& thd, real& qd) {
+__device__ void plume_ascent(int bot, const real* mu, const real* th, real th0, real q0, real pi_, const Par& P, real& A, int& kd, real& thd, real& qd, const real* q = 0, real* qx = 0) {
   const int L = bot + 1, M = bot > 2 ? 3 : 8;
   real tp, qp;
   parcel(th0, q0, pi_, P, tp, qp);
   real sum = (real)0.5 * mu[bot] * (tp - tstar(bot - 1, L, P)), pt = pi_;
   A = 0; kd = -1; thd = tp; qd = qp;
+  real qa[LMAX];                                 // what it has given each layer so far by mixing, per kg of plume
+  for (int k = 0; k <= bot; k++) { qa[k] = 0; if (qx) qx[k] = 0; }
   for (int k = bot - 1; k >= 0; k--) {
     const real a = tstar(k, L, P), b = k > 0 ? tstar(k - 1, L, P) : (real)0, s = k > 0 ? edge_shape(a, b, th[k]) : (real)0;
     bool last = false;
@@ -276,9 +278,16 @@ __device__ void plume_ascent(int bot, const real* mu, const real* th, real th0, 
       const real x = (j + (real)0.5) / M;
       parcel(tp, qp, pt - x * P.grav * mu[k], P, tp, qp);
       const real te = k == 0 ? th[0] : a + (b - a) * (fabs(s) < (real)1e-6 ? x : log1p(x * expm1(s)) / s);   // the top layer has no upper edge: its mean
+      // it mixes with the air it rises through, an equal mass going each way (decision #103): dry surroundings cool and dry it, so it stops sooner
+      if (q && P.plume_ent > 0) {
+        const real f = 1 - exp(-P.plume_ent * P.grav * mu[k] / M);
+        qa[k] += f * (qp - q[k]);
+        tp += f * (te - tp);
+        qp += f * (q[k] - qp);
+      }
       sum += mu[k] / M * (tp - te);
       last = tp > te;
-      if (last) { A = sum; kd = k; thd = tp; qd = qp; }
+      if (last) { A = sum; kd = k; thd = tp; qd = qp; if (qx) for (int m = 0; m <= bot; m++) qx[m] = qa[m]; }
     }
     if (!last || k == 0) break;
     pt -= P.grav * mu[k];
@@ -731,16 +740,21 @@ extern "C" __global__ void air_column(int N, int L, const real* par, int mode, c
       // the air it rises through sinks to make room, warming each level by the theta it had below: over the ascent, A falls by
       // m (theta at detrainment - theta*) per mass m moved, so that mass removes the buoyancy; it relaxes over tau_conv
       real A; int kd;
-      plume_ascent(bot, mu, th, th0, q0, pi_, P, A, kd, thp, qc);
+      real qx[LMAX], xs = 0;
+      plume_ascent(bot, mu, th, th0, q0, pi_, P, A, kd, thp, qc, q, qx);
+      for (int k = 0; k <= bot; k++) xs += qx[k];
       if (kd >= 0 && A > 0) {
         const real rise = thp - tstar(bot - 1, L, P);
         mc = fmin(A / (rise > 1 ? rise : (real)1), mu[bot] - P.floor_) * (1 - exp(-dt / P.tau_conv));
         if (mc > 0) {
           // the plume keeps l_det of its condensate and leaves it as cloud; the rest rains inside it
-          const real det = cloudy ? fmin(q0 - qc, P.l_det) : (real)0;
-          R += mc * (q0 - qc - det);
-          Rc = mc * (q0 - qc - det);
-          move_mass(L, P, mu, th, q, pib, bot, kd, mc, th0, thp, q0, qc, cloudy ? cl : (real*)0);
+          const real cond = fmax((real)0, q0 - qc - xs), det = cloudy ? fmin(cond, P.l_det) : (real)0;
+          R += mc * (cond - det);
+          Rc = mc * (cond - det);
+          // (what the mixing took or gave in vapor, and any surplus were it to give more than it condensed; its heat falls to the receiving layer in move_mass)
+          const real qarr = qc + (q0 - qc - xs - cond);
+          for (int k = 0; k < bot; k++) q[k] = fmax((real)0, q[k] + mc * qx[k] / mu[k]);
+          move_mass(L, P, mu, th, q, pib, bot, kd, mc, th0, thp, q0, qarr, cloudy ? cl : (real*)0);
           for (int j = kd; j < bot; j++) wxo[j] += mc;
           cin[kd] += mc;
           if (cloudy) {

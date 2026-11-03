@@ -383,9 +383,9 @@ def earth_bed(g):
     return np.where(land, 4000.0, depth)
 
 
-# Modern Earth's land and sea floor over the coupled ocean.
-PRESETS['earth'] = dict(PRESETS['coupled'], build=earth, land=lambda g: earth_land(g)[0], ocean=dict(surface_drag=SURFACE_DRAG, bed=earth_bed),
-                        air=dict(AIR, physics=dict(AIR3, moist=1.0, k_evap=4.8e-3, theta_rise=5.0e-3)))
+# Modern Earth's land and sea floor over the coupled ocean. Its physics is V2-4c's and V2-4e's (#88, #91, #94, #95), the rest of the worlds still without; land_drag 8 goes with land_exch 2.
+PRESETS['earth'] = dict(PRESETS['coupled'], build=earth, land=lambda g: earth_land(g)[0], ocean=dict(surface_drag=SURFACE_DRAG, bed=earth_bed, land_drag=8.0),
+                        air=dict(AIR, physics=dict(AIR3, moist=1.0, k_evap=4.8e-3, plume_deep=1.0, sat_prof=1.0, bl_bot=0.25, cloud=1.0, tau0=1.3, land_exch=2.0)))
 PRESETS['rce'] = dict(build=aqua_dry, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True, physics=AIR3), dynamics=False)
 
 

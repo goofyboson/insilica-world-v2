@@ -191,7 +191,7 @@ __device__ __forceinline__ float voigt_re(float x, float y)
 
 extern "C" __global__ void lines(int npt, double nu0, double dnu, const int* lo, const int* hi,
                                  const double* nuc, const float* S, const float* gl, const float* gd, const float* pl,
-                                 float cut, double T, float* k)
+                                 float cut, float wsech, double T, float* k)
 {   // k(nu) at one state: sum over lines of S * R(nu)/R(nu_c) * (Voigt(nu - nu_c) - plinth), |nu - nu_c| <= cut.
     // S here is S(T)/R(nu_c), gd the Doppler HWHM / sqrt(ln 2) and gl the Lorentz HWHM.
     __shared__ float sx[256], ss[256], sl[256], sd[256], sp[256];
@@ -211,7 +211,9 @@ extern "C" __global__ void lines(int npt, double nu0, double dnu, const int* lo,
             float dx = xi - sx[m];
             if (fabsf(dx) <= cut) {
                 float rd = 1.f / sd[m];
-                acc += ss[m] * (0.5641896f * rd * voigt_re(dx * rd, sl[m] * rd) - sp[m]);
+                float f = ss[m] * (0.5641896f * rd * voigt_re(dx * rd, sl[m] * rd) - sp[m]);
+                if (wsech > 0.f) { float c = 1.f / coshf(dx / wsech); f *= c * c; }   // Wijngaarden & Happer's wing factor
+                acc += f;
             }
         }
         __syncthreads();
@@ -230,9 +232,12 @@ def grid(numin, numax, dnu):
     return numin, dnu, n
 
 
-def absorption(L, T, p, vmr, nu0, dnu, n, h2o_vmr=0.0):
+MODE = dict(continuum=True, wsech=0.0)     # wsech > 0, no continuum: Wijngaarden & Happer (2020)'s line shape, to check
+
+
+def absorption(L, T, p, vmr, nu0, dnu, n):
     """k(nu) of the gas whose lines L are (cm2/molecule; cupy float32 of n points from nu0 by dnu) at temperature T (K),
-    pressure p (Pa); h2o_vmr sets self-broadening for H2O (the gas's own vmr) and the continuum is added for H2O."""
+    pressure p (Pa); for H2O, vmr (its own) sets self-broadening and the continuum (MODE) is added."""
     global _K
     if _K is None:
         _K = cp.RawModule(code=_SRC, options=('-std=c++11',)).get_function('lines')
@@ -243,7 +248,7 @@ def absorption(L, T, p, vmr, nu0, dnu, n, h2o_vmr=0.0):
     gl = (TREF / T) ** L['nair'] * (L['gair'] * (patm - pself) + L['gself'] * pself)
     gd = L['nu'] / CLIGHT * np.sqrt(2 * KB * T / L['mass'])        # Doppler 1/e half width (HWHM / sqrt(ln2))
     R0 = L['nu'] * np.tanh(C2 * L['nu'] / (2 * T))
-    pl = gl / math.pi / (CUT ** 2 + gl ** 2) if L['gas'] == 'H2O' else np.zeros_like(gl)
+    pl = gl / math.pi / (CUT ** 2 + gl ** 2) if L['gas'] == 'H2O' and MODE['continuum'] else np.zeros_like(gl)
     o = np.argsort(nuc)
     nuc, S, gl, gd, pl, R0 = nuc[o], S[o], gl[o], gd[o], pl[o], R0[o]
     nb = (n + 255) // 256
@@ -253,8 +258,8 @@ def absorption(L, T, p, vmr, nu0, dnu, n, h2o_vmr=0.0):
     k = cp.empty(n, cp.float32)
     f32 = lambda a: cp.asarray(a, cp.float32)
     _K((nb,), (256,), (np.int32(n), np.float64(nu0), np.float64(dnu), cp.asarray(lo), cp.asarray(hi), cp.asarray(nuc),
-                       f32(S / R0), f32(gl), f32(gd), f32(pl), np.float32(CUT), np.float64(T), k))
-    if L['gas'] == 'H2O':
+                       f32(S / R0), f32(gl), f32(gd), f32(pl), np.float32(CUT), np.float32(MODE['wsech']), np.float64(T), k))
+    if L['gas'] == 'H2O' and MODE['continuum']:
         nu = nu0 + dnu * cp.arange(n, dtype=cp.float64)
         k += continuum(nu, T, p, vmr).astype(cp.float32)
     return k
@@ -284,7 +289,7 @@ def layer_through(I, tau, Bnear, Bfar, mu):
 def fluxes(tau, Tlev, Ts, nu, dnu, angles=None, eps=1.0):
     """Up and down longwave fluxes (W/m2) at the levels, from layer optical depths tau (nlay x nnu, top first; cupy),
     level temperatures Tlev (nlay + 1, top first) and surface temperature Ts; angles: (mu, weights) on [0, 1] (default
-    three Gauss points), or a single diffusivity (mu = 1/1.66, weight 1/2)."""
+    three Gauss points), or a single diffusivity (mu = 1/1.66, weight 1.66/2, so the flux is pi I)."""
     mus, ws = angles or (MU, WMU)
     nlay = tau.shape[0]
     B = [planck(nu, float(T)) for T in Tlev]
@@ -333,3 +338,43 @@ def heating(up, dn, plev, cp_air=1004.64):
     """Layer heating, K/day, from level fluxes (top first) and level pressures (Pa)."""
     net = np.asarray(up) - np.asarray(dn)
     return (net[1:] - net[:-1]) / np.diff(plev) * GRAV / cp_air * 86400.0
+
+
+BANDS = [10, 350, 500, 630, 700, 820, 980, 1180, 1390, 1900, 3000]
+DNU = 0.0005
+REF = ROOT / 'cache' / 'ktables'
+
+
+def reference(name, co2=400e-6, bands=BANDS, dnu=DNU, tag=''):
+    """Line-by-line fluxes per band through an AFGL column, saved to cache/ktables/lbl_<name>_<co2 ppm>.npz: up, dn
+    (band x level, W/m2) with three angles and with the diffusivity 1.66."""
+    import afgl
+    P = afgl.profile(name, co2=co2)
+    pm, Tm, x, u = layers(P['p'], P['T'], P['vmr'])
+    nb = len(bands) - 1
+    out = {k: np.zeros((nb, len(P['p']))) for k in ('up', 'dn', 'up_d', 'dn_d')}
+    for b in range(nb):
+        nu0, d, n = grid(bands[b], bands[b + 1], dnu)
+        nu = nu0 + d * (cp.arange(n, dtype=cp.float64) + 0.5)
+        tau = optical_depth(pm, Tm, x, u, nu0 + d / 2, d, n)
+        out['up'][b], out['dn'][b] = fluxes(tau, P['T'], P['T'][-1], nu, d)
+        out['up_d'][b], out['dn_d'][b] = fluxes(tau, P['T'], P['T'][-1], nu, d, angles=([1 / 1.66], [1.66 / 2]))
+        del tau
+        print(f'{name} band {bands[b]}-{bands[b + 1]}: OLR {out["up"][b][0]:.2f}, surface down {out["dn"][b][-1]:.2f}',
+              flush=True)
+    REF.mkdir(parents=True, exist_ok=True)
+    np.savez(REF / f'lbl_{name}_{co2 * 1e6:.0f}{tag}.npz', p=P['p'], T=P['T'], bands=np.array(bands), **out)
+    return out, P
+
+
+if __name__ == '__main__':
+    import sys
+    wh = 'wh' in sys.argv[3:]          # Wijngaarden & Happer's line shape, no continuum
+    if wh:
+        MODE.update(continuum=False, wsech=2.0)
+    o, P = reference(sys.argv[1], float(sys.argv[2]) * 1e-6 if len(sys.argv) > 2 else 400e-6, tag='_wh' if wh else '')
+    print(f"{sys.argv[1]}: OLR {o['up'][:, 0].sum():.2f} (diffusivity {o['up_d'][:, 0].sum():.2f}), surface down "
+          f"{o['dn'][:, -1].sum():.2f} ({o['dn_d'][:, -1].sum():.2f}), surface up {o['up'][:, -1].sum():.2f} W/m2")
+    h = heating(o['up'].sum(0), o['dn'].sum(0), P['p'])
+    for i in range(len(h)):
+        print(f'  {P["p"][i] / 100:9.3f}-{P["p"][i + 1] / 100:9.3f} hPa  {h[i]:7.3f} K/day')

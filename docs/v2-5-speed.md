@@ -256,3 +256,6 @@ ocean heat transport at 20°S −0.18 PW against ≥ 0.2 poleward, in its one me
 −0.44/−0.37/+0.45/+0.46, −0.39/−0.38/+0.47/+0.46; three mixed −0.35/−0.30/+0.46/+0.47, −0.47/−0.50/+0.27/+0.26,
 −0.49/−0.38/+0.30/+0.38. Single years range about ±0.1 PW; the test's one year landed low. Its procedure (one year) is the
 owner's decision to change.
+
+With CLIMATE coupled over years 21–23 (SPEC #108): 20°S −0.27 PW, all its criteria met. Suite 42/43 with PERF (ICE the known
+failure); PERF air n = 6 22.9 ms per model hour (430 model years per day), coupled 26.7.

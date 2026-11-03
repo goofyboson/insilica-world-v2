@@ -28,7 +28,7 @@ from .layers import DIV_DAMP, Layers
 from .transport import BETA, Transport
 
 THIN_WIND = 100.0     # kg/m² (~1 hPa): below it an air layer takes its neighbours' wind, fully at the floor (#83)
-FIELDS = ('h', 'z', 'eta', 'psi', 'speed', 'vort', 'theta', 'T', 'Ts', 'Tsurf', 'ps', 'q', 'rh', 'rain', 'evap', 'ice',
+FIELDS = ('h', 'z', 'eta', 'psi', 'speed', 'vort', 'theta', 'T', 'Ts', 'Tsurf', 'ps', 'q', 'rh', 'rain', 'evap', 'lightning', 'ice',
           'sst', 'sss', 'mld', 'tthermo', 'tdeep', 'current', 'land', 'elev', 'soil', 'pond', 'snow')
 # z: height of the layer's top; eta: the free surface; theta, T, Ts, ps: air (potential temperature, temperature,
 # surface temperature, surface pressure in hPa); q, rh, rain, evap, ice: moist air (specific humidity in g/kg, relative
@@ -282,7 +282,7 @@ class World:
         base = ['h', 'z', 'eta', 'psi', 'speed', 'vort']
         if not self.air:
             return base
-        return (base + ['theta', 'T', 'Ts', 'ps'] + (['Tsurf', 'q', 'rh', 'rain', 'evap', 'ice'] if self.moist else [])
+        return (base + ['theta', 'T', 'Ts', 'ps'] + (['Tsurf', 'q', 'rh', 'rain', 'evap', 'ice', 'lightning'] if self.moist else [])
                 + (['sst', 'sss', 'mld', 'tthermo', 'tdeep', 'current'] if self.sea is not None else [])
                 + (['land', 'elev', 'soil', 'pond', 'snow'] if self.land is not None else []))
 
@@ -333,6 +333,8 @@ class World:
             return self.physics.rain * 86400.0                      # mm/day
         if name == 'evap':
             return self.physics.evap * 86400.0
+        if name == 'lightning':
+            return self.physics.flash * 3.15576e13                  # flashes/km²/year
         if name == 'ice':
             return self.ice / self.physics.p['rho_ice']             # m
         if name == 'rh':

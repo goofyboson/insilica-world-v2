@@ -4,12 +4,14 @@ import numpy as np
 import cupy as cp
 import pytest
 
+from conftest import fmt
 from insilica import runcache
 from insilica.grid.trisk import cell_winds
 from insilica.world import World
 
 CLIMATE_SPIN_YEARS, WEATHER_SPIN_YEARS = 15, 1   # the 100 m slab settles in ~10 years (#54)
 COUPLED_SPIN_YEARS = 20                          # the coupled ocean's ice and halocline are in place by ~15 years (#77)
+COUPLED_YEARS = 3                                # measured years: one year's ocean heat transport varies by about ±0.1 PW (#108)
 
 
 def _year_ticks(w, years):
@@ -78,7 +80,7 @@ def test_climate(record):
 
 @pytest.mark.xdist_group('grid4')
 def test_climate_coupled(record):
-    """CLIMATE coupled The air over the three-layer ocean in one basin (`basin`, n = 4, the year after a cached spin-up): the air's balance against the ocean's uptake, its circulation and rain, and the ocean's heat transport, thermocline tilt, east–west SST contrast, sea ice and seasons"""
+    """CLIMATE coupled The air over the three-layer ocean in one basin (`basin`, n = 4, three years after a cached spin-up): the air's balance against the ocean's uptake, its circulation and rain, and the ocean's heat transport, thermocline tilt, east–west SST contrast, sea ice and seasons"""
     w = coupled_spun(4, 'basin')
     w.track_ocean_heat_transport()
     g, sea = w.grid, w.sea
@@ -96,7 +98,7 @@ def test_climate_coupled(record):
     m60 = (lat > 55) & (lat < 65)
     ts60, icelat = [], []
     mu0, E0 = w.h[b].copy(), stored()
-    for _ in range(365):
+    for _ in range(365 * COUPLED_YEARS):
         for _ in range(per):
             w.step(1)
             rain += w.physics.rain; Ts += w.physics.tsurf; toa += w.physics.sw_abs - w.physics.olr; wxb += w.physics.wx[b - 1]
@@ -105,8 +107,8 @@ def test_climate_coupled(record):
         ts60.append(float(np.sum(Ah[m60] * w.physics.tsurf.get()[m60]) / np.sum(Ah[m60])))
         ice = w.ice.get() > 1.0                                    # kg/m², ~1 mm
         icelat.append(float(np.min(np.abs(lat[ice]))) if ice.any() else 90.0)
-    ns, T = 365 * per, 365 * 86400.0
-    rain = (rain / ns * 86400).get(); Ts = (Ts / ns).get(); ub /= 365
+    ns, T = 365 * per * COUPLED_YEARS, 365 * 86400.0 * COUPLED_YEARS
+    rain = (rain / ns * 86400).get(); Ts = (Ts / ns).get(); ub /= 365 * COUPLED_YEARS
     sst = (sst / ns).get() - 273.15; zt = (zt / ns).get()
     toa = float(cp.sum(toa / ns * A) / cp.sum(A))
     uptake = (stored() - E0) / T / float(cp.sum(A))
@@ -125,13 +127,14 @@ def test_climate_coupled(record):
     ts, eqp, sub = float(np.sum(Ah * Ts)), band(Ts, 0, 10) - band(Ts, 80, 90), band(rain, 15, 30)
     itcz, mid, glob = band(rain, 0, 10) / sub, band(rain, 40, 60) / sub, float(np.sum(Ah * rain))
     trades, west = band(ub, 5, 25), band(ub, 35, 55)
-    seasons = max(ts60) - min(ts60)
+    cycle = np.mean(np.reshape(ts60, (COUPLED_YEARS, 365)), axis=0)   # the mean annual cycle
+    seasons = float(cycle.max() - cycle.min())
     hadley = all(tr[v] < 0 for v in (10, 20, 30)) and all(tr[v] > 0 for v in (-10, -20, -30))
     poleward = all(oht[v] <= -0.2 for v in (-30, -20)) and all(oht[v] >= 0.2 for v in (20, 30))
     ok = (abs(ts - 288) <= 3 and abs(toa - uptake) < 1 and hadley and trades < 0 and west > 0 and itcz > 1.3 and mid > 0.5
           and 2 <= glob <= 3 and 30 <= eqp <= 60 and seasons > 3 and poleward and tilt > 10 and contrast > 0.3
           and 50 <= min(icelat) and max(icelat) <= 75)
-    record('CLIMATE coupled', f'year {COUPLED_SPIN_YEARS + 1} (basin): mean surface {ts:.2f} K; TOA {toa:+.2f} W/m², ocean and ice '
+    record('CLIMATE coupled', f'years {COUPLED_SPIN_YEARS + 1}–{COUPLED_SPIN_YEARS + COUPLED_YEARS} (basin): mean surface {ts:.2f} K; TOA {toa:+.2f} W/m², ocean and ice '
            f'uptake {uptake:+.2f} (air {toa - uptake:+.2f}); bottom-layer northward transport (1e9 kg/s) at 30S/20S/10S/10N/20N/30N '
            f'{"/".join(f"{tr[v]:+.0f}" for v in (-30, -20, -10, 10, 20, 30))}; trades {trades:+.2f} m/s, westerlies {west:+.2f} m/s; '
            f'rain {glob:.2f} mm/day, ITCZ ×{itcz:.2f}, 40–60° ×{mid:.2f}; equator − pole {eqp:.1f} K; 60°N seasons {seasons:.1f} K; '
@@ -304,4 +307,36 @@ def test_weather(record):
            f'{"meets" if b9 else "misses"} > 1 and > 50% (known near miss, #63); '
            f'B10 (report only) wettest tropical row max/mean {clump:.2f}, 5-day map correlation {corr:.2f}',
            'B4 > 0.2; B9 reported against CV > 1 and > 50% (#63); B10 reported (v1: > 2 and < 0.5)', ok)
+    assert ok
+
+
+@pytest.mark.xdist_group('grid4')
+def test_spinup(record, tmp_path):
+    """SPINUP The deep ocean's asynchronous spin-up (V2-5, #107): a recorded coupled year replayed under the ocean alone against the coupled year"""
+    from insilica.spinup import Recorder, OceanOnly
+    w0 = World(4, 'earth')
+    w = runcache.spun_up('earth-n4', lambda: World(4, 'earth'), _year_ticks(w0, 1))[0]   # a year in: the ocean still takes up heat
+    f = tmp_path / 'start.iw2'
+    w.save(f)
+    s = w.sea
+    sea = (1 - s.land.get()) > 0.5
+    At = float(np.sum(w.grid.areaCell[sea]))
+    year = float(w.physics.p['year_s'])
+    h0 = s.heat()
+    rec = Recorder(w)
+    w.set_recorder(rec)
+    w.step(_year_ticks(w, 1))
+    w.set_recorder(None)
+    r = World.load(f)
+    salt0 = r.sea.salt()
+    OceanOnly(r, rec.forcing()).run(1.0)
+    d = (r.sea.T[0].get() - s.T[0].get())[sea]
+    rms = float(np.sqrt(np.mean(d ** 2)))
+    up_c, up_o = (s.heat() - h0) / At / year, (r.sea.heat() - h0) / At / year
+    heat = abs(up_o - up_c) / abs(up_c)
+    salt = abs(r.sea.salt() - salt0) / salt0
+    ok = rms <= 0.5 and heat <= 0.15 and salt <= 1e-13
+    record('SPINUP', f'earth n = 4 a year in, the next year coupled and replayed alone (daily forcing, λ 10 W/m²/K, fresh water '
+           f'balanced): SST rms {rms:.2f} K (mean {d.mean():+.2f}); heat uptake {up_o:+.2f} against {up_c:+.2f} W/m² ({heat * 100:.0f}% off); '
+           f'salt {fmt(salt)}', 'SST rms ≤ 0.5 K; heat within 15%; salt ≤ 1e-13', ok)
     assert ok

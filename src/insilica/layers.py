@@ -71,12 +71,15 @@ class Layers:
         self.h1, self.h2, self.u1, self.u2 = z(L, N), z(L, N), z(L, E), z(L, E)
         self.D1, self.Z1, self.L1, self.L2 = z(L, N), z(L, NV), z(L, E), z(L, E)
         self.hold = z(L, N)
-        self.hedge, self.qedge = z(L, E), z(L, E)
+        self.hedge = z(L, E)
         self.diss = z(E)
         k = lambda n, f='layers.cu': dg.kernel(n, f)
         self.k = {n: k(n) for n in ('lay_eta', 'lay_ubar', 'lay_bern', 'air_bern', 'air_gfast', 'lay_slow', 'bt_eta', 'bt_u', 'lay_flux', 'lay_scale',
                                     'lay_limit', 'lay_h', 'lay_u', 'xch_cell', 'xch_edge', 'lay_vmix', 'vmix_heat', 'lay_edge_hq',
-                                    'air_stiff', 'af_mu', 'af_phi', 'af_u', 'af_flux', 'lay_mask')}
+                                    'air_stiff', 'af_muphi', 'af_u', 'af_flux', 'lay_mask')}
+        # lay_slow's gathers: each edge's (h_e, u, q_e) per layer packed together, and the PV weights, 32-bit when mixed (#106)
+        self.pk = cp.zeros(3 * layers * dg.E, dtype=cp.float32 if dg.mixed else dg.dtype)
+        self.wf = dg.w.astype(cp.float32) if dg.mixed else dg.w
         self.k['swe_vertex'] = k('swe_vertex', 'fused.cu')
         self.k.update({n: k(n, 'trisk.cu') for n in ('cell_div', 'vertex_curl', 'edge_lap')})
         self.dmin = float(np.min(dg.host.de))
@@ -123,13 +126,13 @@ class Layers:
         cL, eL = grid_dims(g.N, L), grid_dims(g.E, L)
         if self.air:
             k['air_bern'](*c1, (N, E, i32(L), hs, us, theta, self.b, R(self.grav), R(CP_DRY), R(KAPPA), R(P0), self.S,
-                                g.cellEdge, g.le, g.de, g.areaCell, self.B, self.pibar))
+                                g.cellEdge, g.le, g.de, g.rA, self.B, self.pibar))
         else:
             k['lay_bern'](*c1, (N, E, i32(L), hs, us, self.b, self.gp, g.cellEdge, g.le, g.de, g.areaCell, self.B))
-        k['swe_vertex'](*grid_dims(g.NV, L), (N, E, NV, hs, us, g.vCell, g.vSlot, g.kite, g.vEdge, g.vEdgeSign, g.de, g.areaV,
+        k['swe_vertex'](*grid_dims(g.NV, L), (N, E, NV, hs, us, g.vCell, g.vSlot, g.kite, g.vEdge, g.vEdgeSign, g.de, g.rAV,
                                               self.fV, self.q))
-        k['lay_edge_hq'](*grid_dims(g.E, L), (N, E, NV, hs, self.q, g.eI, g.eJ, g.ev1, g.ev2, R(self.shelf), self.hedge, self.qedge))
-        k['lay_slow'](*e1, (N, E, NV, i32(L), self.hedge, us, self.qedge, self.B, g.eoeStart, g.eoe, g.w, g.eI, g.eJ, g.ev1, g.ev2, g.de,
+        k['lay_edge_hq'](*grid_dims(g.E, L), (N, E, NV, hs, self.q, g.eI, g.eJ, g.ev1, g.ev2, R(self.shelf), us, self.hedge, self.pk))
+        k['lay_slow'](*e1, (N, E, i32(L), self.pk, self.wf, self.hedge, us, self.B, g.eoeStart, g.eoe, g.eI, g.eJ, g.rde,
                             self.drag, self.stress, R(self.floor), R(self.nu4), self.L2 if self.nu4 else NULL,
                             theta if self.air else NULL,
                             self.pibar if self.air else NULL, R(c * dt), R(self.thin), R(self.shelf), self.Tp, self.G, self.He,
@@ -142,13 +145,13 @@ class Layers:
             cp.copyto(self.uf, u0)
             self.accL.fill(0)
             for _ in range(n):
-                k['af_mu'](*cL, (N, E, self.hedge, self.uf, g.cellEdge, g.cellSign, g.le, g.areaCell, tau, self.muf, self.mup))
-                k['af_phi'](*c1, (N, i32(L), self.muf, self.mup, R(self.div_damp), self.S, self.phi))
-                k['af_u'](*eL, (N, E, self.phi, self.Tp, self.G, g.eI, g.eJ, g.de, tau, self.uf, self.accL))
+                k['af_muphi'](*c1, (N, E, i32(L), self.hedge, self.uf, g.cellEdge, g.cellSign, g.le, g.rA, tau, self.muf, self.mup,
+                                    R(self.div_damp), self.S, self.phi))
+                k['af_u'](*eL, (N, E, self.phi, self.Tp, self.G, g.eI, g.eJ, g.rde, tau, self.uf, self.accL))
             k['af_flux'](*eL, (E, self.hedge, self.accL, R(1.0 / n), self.F))
             k['lay_scale'](*cL, (N, E, h0, self.F, g.cellEdgeAsc, g.eI, g.le, g.areaCell, R(c * dt), R(self.floor), self.scale))
             k['lay_limit'](*eL, (N, E, g.eI, g.eJ, self.scale, g.le, R(dt), self.F, Fm if Fm is not None else NULL))
-            k['lay_h'](*cL, (N, E, h0, self.F, g.cellEdge, g.cellSign, g.le, g.areaCell, R(c * dt), hn))
+            k['lay_h'](*cL, (N, E, h0, self.F, g.cellEdge, g.cellSign, g.le, g.rA, R(c * dt), hn))
             cp.copyto(un, self.uf)
             return
         # fast mode from t^n over c·dt
@@ -156,8 +159,8 @@ class Layers:
         cp.copyto(self.ub, self.ub0)
         self.acc.fill(0)
         for _ in range(n):
-            k['bt_eta'](*c1, (N, self.He, self.ub, g.cellEdge, g.cellSign, g.le, g.areaCell, tau, self.eta, self.eta_prev))
-            k['bt_u'](*e1, (E, self.eta, self.eta_prev, R(self.div_damp), self.G, g.eI, g.eJ, g.de, self.Gc, tau, self.ub, self.acc))
+            k['bt_eta'](*c1, (N, self.He, self.ub, g.cellEdge, g.cellSign, g.le, g.rA, tau, self.eta, self.eta_prev))
+            k['bt_u'](*e1, (E, self.eta, self.eta_prev, R(self.div_damp), self.G, g.eI, g.eJ, g.rde, self.Gc, tau, self.ub, self.acc))
             self.mask(self.ub, 1)
             self.mask(self.acc, 1)
         # layers
@@ -165,7 +168,7 @@ class Layers:
         self.mask(self.F, L)
         k['lay_scale'](*cL, (N, E, h0, self.F, g.cellEdgeAsc, g.eI, g.le, g.areaCell, R(c * dt), R(self.floor), self.scale))
         k['lay_limit'](*eL, (N, E, g.eI, g.eJ, self.scale, g.le, R(dt), self.F, Fm if Fm is not None else NULL))
-        k['lay_h'](*cL, (N, E, h0, self.F, g.cellEdge, g.cellSign, g.le, g.areaCell, R(c * dt), hn))
+        k['lay_h'](*cL, (N, E, h0, self.F, g.cellEdge, g.cellSign, g.le, g.rA, R(c * dt), hn))
         k['lay_u'](*eL, (E, u0, self.Tp, self.ub, self.ub0, R(c * dt), un))
         self.mask(un, L)
 

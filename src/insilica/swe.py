@@ -46,7 +46,7 @@ class SWE:
         k['swe_cell'](*cg, (i32(g.N), i32(g.E), hs, self.b, self.F, us, g.cellEdge, g.cellSign, g.le, g.de, g.areaCell, R(self.grav),
                             h0, R(c), hn, self.B))
         k['swe_vertex'](*vg, (i32(g.N), i32(g.E), i32(g.NV), hs, us, g.vCell, g.vSlot, g.kite, g.vEdge, g.vEdgeSign, g.de,
-                              g.areaV, g.fV, self.q))
+                              g.rAV, g.fV, self.q))
         k['swe_edge'](*eg, (i32(g.N), i32(g.E), i32(g.NV), self.F, self.q, self.B, us, g.eoeStart, g.eoe, g.w, g.eI, g.eJ,
                             g.ev1, g.ev2, g.de, self.drag, R(self.nu4), self.L2 if self.nu4 else NULL, u0, R(c), un))
 

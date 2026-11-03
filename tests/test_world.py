@@ -11,7 +11,9 @@ from insilica import cases
 from insilica import grid as gridmod
 from insilica import runcache
 from insilica import world as worldmod
+from insilica import gpu as gpumod
 from insilica.gpu import dsum
+from insilica.ensemble import Ensemble
 from insilica.world import World
 
 
@@ -214,7 +216,7 @@ def conserve_air(record):
 
 @pytest.mark.xdist_group('grid4')
 def test_repro(record, tmp_path, monkeypatch):
-    """REPRO Bit-reproducibility: repeat runs, graph vs direct, save/load, spin-up cache, layers; numbering independence"""
+    """REPRO Bit-reproducibility: repeat runs, graph vs direct, ensemble members, save/load, spin-up cache, layers; numbering independence"""
     P = {'visc4_U': 20.0, 'drag': 1e-6}
     out, ok = [], True
 
@@ -226,6 +228,11 @@ def test_repro(record, tmp_path, monkeypatch):
     same = a.state_hash() == b.state_hash() == c.state_hash() and a.totals() == b.totals() and len({dsum(x) for _ in range(3)}) == 1
     ok &= same
     out.append(f'repeat, graph vs direct, sums {"identical" if same else "DIFFER"}')
+    # ... and as members of an ensemble running side by side (V2-5)
+    e = Ensemble(World(n=4, preset='aqua') for _ in range(3)).step(200)
+    ens = all(m.state_hash() == a.state_hash() for m in e)
+    ok &= ens
+    out.append(f'3 ensemble members {"identical" if ens else "DIFFER"}')
 
     # 2. Save at T, load, continue K = straight T + K; save → load → save gives identical bytes
     p1, p2 = tmp_path / 'a.iw2', tmp_path / 'b.iw2'
@@ -257,12 +264,16 @@ def test_repro(record, tmp_path, monkeypatch):
     ok &= lay
     out.append(f'2 equal layers = 1 layer {"bit for bit" if lay else "DIFFER"}')
 
-    # 5. Numbering: the Hilbert-ordered grid against v1's numbering, 960 steps (Williamson 5 + bell, FCT3)
+    # 5. Numbering: the Hilbert-ordered grid against v1's numbering, 960 steps (Williamson 5 + bell, FCT3), in the 64-bit
+    # reference: it checks the renumbering's indexing, which mixed precision's 32-bit sums in another order would hide (#106)
+    prec = gpumod.PRECISION
+    gpumod.set_precision('double')
     h = World(n=4, preset='w5', params=P)
     real_get = worldmod.gridmod.get
     monkeypatch.setattr(worldmod.gridmod, 'get', lambda n: real_get(n, order='v1'))
     v = World(n=4, preset='w5', params=P)
     monkeypatch.setattr(worldmod.gridmod, 'get', real_get)
+    gpumod.set_precision(prec)
     h.step(960)
     v.step(960)
     p = h.grid.perm.astype(np.int64)

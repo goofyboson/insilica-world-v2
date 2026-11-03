@@ -86,7 +86,7 @@ class World:
             if nu4 * lam * lam * self.dt > 1.0:
                 raise ValueError(f'nu4 {nu4:.3g} m^4/s is unstable at dt {self.dt:g} s on n = {n} (nu4*lambda^2*dt = '
                                  f'{nu4 * lam * lam * self.dt:.2f}; keep it <= 1: nu4 <= {1.0 / (lam * lam * self.dt):.3g})')
-        self.tr = Transport(self.dg, layers=self.L, beta=P.get('beta', BETA))
+        self.tr = Transport(self.dg, layers=self.L, beta=P.get('beta', BETA), tracers=4)
         self.h, self.u = cp.asarray(h), cp.asarray(u)
         self.M = self.h * cp.asarray(self.grid.areaCell)[None, :]
         self.psi = cp.asarray(np.tile(cosine_bell(self.grid), (self.L, 1)))
@@ -152,6 +152,7 @@ class World:
         # A blocking stream: work on it orders with the default stream, so reads after step() see the results.
         self._stream = cp.cuda.Stream(non_blocking=False)
         self._graphs, self._tick0 = {}, 0                 # one captured graph per kind of tick (air; + ocean; + mixing)
+        self.recorder = None
 
     STATE = ('h', 'u', 'M', 'psi')
 
@@ -171,25 +172,30 @@ class World:
     def _tick(self, kind=0):
         """One tick's kernels, on fixed buffers (no allocation), so the sequence can be captured as a graph:
         the layers' dynamics, transport of the tracer (and θ), then for air the column physics and the θ* crossings."""
+        rec = self.recorder                                   # the ocean's forcing being recorded (spinup.Recorder)
         if self.dynamics:
             self.core.step(self.h, self.u, self.dt, self.nfast, self._Fm, theta=self.theta if self.air else None)
             self.tr.mass_after(self.M, self._Fm, self._M1)
-            if self.tracer:
-                self.tr.step(self.M, self._M1, self._Fm, self.psi, order=3)
-            if self.air:
-                self.tr.step(self.M, self._M1, self._Fm, self.theta, order=3)
+            # every tracer through the same launches (V2-5)
+            moved = ([self.psi] if self.tracer else []) + ([self.theta] if self.air else [])
             if self.moist:
-                self.tr.step(self.M, self._M1, self._Fm, self.q, order=3)
-                if self.cw is not None:
-                    self.tr.step(self.M, self._M1, self._Fm, self.cw, order=3)
+                moved += [self.q] + ([self.cw] if self.cw is not None else [])
+            if moved:
+                self.tr.step_many(self.M, self._M1, self._Fm, moved, order=3)
             cp.copyto(self.M, self._M1)
         if self.sea is not None:
             # the wind stress, exactly, with its kinetic energy back as the air's heat
             g, i32, R = self.dg, np.int32, self.dg.dtype.type
+            if rec:
+                rec.pre_couple()
             self.sea.couple(self.h, self.u, self.surface_drag, self.dt)
+            if rec:
+                rec.post_couple()
             self.core.k['vmix_heat'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.sea.diss, g.cellEdge, g.le, g.de,
                                                        g.areaCell, R(GRAV), R(CP_DRY), R(KAPPA), R(P0), self.theta))
         if self.air:
+            if rec:
+                rec.pre_column()
             self.physics.column(self.h, self.theta, self.Ts, self.u, self.time, self.dt,
                                 q=self.q if self.moist else None, ice=self.ice if self.moist else None,
                                 cap=self.sea.cap if self.sea is not None else self.cap,
@@ -197,11 +203,15 @@ class World:
                                 qsw=self.sea.qsw if self.sea is not None else None,
                                 land=self.land, soilcap=self.soilcap, soil=self.soil, pond=self.pond, snow=self.snow,
                                 cw=self.cw if self.moist else None, elev=self.b)
+            if rec:
+                rec.post_column()
             if self.sea is not None:
                 self.sea.accumulate(self.dt, self.physics.evap, self.physics.rain, self.ice, self.mouth)
             if self.L > 1:
                 self.core.exchange(self.physics.wx, self.h, self.u, self.M, self.psi, theta=self.theta)
         if kind:
+            if rec and kind == 2:
+                rec.pre_mix()
             self.sea.step(mix=kind == 2)
         if self.routing is not None and (kind or self.sea is None):     # on the ocean's step (1 h), or every step
             self.routing.step(self.sea.cfg['dt'] if self.sea is not None else self.dt)
@@ -211,21 +221,32 @@ class World:
         as a CUDA graph and replayed with a single launch per tick (SPEC §9 #18). graph=False runs every tick
         directly; the results are bit-identical (test REPRO)."""
         for _ in range(k):
-            kind = self._kind(self.tick)
-            gr = self._graphs.get(kind)
-            if graph and gr is None and self.tick > self._tick0:
-                with self._stream:
-                    self._stream.begin_capture()
-                    self._tick(kind)
-                    gr = self._graphs[kind] = self._stream.end_capture()
-            if graph and gr is not None:
-                gr.launch(self._stream)
-            else:
-                with self._stream:
-                    self._tick(kind)
-            self.tick += 1
+            self.launch_tick(graph)
         self._stream.synchronize()
         return self
+
+    def launch_tick(self, graph=True):
+        """Queue one tick on this world's stream without waiting for it (step() and Ensemble.step() call this)."""
+        kind = self._kind(self.tick)
+        gr = self._graphs.get(kind)
+        if graph and gr is None and self.tick > self._tick0:
+            with self._stream:
+                self._stream.begin_capture()
+                self._tick(kind)
+                gr = self._graphs[kind] = self._stream.end_capture()
+        if graph and gr is not None:
+            gr.launch(self._stream)
+        else:
+            with self._stream:
+                self._tick(kind)
+        self.tick += 1
+
+    def set_recorder(self, rec):
+        """Record the ocean's forcing with rec (spinup.Recorder) from now on, or stop (None); the captured graphs are
+        dropped, so the next ticks include (or leave out) the recording."""
+        self.recorder = rec
+        self._graphs.clear()
+        self._tick0 = self.tick
 
     def track_ocean_heat_transport(self):
         """Sum the ocean currents' heat convergence per cell from now on (Ocean.track_heat_transport); the captured step

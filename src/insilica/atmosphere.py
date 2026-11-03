@@ -73,7 +73,8 @@ class AirPhysics:
         self.pos = cp.asarray(dg.host.pos)
         z = lambda *s: cp.zeros(s)
         self.uabs, self.wx, self.olr, self.sw_abs, self.stored = z(N), z(max(layers - 1, 1), N), z(N), z(N), z(N)
-        self.k = {n: dg.kernel(n, 'air.cu') for n in ('air_column', 'advance_time', 'cell_speed', 'hs_column')}
+        # compiled for this many layers: the column's arrays then fit in registers, not local memory (V2-5)
+        self.k = {n: dg.kernel(n, 'air.cu', (f'-DNL={layers}',)) for n in ('air_column', 'advance_time', 'cell_speed', 'hs_column')}
         self.hs = cp.asarray([1.0 / (40 * DAY_S), 1.0 / (4 * DAY_S)])
         self.lat = cp.asarray(np.arcsin(np.clip(dg.host.pos[:, 2], -1, 1)))
         self.qnet = z(N)

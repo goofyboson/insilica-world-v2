@@ -54,6 +54,42 @@ much does.
 Overall V2-5 target: `earth` n = 6 at ≥ 2× (≥ 280 model years per day) with identical results from levers 1–3; ≥ 10× search
 throughput at n = 4 from lever 4; levers 5–6 measured and reported.
 
+## First 32-bit trial (lever 6, 2026-11-03)
+
+The whole model in 32-bit by a trial shim (every CuPy float array float32, kernels compiled with `REAL=float`), measured
+on an idle GPU against the same commit in 64-bit. The shim is not part of the engine; V2-7 decides what goes to 32-bit.
+
+| `earth`, per step (captured graph) | n = 4 | n = 5 | n = 6 |
+|---|---|---|---|
+| 64-bit | 1.95 ms | 2.45 ms | 8.90 ms (139 model years per day) |
+| 32-bit | 0.54 ms | 0.86 ms | 3.01 ms (409 model years per day) |
+| Speedup | ×3.6 | ×2.8 | ×3.0 |
+
+n = 6 in 32-bit by part: air dynamics 1.56 ms, transport 1.13, air column 0.73 (from 3.29: the transcendentals), ocean
+dynamics 0.55. Ocean `lay_mask` (12 launches of almost no work) costs 0.20 ms either way: a fusion target, not a 32-bit
+effect.
+
+Climate, 16 years from the same start (64-bit → 32-bit): Ts 289.15 → 289.02 K, TOA +4.76 → +5.00 W/m², rain 2.88 → 2.88
+mm/day (convective share 49 → 48%), vapor 34.4 → 34.2 kg/m², cloud cover 58 → 58%, cloud effect on sunlight −43.1 → −43.3
+and longwave +28.8 → +28.5 W/m², albedo 0.230 → 0.230, rain by band 0–10° 4.88 → 4.78, 15–30° 1.91 → 1.92, 40–60° 3.02 →
+3.01, layer masses 156/588/232 → 155/587/233 hPa, fastest wind 77 → 85 m/s. Regions agree within run-to-run noise except
+the near-dry Amazon (0.36 → 1.28 mm/day).
+
+Budgets, `earth` n = 4, 30 days after a 5-day settle, every step, sums in 64-bit (64-bit → 32-bit):
+
+| Budget | 64-bit | 32-bit |
+|---|---|---|
+| Air water against evaporation − rain, worst step | 3.8e-16 | 6.4e-9 |
+| The same over the run | −3.1e-16 | −5.0e-7 (−4e-7 mm/day) |
+| Land water against rain − evaporation − rivers, over the run | −2.0e-15 | −2.7e-6 (−2.8e-4 mm/day global, ~0.1 m per 1,000 years) |
+| Energy against TOA, worst step | 1.0e-10 | 2.1e-7 |
+| Energy change − TOA, over the run | +0.10 W/m² (the air core's known #81) | −0.77 W/m² |
+
+So 32-bit gives ×3 everywhere and leaves the 16-year climate nearly unchanged, but it loses energy at −0.77 W/m² (a
+fifth of a CO₂ doubling's forcing) and land water at about 0.1 m per 1,000 years: too much for 1,000-year spin-ups and ice
+sheets. V2-7's choice is therefore mixed precision, not plain 32-bit: keep the stored state and its ledgers in 64-bit
+and do the arithmetic in 32-bit, then measure again against these numbers.
+
 ## Gains
 
 | Date | Change | Commit | n = 6 per step | ×baseline | Identical? |

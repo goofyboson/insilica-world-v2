@@ -198,3 +198,19 @@ fresh-water balance (λ = 40, 100 years) the thermocline freshened to 34.57 psu 
 n = 8 147.5 ms (67 model years per day; 102 fast sub-steps an hour against 24). The 1,000-year target at V2-8 is met by
 spinning the deep ocean up at n = 6 (asynchronously, about half a day) and moving it to n = 8 for the last decades; the
 remapping is V2-8's work. The n = 8 barotropic sub-steps are the next ocean speed target.
+
+## Close (2026-11-03): 42/43 with PERF, ICE the known failure
+
+| Target | Result |
+|---|---|
+| `earth` n = 6 ≥ 2× (≥ 280 model years per day) | ×1.68: 8.89 → 5.28 ms per step, 139 → 234 model years per day (levers 1–3 identical, mixed precision measured). **Not met**: what is left is the dynamics' memory traffic. |
+| `air_column` 3.3 → ≤ 1.5 ms | 1.08 ms (2.50 identical, the rest mixed precision) |
+| Transport 2.3 → ≤ 1.3 ms | 0.95 ms (identical) |
+| Air dynamics ×1.3 | ×1.05 (2.77 → 2.63 ms). **Not met** |
+| Ensembles ≥ 10× at n = 4 | ×2.9 at 8+ members, the GPU full. **Not met**: the target overestimated the idle GPU |
+| 1,000-year deep ocean ≤ 1 day at V2-8 | Met on the n = 6 route: asynchronous coupling (×3.4 at n = 4) and the ocean alone at 2,167 model years per day at n = 6; n = 8 alone is 67 |
+| 32-bit measured | Plain 32-bit ×3 but leaks energy (−0.77 W/m²); mixed precision closes the books as 64-bit |
+
+PERF: air n = 6 29.4 ms per model hour (335 model years per day) against 39.6 at the stage's start; coupled n = 6 33.5 ms,
+land n = 6 34.0 ms. SPINUP (new): a replayed year's SST rms 0.29 K against the coupled year, heat uptake +8.35 against +8.59
+W/m², salt 3.7e-15. REPRO checks three ensemble members.

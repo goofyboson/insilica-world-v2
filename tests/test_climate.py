@@ -4,6 +4,7 @@ import numpy as np
 import cupy as cp
 import pytest
 
+from conftest import fmt
 from insilica import runcache
 from insilica.grid.trisk import cell_winds
 from insilica.world import World
@@ -304,4 +305,36 @@ def test_weather(record):
            f'{"meets" if b9 else "misses"} > 1 and > 50% (known near miss, #63); '
            f'B10 (report only) wettest tropical row max/mean {clump:.2f}, 5-day map correlation {corr:.2f}',
            'B4 > 0.2; B9 reported against CV > 1 and > 50% (#63); B10 reported (v1: > 2 and < 0.5)', ok)
+    assert ok
+
+
+@pytest.mark.xdist_group('grid4')
+def test_spinup(record, tmp_path):
+    """SPINUP The deep ocean's asynchronous spin-up (V2-5, #107): a recorded coupled year replayed under the ocean alone against the coupled year"""
+    from insilica.spinup import Recorder, OceanOnly
+    w0 = World(4, 'earth')
+    w = runcache.spun_up('earth-n4', lambda: World(4, 'earth'), _year_ticks(w0, 1))[0]   # a year in: the ocean still takes up heat
+    f = tmp_path / 'start.iw2'
+    w.save(f)
+    s = w.sea
+    sea = (1 - s.land.get()) > 0.5
+    At = float(np.sum(w.grid.areaCell[sea]))
+    year = float(w.physics.p['year_s'])
+    h0 = s.heat()
+    rec = Recorder(w)
+    w.set_recorder(rec)
+    w.step(_year_ticks(w, 1))
+    w.set_recorder(None)
+    r = World.load(f)
+    salt0 = r.sea.salt()
+    OceanOnly(r, rec.forcing()).run(1.0)
+    d = (r.sea.T[0].get() - s.T[0].get())[sea]
+    rms = float(np.sqrt(np.mean(d ** 2)))
+    up_c, up_o = (s.heat() - h0) / At / year, (r.sea.heat() - h0) / At / year
+    heat = abs(up_o - up_c) / abs(up_c)
+    salt = abs(r.sea.salt() - salt0) / salt0
+    ok = rms <= 0.5 and heat <= 0.15 and salt <= 1e-13
+    record('SPINUP', f'earth n = 4 a year in, the next year coupled and replayed alone (daily forcing, λ 10 W/m²/K, fresh water '
+           f'balanced): SST rms {rms:.2f} K (mean {d.mean():+.2f}); heat uptake {up_o:+.2f} against {up_c:+.2f} W/m² ({heat * 100:.0f}% off); '
+           f'salt {fmt(salt)}', 'SST rms ≤ 0.5 K; heat within 15%; salt ≤ 1e-13', ok)
     assert ok

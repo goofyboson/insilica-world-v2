@@ -214,3 +214,45 @@ remapping is V2-8's work. The n = 8 barotropic sub-steps are the next ocean spee
 PERF: air n = 6 29.4 ms per model hour (335 model years per day) against 39.6 at the stage's start; coupled n = 6 33.5 ms,
 land n = 6 34.0 ms. SPINUP (new): a replayed year's SST rms 0.29 K against the coupled year, heat uptake +8.35 against +8.59
 W/m², salt 3.7e-15. REPRO checks three ensemble members.
+
+## After the close: the dynamics' 64-bit arithmetic (2026-11-03, SPEC #106)
+
+Asked what memory traffic could be cut, measured on `lay_slow` (the largest dynamics kernel, 0.78 ms at n = 6; Nsight
+Compute's counters need a Windows permission, so each hypothesis was timed directly):
+
+| Trial on `lay_slow` | ms | So |
+|---|---|---|
+| As it was | 0.78 | — |
+| Compiled for 3 layers (unrolled, more reads in flight) | 0.80 | not read latency |
+| Each neighbour's (h_e, u, q_e) packed together, 64-bit | 0.85 | not cache sectors |
+| Packed and stored 32-bit, the PV sum in 32-bit | 0.42 | **64-bit arithmetic** |
+
+About 500 64-bit operations per edge × 123k edges at the 4070's 64-bit rate is 0.27 ms per launch against 0.26 measured.
+The earlier 32-bit PV trial gained nothing because converting each loaded value is itself a 64-bit operation: the data
+must be stored 32-bit. Built, in mixed mode only (the 64-bit reference is bit-identical, 8 presets):
+
+| Change | n = 6 per step |
+|---|---|
+| Close of V2-5 | 5.28 ms |
+| `lay_slow` from 32-bit packed neighbour data and weights (`lay_edge_hq` packs them) | 5.04 ms |
+| Fused multiply-adds (`--fmad=true` in mixed; the reference keeps `--fmad=false`) | 4.75 ms |
+| Transport's stencil from a 32-bit copy of its field, made once per cell | 4.52 ms |
+| Stored reciprocals of cell areas, edge spacings and vertex areas for the divisions (`DIVBY`) | **4.22 ms** |
+
+**×2.11 over V2-5's start (8.89 ms): 139 → 281 model years per day, the ×2 target met.** Pressure gradients (the
+Montgomery potential's difference) and `air_bern`'s powers stay 64-bit.
+
+Checks of the new mixed mode: budgets (`earth` n = 4, 30 days) air water worst step 4.1e-16, land water −1.8e-15, energy
+change − TOA +0.098 W/m² (64-bit +0.103); CONSERVE passed; 16-year climate Ts 289.15 K (64-bit 289.15), TOA +4.55 (+4.76),
+rain 2.90 (2.88) mm/day, cover 58% (58), cloud effect −43.2 / +28.8 (−43.1 / +28.8) W/m², albedo 0.230 (0.230), rain by band
+4.91 / 1.91 / 3.04 (4.88 / 1.91 / 3.02). REPRO's numbering check (Hilbert against v1's order, ≤ 1e-12) now runs in the 64-bit
+reference: in mixed mode the PV sum's 32-bit rounding in another neighbour order shows at 3e-8, which would hide the indexing
+errors the check is for; its limit is unchanged.
+
+Suite after these changes: 41/43 with PERF. PERF air n = 6 22.4 ms per model hour (439 model years per day; 39.6 at V2-5's
+start), coupled 26.7, land 26.9. ICE as before (a started sheet −146 kg/m² a year). **CLIMATE coupled missed one criterion**:
+ocean heat transport at 20°S −0.18 PW against ≥ 0.2 poleward, in its one measured year (year 21). Not a bias: five-year means
+(years 21–25, PW at 30S/20S/20N/30N), three 64-bit runs (the cached spin-up, two perturbed at 1e-10 K) −0.44/−0.39/+0.40/+0.36,
+−0.44/−0.37/+0.45/+0.46, −0.39/−0.38/+0.47/+0.46; three mixed −0.35/−0.30/+0.46/+0.47, −0.47/−0.50/+0.27/+0.26,
+−0.49/−0.38/+0.30/+0.38. Single years range about ±0.1 PW; the test's one year landed low. Its procedure (one year) is the
+owner's decision to change.

@@ -12,6 +12,18 @@
 
 typedef REAL real;
 #define LMAX 8
+// Division by a fixed grid quantity (cell area, edge spacing, vertex area): mixed precision passes its stored reciprocal
+// and multiplies, one 64-bit operation for a division's many (#106); the 64-bit reference divides as before.
+#if defined(MIXED)
+#define DIVBY(x, r) ((x) * (r))
+#else
+#define DIVBY(x, r) ((x) / (r))
+#endif
+#if defined(MIXED)
+typedef float fast;                                  // (SPEC #106: lay_slow's PV flux from 32-bit stored neighbour data)
+#else
+typedef real fast;
+#endif
 
 #define LOOP1(i, n) const int i = blockIdx.x * blockDim.x + threadIdx.x; if (i >= (n)) return;
 #define LOOP(i, n) const int i = blockIdx.x * blockDim.x + threadIdx.x; if (i >= (n)) return; const int l = blockIdx.y;
@@ -109,7 +121,7 @@ extern "C" __global__ void air_bern(int N, int E, int L, const real* h, const re
       if (e < 0) break;
       ke += le[e] * de[e] * (real)0.25 * ul[e] * ul[e];
     }
-    B[(size_t)k * N + i] = Mk[k] - Phi[k] + ke / areaCell[i];
+    B[(size_t)k * N + i] = Mk[k] - Phi[k] + DIVBY(ke, areaCell[i]);
   }
 }
 
@@ -153,7 +165,7 @@ extern "C" __global__ void af_muphi(int N, int E, int L, const real* hedge, cons
       if (e < 0) break;
       div += (real)cellSign[i * 6 + m] * le[e] * hl[e] * ul[e];
     }
-    const real m1 = m0 - tau * div / areaCell[i];
+    const real m1 = m0 - DIVBY(tau * div, areaCell[i]);
     mu[o] = m1;
     a += m1 + gamma * (m1 - m0);
     P[k] = a;
@@ -169,7 +181,7 @@ extern "C" __global__ void af_u(int N, int E, const real* phi, const real* Tp, c
   const real v = uf[o];
   acc[o] += v;
   const real* pl = phi + (size_t)l * N;
-  uf[o] = v + tau * (-(pl[eJ[e]] - pl[eI[e]]) / de[e] + Tp[o] + G[e]);
+  uf[o] = v + tau * (DIVBY(-(pl[eJ[e]] - pl[eI[e]]), de[e]) + Tp[o] + G[e]);
 }
 
 // The stage's layer fluxes: the stage's edge thickness times the mean wind of the substeps.
@@ -206,22 +218,25 @@ extern "C" __global__ void air_gfast(int N, int L, const real* h, const real* th
 }
 
 // Per stage: each edge's layer thickness h_e and potential vorticity q_e (the mean of its two vertices), read by
-// lay_slow for every neighbour instead of being recomputed from cells and vertices there.
+// lay_slow for every neighbour instead of being recomputed from cells and vertices there: packed with the edge's wind.
 extern "C" __global__ void lay_edge_hq(int N, int E, int NV, const real* h, const real* q, const int* eI, const int* eJ,
-                                       const int* ev1, const int* ev2, real shelf, real* he, real* qe) {
+                                       const int* ev1, const int* ev2, real shelf, const real* u, real* he, fast* pk) {
   LOOP(e, E)
   const size_t o = (size_t)l * E + e;
-  he[o] = edge_h(h[(size_t)l * N + eI[e]], h[(size_t)l * N + eJ[e]], shelf);
-  qe[o] = (real)0.5 * (q[(size_t)l * NV + ev1[e]] + q[(size_t)l * NV + ev2[e]]);
+  const real hv = edge_h(h[(size_t)l * N + eI[e]], h[(size_t)l * N + eJ[e]], shelf);
+  const real qv = (real)0.5 * (q[(size_t)l * NV + ev1[e]] + q[(size_t)l * NV + ev2[e]]);
+  he[o] = hv;
+  fast* pp = pk + ((size_t)e * gridDim.y + l) * 3;   // for lay_slow's gathers: [edge][layer][h_e, u, q_e]
+  pp[0] = (fast)hv; pp[1] = (fast)u[o]; pp[2] = (fast)qv;
 }
 
 // Slow momentum tendencies T_k = PV flux - grad(B_k) - (r_k + c_k / h_e,k) u_k - nu4 del4 u_k, their thickness-
 // weighted column mean G (the barotropic forcing), T'_k = T_k - G, and the stage input's edge thickness H_e and
 // barotropic wind. r_k is a drag rate (1/s); c_k a linear stress coefficient (m/s): a stress acting on the layer
 // decelerates it in proportion to 1/h, so a layer thinning toward the floor is braked hard (decision #29).
-extern "C" __global__ void lay_slow(int N, int E, int NV, int L, const real* hedge, const real* u, const real* qedge, const real* B,
-                                    const int* eoeStart, const int* eoe, const real* w, const int* eI, const int* eJ,
-                                    const int* ev1, const int* ev2, const real* de, const real* drag, const real* stress,
+extern "C" __global__ void lay_slow(int N, int E, int L, const fast* pk, const fast* wf, const real* hedge, const real* u, const real* B,
+                                    const int* eoeStart, const int* eoe, const int* eI, const int* eJ,
+                                    const real* de, const real* drag, const real* stress,
                                     real floor_, real nu4, const real* lap4, const real* theta, const real* pibar,
                                     real dts, real thin, real shelf, real* Tp, real* G, real* He, real* ubs) {
   LOOP1(e, E)
@@ -230,26 +245,25 @@ extern "C" __global__ void lay_slow(int N, int E, int NV, int L, const real* hed
   for (int k = 0; k < L; k++) {
     const real* hl = hedge + (size_t)k * E;
     const real* ul = u + (size_t)k * E;
-    const real* ql = qedge + (size_t)k * E;
     const real* Bl = B + (size_t)k * N;
-    const real qa = ql[e];
     const real he = hl[e];
     // PV flux. Where a layer thins out (an outcrop front), a neighbour's thickness counts for at most `thin` times
     // this edge's own: otherwise a floor-thin vertex's q = (zeta + f) / h_v times a thick neighbour's flux amplifies
     // the Coriolis force on the thin layer by their thickness ratio (decision #38). Smooth layers never reach the cap.
-    const real cap = thin * he;
-    real Q = 0;
+    // Its neighbours' (h_e, u, q_e) come packed together, 32-bit when mixed (V2-5: the sum is bound by 64-bit arithmetic).
+    const fast cap = (fast)(thin * he), qf = pk[((size_t)e * L + k) * 3 + 2];
+    fast Q = 0;
     for (int m = eoeStart[e]; m < eoeStart[e + 1]; m++) {
-      const int e2 = eoe[m];
-      real h2 = hl[e2];
+      const fast* pp = pk + ((size_t)eoe[m] * L + k) * 3;
+      fast h2 = pp[0];
       if (h2 > cap) h2 = cap;
-      const real F2 = h2 * ul[e2];
-      Q += w[m] * F2 * (real)0.5 * (qa + ql[e2]);
+      const fast F2 = h2 * pp[1];
+      Q += wf[m] * F2 * (fast)0.5 * (qf + pp[2]);
     }
     // a squeezed layer's interfaces there are the floor's slope, not a pressure force: it fades with the layer, gone at twice the floor, and the
     // floor's step stops the water that is left within hours
     const real sq = shelf > 0 && he < shelf ? (he - 2 * floor_ > 0 ? (he - 2 * floor_) / (shelf - 2 * floor_) : (real)0) : (real)1;
-    real d = Q - sq * (Bl[eJ[e]] - Bl[eI[e]]) / de[e] - (drag[k] + (1 - sq) / (real)21600) * ul[e];
+    real d = Q - DIVBY(sq * (Bl[eJ[e]] - Bl[eI[e]]), de[e]) - (drag[k] + (1 - sq) / (real)21600) * ul[e];
     if (stress[k] != 0) {
       // exact exponential decay over the stage (rate r = c / h): the effective rate (1 - e^(-r dts)) / dts is r for
       // weak friction and never exceeds 1/dts, so a nearly massless layer is stopped, not overshot (decision #36)
@@ -259,7 +273,7 @@ extern "C" __global__ void lay_slow(int N, int E, int NV, int L, const real* hed
     if (theta) {                       // air: + pibar grad(theta), the pressure force of theta varying in a layer
       const real* tl = theta + (size_t)k * N;
       const real* pl = pibar + (size_t)k * N;
-      d = d + (real)0.5 * (pl[eI[e]] + pl[eJ[e]]) * (tl[eJ[e]] - tl[eI[e]]) / de[e];
+      d = d + DIVBY((real)0.5 * (pl[eI[e]] + pl[eJ[e]]) * (tl[eJ[e]] - tl[eI[e]]), de[e]);
     }
     if (nu4 != 0) d = d - nu4 * lap4[(size_t)k * E + e];
     T[k] = d;
@@ -290,7 +304,7 @@ extern "C" __global__ void bt_eta(int N, const real* He, const real* ub, const i
     if (e < 0) break;
     div += (real)cellSign[i * 6 + m] * le[e] * He[e] * ub[e];
   }
-  eta[i] = eta[i] - tau * div / areaCell[i];
+  eta[i] = eta[i] - DIVBY(tau * div, areaCell[i]);
 }
 
 extern "C" __global__ void bt_u(int E, const real* eta, const real* eta_prev, real gamma, const real* G, const int* eI,
@@ -301,7 +315,7 @@ extern "C" __global__ void bt_u(int E, const real* eta, const real* eta_prev, re
   const int i = eI[e], j = eJ[e];
   const real ej = Gc[j] * (eta[j] + gamma * (eta[j] - eta_prev[j]));
   const real ei = Gc[i] * (eta[i] + gamma * (eta[i] - eta_prev[i]));
-  ub[e] = v + tau * (-(ej - ei) / de[e] + G[e]);
+  ub[e] = v + tau * (DIVBY(-(ej - ei), de[e]) + G[e]);
 }
 
 // Layer thickness fluxes for the stage: each layer's baroclinic flux plus its share of the barotropic transport,
@@ -354,7 +368,7 @@ extern "C" __global__ void lay_h(int N, int E, const real* h0, const real* F, co
     div += (real)cellSign[i * 6 + m] * le[e] * Fl[e];
   }
   const size_t o = (size_t)l * N + i;
-  hn[o] = h0[o] - cdt * div / areaCell[i];
+  hn[o] = h0[o] - DIVBY(cdt * div, areaCell[i]);
 }
 
 extern "C" __global__ void lay_u(int E, const real* u0, const real* Tp, const real* ub_end, const real* ub0, real cdt, real* un) {

@@ -42,7 +42,10 @@ def source_hash():
 def module(name, real='double', defines=()):
     """Compiled RawModule for kernels/<name>, with REAL = double (engine) or float (speed probe), and any further
     -D defines (e.g. the air column's layer count, so its arrays fit in registers; V2-5)."""
-    return cp.RawModule(code=kernel_source(name), options=NVRTC_OPTIONS + (f'-DREAL={real}',) + tuple(defines))
+    opts = NVRTC_OPTIONS
+    if '-DMIXED' in defines:                     # mixed precision fuses multiply-adds (one 64-bit operation, not two; #106)
+        opts = tuple(o for o in opts if o != '--fmad=false') + ('--fmad=true',)
+    return cp.RawModule(code=kernel_source(name), options=opts + (f'-DREAL={real}',) + tuple(defines))
 
 
 def grid_dims(n, layers=1):
@@ -72,6 +75,9 @@ class DeviceGrid:
         self.d2idx = cp.asarray(idx)
         self.d2wt = cp.asarray(wt.astype(self.dtype))
         self.d2wt_tr = cp.asarray(wt.astype(np.float32)) if self.mixed else self.d2wt   # transport's (32-bit when mixed)
+        # what kernels divide by (their DIVBY): the reciprocals when mixed, else the quantities themselves (#106)
+        self.rA, self.rde, self.rAV = ((1.0 / self.areaCell, 1.0 / self.de, 1.0 / self.areaV) if self.mixed
+                                       else (self.areaCell, self.de, self.areaV))
 
     def kernel(self, name, file='trisk.cu', defines=()):
         return module(file, self.real, tuple(defines) + (('-DMIXED',) if self.mixed else ())).get_function(name)

@@ -9,6 +9,13 @@
 
 typedef REAL real;
 // Mixed precision (SPEC #106): the transport stencil's weights and sums in 32-bit; fluxes, means and every total 64-bit
+// Division by a fixed grid quantity (cell area, edge spacing, vertex area): mixed precision passes its stored reciprocal
+// and multiplies, one 64-bit operation for a division's many (#106); the 64-bit reference divides as before.
+#if defined(MIXED)
+#define DIVBY(x, r) ((x) * (r))
+#else
+#define DIVBY(x, r) ((x) / (r))
+#endif
 #if defined(MIXED)
 typedef float fast;
 #else
@@ -87,7 +94,7 @@ extern "C" __global__ void swe_vertex(int N, int E, int NV, const real* h, const
     const int e = vEdge[v * 3 + k];
     z += (real)vEdgeSign[v * 3 + k] * de[e] * ul[e];
   }
-  q[(size_t)l * NV + v] = (z / areaV[v] + fV[v]) / (hv / areaV[v]);
+  q[(size_t)l * NV + v] = (DIVBY(z, areaV[v]) + fV[v]) / DIVBY(hv, areaV[v]);
 }
 
 // Stage pass 5 (edges): the momentum tendency and the RK update un = u0 + c du; q at edges from the vertices.
@@ -120,12 +127,13 @@ __device__ __forceinline__ real upwind(const real* Fml, const real* p, const int
 }
 
 // 3rd-order flux with upwind weight beta (SPEC section 9 #20): f (mean - a - b) + |f| (b - a) beta.
-__device__ __forceinline__ real hoflux(const real* Fml, const real* ps, const int* idx, const fast* wt, const int* eI,
+// psf: the same field for the stencil, 32-bit when mixed (a copy made once per cell, not converted per edge).
+__device__ __forceinline__ real hoflux(const real* Fml, const real* ps, const fast* psf, const int* idx, const fast* wt, const int* eI,
                                        const int* eJ, int e, real beta) {
   const real f = Fml[e];
   const int o = e * 8;
-  const fast a = wt[o] * (fast)ps[idx[o]] + wt[o + 1] * (fast)ps[idx[o + 1]] + wt[o + 2] * (fast)ps[idx[o + 2]] + wt[o + 3] * (fast)ps[idx[o + 3]];
-  const fast b = wt[o + 4] * (fast)ps[idx[o + 4]] + wt[o + 5] * (fast)ps[idx[o + 5]] + wt[o + 6] * (fast)ps[idx[o + 6]] + wt[o + 7] * (fast)ps[idx[o + 7]];
+  const fast a = wt[o] * psf[idx[o]] + wt[o + 1] * psf[idx[o + 1]] + wt[o + 2] * psf[idx[o + 2]] + wt[o + 3] * psf[idx[o + 3]];
+  const fast b = wt[o + 4] * psf[idx[o + 4]] + wt[o + 5] * psf[idx[o + 5]] + wt[o + 6] * psf[idx[o + 6]] + wt[o + 7] * psf[idx[o + 7]];
   return f * ((real)0.5 * (ps[eI[e]] + ps[eJ[e]]) - (real)(a + b)) + fabs(f) * ((real)(b - a) * beta);
 }
 
@@ -152,10 +160,10 @@ extern "C" __global__ void tr_td(int N, int E, int Lm, const real* M0, const rea
 }
 
 // An RK stage's high-order edge fluxes, frac H(src).
-extern "C" __global__ void tr_hflux(int E, int Lm, const real* src, real frac, const real* Fm, const int* idx, const fast* wt,
+extern "C" __global__ void tr_hflux(int E, int Lm, const real* src, const fast* srcf, real frac, const real* Fm, const int* idx, const fast* wt,
                                     const int* eI, const int* eJ, int N, real beta, real* Hf) {
   ROW(e, E)
-  Hf[(size_t)y * E + e] = frac * hoflux(Fm + (size_t)l * E, src + (size_t)y * N, idx, wt, eI, eJ, e, beta);
+  Hf[(size_t)y * E + e] = frac * hoflux(Fm + (size_t)l * E, src + (size_t)y * N, srcf + (size_t)y * N, idx, wt, eI, eJ, e, beta);
 }
 
 // An RK stage of the high-order solution: out = (M0 psi - sum frac H(src)) / (M0 - frac sum Fm).
@@ -178,11 +186,11 @@ extern "C" __global__ void tr_stage(int N, int E, int Lm, const real* M0, const 
 }
 
 // The antidiffusive fluxes A = H(p2) - upwind(psi), once per edge.
-extern "C" __global__ void tr_aflux(int E, int Lm, const real* psi, const real* p2, const real* Fm, const int* idx, const fast* wt,
+extern "C" __global__ void tr_aflux(int E, int Lm, const real* psi, const real* p2, const fast* p2f, const real* Fm, const int* idx, const fast* wt,
                                     const int* eI, const int* eJ, int N, real beta, real* A) {
   ROW(e, E)
   const real* Fml = Fm + (size_t)l * E;
-  A[(size_t)y * E + e] = hoflux(Fml, p2 + (size_t)y * N, idx, wt, eI, eJ, e, beta) - upwind(Fml, psi + (size_t)y * N, eI, eJ, e);
+  A[(size_t)y * E + e] = hoflux(Fml, p2 + (size_t)y * N, p2f + (size_t)y * N, idx, wt, eI, eJ, e, beta) - upwind(Fml, psi + (size_t)y * N, eI, eJ, e);
 }
 
 // Zalesak ratios from the antidiffusive fluxes.

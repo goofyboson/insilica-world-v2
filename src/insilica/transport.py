@@ -25,6 +25,7 @@ class Transport:
         R = tracers * L
         self.psi, self.td, self.p1, self.p2, self.Rp, self.Rm, self.out = (z(R, N) for _ in range(7))
         self.Hf, self.A = z(R, E), z(R, E)
+        self.pf = cp.zeros((R, N), dtype=cp.float32) if dg.mixed else None    # the stencil's 32-bit copy of its field (#106)
         self.k = {n: dg.kernel(n, 'fused.cu') for n in ('tr_td', 'tr_hflux', 'tr_stage', 'tr_aflux', 'tr_ratios', 'tr_apply')}
         self.k['mass_update'] = dg.kernel('mass_update')
 
@@ -44,6 +45,13 @@ class Transport:
         rows = slice(0, n * L)
         psi, td, p1, p2, Rp, Rm, out, Hf, A = (a[rows] for a in (self.psi, self.td, self.p1, self.p2, self.Rp, self.Rm,
                                                                   self.out, self.Hf, self.A))
+        pf = self.pf[rows] if self.pf is not None else None
+
+        def f32(a):                                    # the stencil's copy: the field itself in 64-bit
+            if pf is None:
+                return a
+            cp.copyto(pf, a, casting='unsafe')
+            return pf
         for j, t in enumerate(tracers):
             cp.copyto(psi[j * L:(j + 1) * L], t)
         cg, eg, Lm, b = grid_dims(N, n * L), grid_dims(E, n * L), i32(L), R(self.beta)
@@ -52,9 +60,9 @@ class Transport:
             res = td
         else:
             for src, frac, dst in ((psi, 1 / 3, p1), (p1, 1 / 2, p2)):
-                k['tr_hflux'](*eg, (i32(E), Lm, src, R(frac), Fm, g.d2idx, g.d2wt_tr, g.eI, g.eJ, i32(N), b, Hf))
+                k['tr_hflux'](*eg, (i32(E), Lm, src, f32(src), R(frac), Fm, g.d2idx, g.d2wt_tr, g.eI, g.eJ, i32(N), b, Hf))
                 k['tr_stage'](*cg, (i32(N), i32(E), Lm, M0, psi, Hf, R(frac), Fm, g.cellEdgeAsc, g.eI, dst))
-            k['tr_aflux'](*eg, (i32(E), Lm, psi, p2, Fm, g.d2idx, g.d2wt_tr, g.eI, g.eJ, i32(N), b, A))
+            k['tr_aflux'](*eg, (i32(E), Lm, psi, p2, f32(p2), Fm, g.d2idx, g.d2wt_tr, g.eI, g.eJ, i32(N), b, A))
             k['tr_ratios'](*cg, (i32(N), i32(E), Lm, psi, td, M1, A, g.nbr, g.cellEdgeAsc, g.eI, Rp, Rm))
             k['tr_apply'](*cg, (i32(N), i32(E), Lm, td, M1, A, Rp, Rm, g.cellEdgeAsc, g.eI, g.eJ, out))
             res = out

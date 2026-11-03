@@ -11,6 +11,7 @@ from insilica import cases
 from insilica import grid as gridmod
 from insilica import runcache
 from insilica import world as worldmod
+from insilica import gpu as gpumod
 from insilica.gpu import dsum
 from insilica.ensemble import Ensemble
 from insilica.world import World
@@ -263,12 +264,16 @@ def test_repro(record, tmp_path, monkeypatch):
     ok &= lay
     out.append(f'2 equal layers = 1 layer {"bit for bit" if lay else "DIFFER"}')
 
-    # 5. Numbering: the Hilbert-ordered grid against v1's numbering, 960 steps (Williamson 5 + bell, FCT3)
+    # 5. Numbering: the Hilbert-ordered grid against v1's numbering, 960 steps (Williamson 5 + bell, FCT3), in the 64-bit
+    # reference: it checks the renumbering's indexing, which mixed precision's 32-bit sums in another order would hide (#106)
+    prec = gpumod.PRECISION
+    gpumod.set_precision('double')
     h = World(n=4, preset='w5', params=P)
     real_get = worldmod.gridmod.get
     monkeypatch.setattr(worldmod.gridmod, 'get', lambda n: real_get(n, order='v1'))
     v = World(n=4, preset='w5', params=P)
     monkeypatch.setattr(worldmod.gridmod, 'get', real_get)
+    gpumod.set_precision(prec)
     h.step(960)
     v.step(960)
     p = h.grid.perm.astype(np.int64)

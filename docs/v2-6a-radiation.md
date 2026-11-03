@@ -25,6 +25,24 @@ physics, not tuned constants. SPEC #109.
    and heating per sub-level on standard profiles); the model's radiation against the tool's on the same columns; then
    `earth`'s global energy budget against measured values.
 
+## Built so far (longwave tables)
+
+- `tools/lbl.py`: line-by-line on the GPU; absorption within 0.1% (mean) of HAPI's. Checked whole against Wijngaarden
+  & Happer (2020) in their line shape (no continuum, sech² wings), US standard: OLR 274.0 against 277, 2×CO₂ forcing
+  2.94 against 3.0 at the top and 5.44 against 5.5 at the tropopause (W/m²).
+- Clear-sky references with MT_CKD (400 ppm): US standard OLR 258.9, surface down 287.4; tropical 286.6 / 390.5;
+  subarctic winter 198.5 / 173.9. US standard 2×CO₂: 2.67 at the top, 5.20 at the tropopause, 2.98 at the surface.
+- `tools/make_ktables.py`: 10 bands, 136 g-points. Each band's wavenumbers are grouped by k-means on the logarithm of
+  the optical depth from the top down and from the surface up in three AFGL columns; a g-point's k per gas is the mean
+  over its wavenumbers in (p, T), H₂O at two vapor fractions. The plain mean overstates absorption where k spreads
+  inside a g-point, so each g-point's k (all gases alike, so τ stays linear in amounts) carries a factor smooth in log p
+  (12 nodes), fitted by Levenberg–Marquardt to line-by-line net fluxes and heating on four columns (US standard 400
+  and 800 ppm, tropical, subarctic winter), with the model's single diffusivity angle against three-angle truth.
+- Result, including three columns not fitted (tropical 800 ppm; subarctic winter with twice the vapor; US standard
+  10 K warmer and twice as wet below 100 hPa): OLR within 0.04%, surface down within 0.16%, heating within 0.10 K/day
+  in every sub-level below 1 hPa (0.11–0.44 in the 0.01–1 hPa one); 2×CO₂ forcing within 1.4% at the top and
+  tropopause, 4.7% at the surface (tropical).
+
 ## Tests
 
 | Test | Against | Limit (proposed) |

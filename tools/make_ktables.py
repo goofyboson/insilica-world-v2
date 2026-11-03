@@ -186,8 +186,12 @@ def band_planck(T, bands=BANDS):
     return np.array(out)
 
 
-def k_fluxes(t, P, angles=None):
-    """Up and down fluxes per band (band x level) through the column P with the k-tables t."""
+DIFFUSIVITY = ([1 / 1.66], [1.66 / 2])               # the model's angle (flux = pi I at mu = 1/1.66)
+
+
+def column_terms(t, P):
+    """The column's layer optical depths per g-point from the tables (layers x g), Planck sources at the levels
+    (levels x g, W m-2 sr-1), and its layers' log-pressures."""
     pm, Tm, x, u = lbl.layers(P['p'], P['T'], P['vmr'])
     ng, nl = int(t['ng'].sum()), len(pm)
     tau = np.zeros((nl, ng))
@@ -196,25 +200,154 @@ def k_fluxes(t, P, angles=None):
         f = x['H2O'][i] / X_H2O[1]
         tau[i] = u['H2O'][i] * (k[0] * (1 - f) + k[1] * f) + sum(u[g][i] * k[2 + c] for c, g in enumerate(GASES[1:]))
     gb = np.repeat(np.arange(len(t['ng'])), t['ng'])
-    def src(T):
-        fr = np.array([np.interp(T, t['T_pl'], t['pl'][:, g]) for g in range(ng)])
-        return band_planck(T)[gb] * fr
-    B = [src(T) for T in P['T']]
-    Bs = src(P['T'][-1])
-    mus, ws = angles or (lbl.MU, lbl.WMU)
+    B = np.stack([band_planck(T)[gb] * np.array([np.interp(T, t['T_pl'], t['pl'][:, g]) for g in range(ng)])
+                  for T in P['T']])
+    return tau, B, np.log(pm)
+
+
+def g_fluxes(tau, B, angles=None):
+    """Up and down fluxes per g-point (g x level); the surface emits B[-1]."""
+    nl, ng = tau.shape
+    mus, ws = angles or DIFFUSIVITY
     up, dn = np.zeros((ng, nl + 1)), np.zeros((ng, nl + 1))
     for mu, w in zip(mus, ws):
         I = np.zeros(ng)
         for i in range(nl):
             I = through(I, tau[i], B[i + 1], B[i], mu)
             dn[:, i + 1] += 2 * np.pi * w * mu * I
-        I = Bs.copy()
+        I = B[-1].copy()
         up[:, nl] += 2 * np.pi * w * mu * I
         for i in range(nl - 1, -1, -1):
             I = through(I, tau[i], B[i], B[i + 1], mu)
             up[:, i] += 2 * np.pi * w * mu * I
+    return up, dn
+
+
+def k_fluxes(t, P, angles=None):
+    """Up and down fluxes per band (band x level) through the column P with the k-tables t."""
+    tau, B, _ = column_terms(t, P)
+    up, dn = g_fluxes(tau, B, angles)
+    gb = np.repeat(np.arange(len(t['ng'])), t['ng'])
     sb = lambda F: np.stack([F[gb == b].sum(0) for b in range(len(t['ng']))])
     return sb(up), sb(dn)
+
+
+# ---------------------------------------------------------------- fitting the tables to line-by-line
+
+FIT_COLUMNS = COLUMNS + [('us_standard', 800e-6)]
+CHECK_COLUMNS = [('tropical', 800e-6, {}), ('subarctic_winter', 400e-6, {'h2o': 2.0}),
+                 ('us_standard', 400e-6, {'h2o': 2.0, 'dT': 10.0})]
+NODES = np.log(np.array([1.0, 10.0, 50.0, 200.0, 1000.0, 3000.0, 10000.0, 20000.0, 40000.0, 60000.0, 80000.0, 110000.0]))
+SIG_F, SIG_H, SIG_SMOOTH, SIG_A = 0.1, 0.02, 0.5, 1.5     # W/m2 per band; K/day; per node step; prior on log factor
+
+
+def ref_name(name, co2, kw=None):
+    return OUT / ('lbl_' + name + f'_{co2 * 1e6:.0f}' + ''.join(f'_{k}{v:g}' for k, v in (kw or {}).items()) + '.npz')
+
+
+def node_weights(lp):
+    """Linear interpolation weights in log p from NODES to the log-pressures lp (len(lp) x nodes), constant beyond."""
+    W = np.zeros((len(lp), len(NODES)))
+    x = np.clip(np.interp(lp, NODES, np.arange(len(NODES))), 0, len(NODES) - 1 - 1e-9)
+    i = x.astype(int)
+    W[np.arange(len(lp)), i] = 1 - (x - i)
+    W[np.arange(len(lp)), i + 1] = x - i
+    return W
+
+
+def fit():
+    """A factor on every gas's k per g-point, smooth in log pressure (linear between NODES), fitted by Levenberg-
+    Marquardt so the diffusivity fluxes match line-by-line (three angles) on FIT_COLUMNS: each band's net flux at
+    every level and heating in every layer (above 1 hPa at a fifth of the weight). Saves lw.npz's K fitted (K_raw kept)."""
+    t = dict(np.load(OUT / 'lw.npz'))
+    t['K'] = t.get('K_raw', t['K'])
+    cols = []
+    for name, co2 in FIT_COLUMNS:
+        P = afgl.profile(name, co2=co2)
+        r = np.load(ref_name(name, co2))
+        tau, B, lp = column_terms(t, P)
+        wH = np.where(P['p'][1:] > 100.0, 1.0, 0.2)
+        cols.append((tau, B, node_weights(lp), P['p'], r, wH))
+    nn = len(NODES)
+    A = np.zeros((int(t['ng'].sum()), nn))
+    for b in range(len(NG)):
+        g = slice(sum(NG[:b]), sum(NG[:b + 1]))
+        a = np.zeros((NG[b], nn))
+
+        def resid(a, which=None):
+            """Residuals (data then priors), and per node the change from perturbing all g-points' node."""
+            out = []
+            for tau, B, W, p, r, wH in cols:
+                tg = tau[:, g] * np.exp(W @ a.T)
+                up, dn = g_fluxes(tg, B[:, g])
+                out.append((up, dn))
+            return out
+
+        def stack(fl, a):
+            res = []
+            for (up, dn), (tau, B, W, p, r, wH) in zip(fl, cols):
+                net = up.sum(0) - dn.sum(0)
+                rnet = r['up'][b] - r['dn'][b]
+                res.append((net - rnet) / SIG_F)
+                res.append((up.sum(0)[0] - r['up'][b][0]) / SIG_F * np.ones(1))
+                res.append((dn.sum(0)[-1] - r['dn'][b][-1]) / SIG_F * np.ones(1))
+                res.append(wH * (lbl.heating(up.sum(0), dn.sum(0), p) - lbl.heating(r['up'][b], r['dn'][b], p)) / SIG_H)
+            res.append((np.diff(a, axis=1) / SIG_SMOOTH).ravel())
+            res.append((a / SIG_A).ravel())
+            return np.concatenate(res)
+
+        def jac(a, fl0):
+            """Each g-point's fluxes depend only on its own factors, so one perturbation of node j for all g-points at
+            once gives that node's column for every g-point."""
+            r0 = stack(fl0, a)
+            J = np.zeros((len(r0), a.size))
+            eps = 1e-4
+            for j in range(nn):
+                ap = a.copy()
+                ap[:, j] += eps
+                flp = resid(ap)
+                for q in range(NG[b]):
+                    fq = [(up0.copy(), dn0.copy()) for up0, dn0 in fl0]
+                    for c in range(len(cols)):
+                        fq[c][0][q] = flp[c][0][q]
+                        fq[c][1][q] = flp[c][1][q]
+                    aq = a.copy()
+                    aq[q, j] += eps
+                    J[:, q * nn + j] = (stack(fq, aq) - r0) / eps
+            return r0, J
+
+        mu = 1e-2
+        fl = resid(a)
+        r0 = stack(fl, a)
+        cost0 = cost = float(r0 @ r0)
+        for it in range(30):
+            r0, J = jac(a, fl)
+            JTJ, g_ = J.T @ J, J.T @ r0
+            while True:
+                step = -np.linalg.solve(JTJ + mu * np.diag(np.diag(JTJ) + 1e-12), g_)
+                an = a + step.reshape(a.shape)
+                fln = resid(an)
+                c = float(stack(fln, an) @ stack(fln, an))
+                if c < cost:
+                    a, fl, mu = an, fln, mu / 3
+                    break
+                mu *= 4
+                if mu > 1e8:
+                    break
+            if mu > 1e8 or cost - c < 1e-4 * cost:
+                cost = min(cost, c)
+                break
+            cost = c
+        A[g] = a
+        print(f'band {BANDS[b]}-{BANDS[b + 1]}: cost {cost0:.1f} -> {cost:.1f} after {it + 1} steps, factors '
+              f'{np.exp(a).min():.2f}-{np.exp(a).max():.2f}', flush=True)
+    # apply: log k at table pressure P_TAB gets the node interpolation of A
+    WT = node_weights(np.log(P_TAB))                  # P x nodes
+    F = np.exp(A @ WT.T)                              # g x P
+    t['K_raw'] = t['K']
+    t['K'] = t['K'] * F[None, :, :, None]
+    t['A'] = A
+    np.savez(OUT / 'lw.npz', **t)
 
 
 def through(I, tau, Bnear, Bfar, mu):
@@ -226,10 +359,11 @@ def through(I, tau, Bnear, Bfar, mu):
 
 def check():
     t = dict(np.load(OUT / 'lw.npz'))
-    for name, co2 in COLUMNS + [('us_standard', 800e-6)]:
-        r = np.load(OUT / f'lbl_{name}_{co2 * 1e6:.0f}.npz')
-        P = afgl.profile(name, co2=co2)
+    for name, co2, kw in [(n, c, {}) for n, c in FIT_COLUMNS] + CHECK_COLUMNS:
+        r = np.load(ref_name(name, co2, kw))
+        P = afgl.profile(name, co2=co2, **kw)
         up, dn = k_fluxes(t, P)
+        name = name + ''.join(f' {k}={v:g}' for k, v in kw.items())
         hr, hk = lbl.heating(r['up'].sum(0), r['dn'].sum(0), P['p']), lbl.heating(up.sum(0), dn.sum(0), P['p'])
         trop = P['p'] > 10000.0
         # heating over model-like sub-levels (boundaries at the AFGL levels nearest these pressures)
@@ -248,4 +382,4 @@ def check():
 
 
 if __name__ == '__main__':
-    {'map': build_map, 'tables': build_tables, 'check': check, 'sweep': sweep}[sys.argv[1]]()
+    {'map': build_map, 'tables': build_tables, 'fit': fit, 'check': check, 'sweep': sweep}[sys.argv[1]]()

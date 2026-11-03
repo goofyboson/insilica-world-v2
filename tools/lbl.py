@@ -345,11 +345,11 @@ DNU = 0.0005
 REF = ROOT / 'cache' / 'ktables'
 
 
-def reference(name, co2=400e-6, bands=BANDS, dnu=DNU, tag=''):
+def reference(name, co2=400e-6, bands=BANDS, dnu=DNU, tag='', **kw):
     """Line-by-line fluxes per band through an AFGL column, saved to cache/ktables/lbl_<name>_<co2 ppm>.npz: up, dn
     (band x level, W/m2) with three angles and with the diffusivity 1.66."""
     import afgl
-    P = afgl.profile(name, co2=co2)
+    P = afgl.profile(name, co2=co2, **kw)
     pm, Tm, x, u = layers(P['p'], P['T'], P['vmr'])
     nb = len(bands) - 1
     out = {k: np.zeros((nb, len(P['p']))) for k in ('up', 'dn', 'up_d', 'dn_d')}
@@ -372,7 +372,9 @@ if __name__ == '__main__':
     wh = 'wh' in sys.argv[3:]          # Wijngaarden & Happer's line shape, no continuum
     if wh:
         MODE.update(continuum=False, wsech=2.0)
-    o, P = reference(sys.argv[1], float(sys.argv[2]) * 1e-6 if len(sys.argv) > 2 else 400e-6, tag='_wh' if wh else '')
+    kw = {a.split('=')[0]: float(a.split('=')[1]) for a in sys.argv[3:] if '=' in a}      # h2o=..., dT=...
+    tag = ('_wh' if wh else '') + ''.join(f'_{k}{v:g}' for k, v in kw.items())
+    o, P = reference(sys.argv[1], float(sys.argv[2]) * 1e-6 if len(sys.argv) > 2 else 400e-6, tag=tag, **kw)
     print(f"{sys.argv[1]}: OLR {o['up'][:, 0].sum():.2f} (diffusivity {o['up_d'][:, 0].sum():.2f}), surface down "
           f"{o['dn'][:, -1].sum():.2f} ({o['dn_d'][:, -1].sum():.2f}), surface up {o['up'][:, -1].sum():.2f} W/m2")
     h = heating(o['up'].sum(0), o['dn'].sum(0), P['p'])

@@ -7,11 +7,15 @@ from lbl import ROOT
 FILES = {'tropical': 'table_1a.csv', 'subarctic_winter': 'table_1e.csv', 'us_standard': 'table_1f.csv'}
 
 
-def profile(name, ptop=1.0, co2=400e-6):
+def profile(name, ptop=1.0, co2=400e-6, h2o=1.0, dT=0.0):
     """Levels from the top (pressure ptop Pa and above cut off) down to the surface: dict of p (Pa), T (K), z (km)
-    and vmr {gas: levels}."""
+    and vmr {gas: levels}; h2o scales the vapor below 100 hPa and dT warms the levels below 100 hPa (validation
+    columns)."""
     a = np.loadtxt(ROOT / 'cache' / 'afgl' / FILES[name], delimiter=',', skiprows=1)
     a = a[a[:, 1] * 100 >= ptop][::-1]
+    low = a[:, 1] > 100.0
+    a[low, 4] *= h2o
+    a[low, 2] += dT
     vmr = {'H2O': a[:, 4] * 1e-6, 'CO2': np.full(len(a), co2), 'O3': a[:, 5] * 1e-6, 'N2O': a[:, 6] * 1e-6,
            'CH4': a[:, 8] * 1e-6}
     return dict(z=a[:, 0], p=a[:, 1] * 100, T=a[:, 2], vmr=vmr)

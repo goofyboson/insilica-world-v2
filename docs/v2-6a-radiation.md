@@ -47,9 +47,9 @@ physics, not tuned constants. SPEC #109.
 
 | Test | Against | Limit (proposed) |
 |---|---|---|
-| k-tables against line-by-line, US standard, tropical and subarctic-winter columns | the tool's line-by-line | OLR and surface downward longwave within 1%, heating within 0.2 K/day per sub-level |
+| k-tables against line-by-line, US standard, tropical and subarctic-winter columns (and three unfitted) | the tool's line-by-line | OLR and surface downward longwave within 1%, heating within 0.2 K/day per sub-level below 1 hPa (#110) |
 | CO₂ doubling, instantaneous TOA and tropopause forcing, US standard column | published line-by-line results (Collins et al. 2006, RTMIP) | within 10% |
-| Clear-sky OLR, US standard column | published line-by-line (about 265 W/m²) | within 2% |
+| The line-by-line tool, US standard in their line shape (#110) | Wijngaarden & Happer (2020): OLR 277, 2×CO₂ 3.0 (top) and 5.5 (tropopause) W/m² | OLR within 2%, forcing within 10% |
 | `earth` global energy budget, all-sky and clear-sky | measured (Wild et al. 2013 and CERES EBAF): absorbed sunlight 240, OLR 239, clear-sky OLR 266, surface downward longwave 342, surface absorbed sunlight 161 W/m² | within 5% each |
 | Budgets | CONSERVE's | unchanged (≤ 1e-13) |
 

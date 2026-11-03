@@ -207,21 +207,25 @@ class World:
         as a CUDA graph and replayed with a single launch per tick (SPEC §9 #18). graph=False runs every tick
         directly; the results are bit-identical (test REPRO)."""
         for _ in range(k):
-            kind = self._kind(self.tick)
-            gr = self._graphs.get(kind)
-            if graph and gr is None and self.tick > self._tick0:
-                with self._stream:
-                    self._stream.begin_capture()
-                    self._tick(kind)
-                    gr = self._graphs[kind] = self._stream.end_capture()
-            if graph and gr is not None:
-                gr.launch(self._stream)
-            else:
-                with self._stream:
-                    self._tick(kind)
-            self.tick += 1
+            self.launch_tick(graph)
         self._stream.synchronize()
         return self
+
+    def launch_tick(self, graph=True):
+        """Queue one tick on this world's stream without waiting for it (step() and Ensemble.step() call this)."""
+        kind = self._kind(self.tick)
+        gr = self._graphs.get(kind)
+        if graph and gr is None and self.tick > self._tick0:
+            with self._stream:
+                self._stream.begin_capture()
+                self._tick(kind)
+                gr = self._graphs[kind] = self._stream.end_capture()
+        if graph and gr is not None:
+            gr.launch(self._stream)
+        else:
+            with self._stream:
+                self._tick(kind)
+        self.tick += 1
 
     def track_ocean_heat_transport(self):
         """Sum the ocean currents' heat convergence per cell from now on (Ocean.track_heat_transport); the captured step

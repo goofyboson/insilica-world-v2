@@ -97,7 +97,8 @@ and do the arithmetic in 32-bit, then measure again against these numbers.
 | 2026-11-02 | Baseline | 19ee5b0 | 8.89 ms | 1.00 | — |
 | 2026-11-03 | Lever 1: column computed once where it repeated, compiled for its layer count (`air_column` 3.28 → 2.50 ms) | 24afdb8 | 8.19 ms | 1.09 | yes: 8 presets |
 | 2026-11-03 | Mixed precision (SPEC #106): column transcendentals and capacity in 32-bit (2.50 → 1.08 ms), transport stencil in 32-bit (2.30 → 1.69 ms) | f141497 | 6.09 ms | 1.46 | no: measured below; 64-bit reference still identical |
-| 2026-11-03 | Lever 2: every tracer in the same launches (rows tracer × layer), each 3rd-order edge flux once per edge (was 8 evaluations per edge, now 3) (transport 1.69 → 0.95 ms) | (this) | 5.37 ms | 1.66 | yes: 8 presets, both precisions |
+| 2026-11-03 | Lever 2: every tracer in the same launches (rows tracer × layer), each 3rd-order edge flux once per edge (was 8 evaluations per edge, now 3) (transport 1.69 → 0.95 ms) | 7b5ca7d | 5.37 ms | 1.66 | yes: 8 presets, both precisions |
+| 2026-11-03 | Lever 3: the fast sub-step's mass and linear-potential passes in one kernel (`af_mu` + `af_phi` → `af_muphi`, 8 launches fewer per step) | (this) | 5.28 ms | 1.68 | yes: 8 presets, both precisions |
 
 ### Mixed precision (2026-11-03, SPEC #106)
 
@@ -140,3 +141,28 @@ per column, four `exp` each), the deep plume 0.43 ms, the middle layer's spread 
 some columns gains nothing (a warp waits for its slowest column), so the next gains change results: fewer or cheaper
 capacity evaluations, or 32-bit transcendentals (the whole column was 0.68 ms in the 32-bit trial). Those belong with V2-7's
 mixed-precision decision.
+
+### Levers 2–4 notes (2026-11-03)
+
+**Suite at lever 2 (7b5ca7d, mixed precision):** 41 of 42 with PERF, ICE the known failure (a started polar sheet now
+−148 kg/m² a year against −183 in 64-bit; the limit is 50). PERF: air n = 6 29.3 ms per model hour (337 model years per
+day) against 39.6 at the stage's start.
+
+**Lever 3** stopped at one fusion: what is left in air dynamics is memory traffic, not launches or 64-bit arithmetic.
+`lay_slow` (0.77 ms, the PV flux's ten-neighbour gathers) was tried in 32-bit (0.79 → 0.77 ms, reverted); the other kernels
+are under 0.32 ms each.
+
+**Lever 4, ensembles** (`insilica.ensemble.Ensemble`): each member keeps its own stream and captured graph, and the ensemble
+queues every member's tick before waiting. Members are identical to single runs (REPRO now checks three).
+
+| `earth` n = 4 | Per member step | Model years per day, all members |
+|---|---|---|
+| 1 world | 1.10 ms | 4,480 |
+| 4 | 0.47 ms | 10,563 |
+| 8 | 0.39 ms | 12,504 |
+| 16 | 0.38 ms | 12,871 |
+| 32 | 0.38 ms | 12,936 |
+
+×2.9 at 8 or more members, short of the ×10 target: the target assumed one n = 4 world left the GPU about 90% idle, but
+it leaves it about two-thirds idle. At 8 members the GPU is full: 0.38 ms per member is the same work per cell as n = 6
+(5.28 ms for 16× the cells). Capturing a day of ticks per graph (fewer host launches) changed nothing and was removed.

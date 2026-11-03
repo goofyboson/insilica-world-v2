@@ -134,29 +134,28 @@ extern "C" __global__ void air_stiff(int N, int L, const real* h, const real* th
 // mu_k <- mu_k - tau div(h_e,k u_k), h_e,k the stage's edge thickness; then u_k <- u_k + tau (-grad Phi*_k + T_k), with
 // Phi* from the forward-weighted masses mu + gamma (mu - mu_prev) (divergence damping of every layer, #28) and T_k the
 // stage's full slow tendency T'_k + G. acc sums the winds the mass steps used.
-extern "C" __global__ void af_mu(int N, int E, const real* hedge, const real* uf, const int* cellEdge, const signed char* cellSign,
-                                 const real* le, const real* areaCell, real tau, real* mu, real* mu_prev) {
-  LOOP(i, N)
-  const real* hl = hedge + (size_t)l * E;
-  const real* ul = uf + (size_t)l * E;
-  const size_t o = (size_t)l * N + i;
-  mu_prev[o] = mu[o];
-  real div = 0;
-  for (int m = 0; m < 6; m++) {
-    const int e = cellEdge[i * 6 + m];
-    if (e < 0) break;
-    div += (real)cellSign[i * 6 + m] * le[e] * hl[e] * ul[e];
-  }
-  mu[o] = mu[o] - tau * div / areaCell[i];
-}
-
-extern "C" __global__ void af_phi(int N, int L, const real* mu, const real* mu_prev, real gamma, const real* S, real* phi) {
+// The mass step of every layer, then the forward-weighted linear potential Phi*, one thread per column (V2-5: one pass).
+extern "C" __global__ void af_muphi(int N, int E, int L, const real* hedge, const real* uf, const int* cellEdge, const signed char* cellSign,
+                                    const real* le, const real* areaCell, real tau, real* mu, real* mu_prev, real gamma, const real* S,
+                                    real* phi) {
   LOOP1(i, N)
   real P[LMAX];
   real a = 0;
   for (int k = 0; k < L; k++) {
+    const real* hl = hedge + (size_t)k * E;
+    const real* ul = uf + (size_t)k * E;
     const size_t o = (size_t)k * N + i;
-    a += mu[o] + gamma * (mu[o] - mu_prev[o]);
+    const real m0 = mu[o];
+    mu_prev[o] = m0;
+    real div = 0;
+    for (int m = 0; m < 6; m++) {
+      const int e = cellEdge[i * 6 + m];
+      if (e < 0) break;
+      div += (real)cellSign[i * 6 + m] * le[e] * hl[e] * ul[e];
+    }
+    const real m1 = m0 - tau * div / areaCell[i];
+    mu[o] = m1;
+    a += m1 + gamma * (m1 - m0);
     P[k] = a;
   }
   real ph = 0;

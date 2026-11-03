@@ -76,7 +76,7 @@ class Layers:
         k = lambda n, f='layers.cu': dg.kernel(n, f)
         self.k = {n: k(n) for n in ('lay_eta', 'lay_ubar', 'lay_bern', 'air_bern', 'air_gfast', 'lay_slow', 'bt_eta', 'bt_u', 'lay_flux', 'lay_scale',
                                     'lay_limit', 'lay_h', 'lay_u', 'xch_cell', 'xch_edge', 'lay_vmix', 'vmix_heat', 'lay_edge_hq',
-                                    'air_stiff', 'af_mu', 'af_phi', 'af_u', 'af_flux', 'lay_mask')}
+                                    'air_stiff', 'af_muphi', 'af_u', 'af_flux', 'lay_mask')}
         self.k['swe_vertex'] = k('swe_vertex', 'fused.cu')
         self.k.update({n: k(n, 'trisk.cu') for n in ('cell_div', 'vertex_curl', 'edge_lap')})
         self.dmin = float(np.min(dg.host.de))
@@ -142,8 +142,8 @@ class Layers:
             cp.copyto(self.uf, u0)
             self.accL.fill(0)
             for _ in range(n):
-                k['af_mu'](*cL, (N, E, self.hedge, self.uf, g.cellEdge, g.cellSign, g.le, g.areaCell, tau, self.muf, self.mup))
-                k['af_phi'](*c1, (N, i32(L), self.muf, self.mup, R(self.div_damp), self.S, self.phi))
+                k['af_muphi'](*c1, (N, E, i32(L), self.hedge, self.uf, g.cellEdge, g.cellSign, g.le, g.areaCell, tau, self.muf, self.mup,
+                                    R(self.div_damp), self.S, self.phi))
                 k['af_u'](*eL, (N, E, self.phi, self.Tp, self.G, g.eI, g.eJ, g.de, tau, self.uf, self.accL))
             k['af_flux'](*eL, (E, self.hedge, self.accL, R(1.0 / n), self.F))
             k['lay_scale'](*cL, (N, E, h0, self.F, g.cellEdgeAsc, g.eI, g.le, g.areaCell, R(c * dt), R(self.floor), self.scale))

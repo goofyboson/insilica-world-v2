@@ -381,5 +381,23 @@ def check():
                   f'{r["dn"][b, -1]:7.2f} {dn[b, -1]:7.2f}')
 
 
+PACKAGED = lbl.ROOT / 'src' / 'insilica' / 'data' / 'lw_ktables.npz'
+
+
+def export():
+    """The fitted tables as the model reads them (src/insilica/data/lw_ktables.npz): log k per component as
+    (comp, P, T, g) float32, each g-point's Planck radiance (W m-2 sr-1) on T_PL (T, g), and the US standard ozone
+    profile on the table's pressures."""
+    t = dict(np.load(OUT / 'lw.npz'))
+    gb = np.repeat(np.arange(len(t['ng'])), t['ng'])
+    pg = np.stack([band_planck(T)[gb] * t['pl'][j] for j, T in enumerate(T_PL)])
+    P = afgl.profile('us_standard')
+    o3 = np.interp(-np.log(P_TAB), -np.log(P['p']), P['vmr']['O3'])
+    np.savez_compressed(PACKAGED, logk=np.log(np.maximum(t['K'], 1e-40)).transpose(0, 2, 3, 1).astype(np.float32),
+                        planck=pg.astype(np.float32), P=P_TAB, T=T_TAB, T_pl=T_PL, o3=o3.astype(np.float32),
+                        bands=np.array(BANDS), ng=np.array(NG), comps=t['comps'])
+    print(PACKAGED, PACKAGED.stat().st_size, 'bytes')
+
+
 if __name__ == '__main__':
-    {'map': build_map, 'tables': build_tables, 'fit': fit, 'check': check, 'sweep': sweep}[sys.argv[1]]()
+    {'map': build_map, 'tables': build_tables, 'fit': fit, 'check': check, 'sweep': sweep, 'export': export}[sys.argv[1]]()

@@ -56,9 +56,10 @@ def annual_mean_insolation(lat, S0=1361.0, tilt=TILT, days=365):
 
 
 class AirPhysics:
-    def __init__(self, dg, layers, params=None, mean_sun=False, forcing='radiation'):
+    def __init__(self, dg, layers, params=None, mean_sun=False, forcing='radiation', longwave='gray'):
         """forcing: 'radiation' (v1's sun, gray infrared and a slab surface) or 'held_suarez' (Newtonian relaxation of
-        θ toward Held & Suarez's equilibrium; no surface)."""
+        θ toward Held & Suarez's equilibrium; no surface). longwave: 'gray' (tau0's profile) or 'ktables' (V2-6a,
+        radiation.Longwave, run by radiate())."""
         self.dg, self.L, self.forcing = dg, layers, forcing
         self.p = dict(DEFAULTS, **(params or {}))
         # theta_stars: the interfaces' theta* from the top down, any number (#101); else two layers' or three's
@@ -81,10 +82,19 @@ class AirPhysics:
         self.moist = bool(self.p['moist'])
         self.rain, self.evap, self.conv, self.tsurf = z(N), z(N), z(N), z(N)
         self.dgo = None                     # optional diagnostics array (rows x N; air_column), set by a caller
-        self.cloudo = z(layers + 3, N)     # per layer cover, total cover, cloud effect on sunlight and longwave at the top (W/m²)
+        self.cloudo = z(2 * layers + 3, N)  # per layer cover, total cover, cloud effect on sunlight and longwave at the top (W/m²), per layer in-cloud longwave optical depth (k-tables)
         self.flash = z(N)                  # lightning, flashes/s/m² (#104)
         self.rainp = z(3, N)               # rain by source: condensation above the bottom layer, in it, convection
         self._none = z(1)                                     # q and ice for a dry column (never read)
+        self.lw = None
+        if longwave == 'ktables':
+            from .radiation import Longwave
+            self.lw = Longwave(dg, layers, self.par, **{k: self.p[k] for k in ('co2', 'n2o', 'ch4') if k in self.p})
+
+    def radiate(self, mu, theta, Ts, q=None, cw=None):
+        """The k-tables' longwave from the present state, saved for the column steps until the next call."""
+        if self.lw is not None:
+            self.lw(mu, theta, q, self.cloudo if cw is not None else None, Ts)
 
     def column(self, mu, theta, Ts, u, t, dt, q=None, ice=None, cap=None, qocean=None, qsw=None, land=None, soilcap=None, soil=None, pond=None, snow=None, cw=None, elev=None):
         """Radiation, surface exchange, heating, (moist: evaporation, condensation, sea ice, convection) and the θ*
@@ -105,7 +115,8 @@ class AirPhysics:
                                           self.tsurf, self.rainp, self.dgo if self.dgo is not None else NULL,
                                           cap if cap is not None else NULL, qocean if qocean is not None else NULL,
                                           qsw if qsw is not None else NULL, land if land is not None else NULL,
-                                          soilcap if soilcap is not None else NULL, soil if soil is not None else NULL, pond if pond is not None else NULL, snow if snow is not None else NULL, cw if cw is not None else NULL, self.cloudo if cw is not None else NULL, elev if elev is not None else NULL, self.flash))
+                                          soilcap if soilcap is not None else NULL, soil if soil is not None else NULL, pond if pond is not None else NULL, snow if snow is not None else NULL, cw if cw is not None else NULL, self.cloudo if cw is not None else NULL, elev if elev is not None else NULL, self.flash,
+                                          self.lw.radf if self.lw is not None else NULL))
         k['advance_time']((1,), (1,), (t, R(dt)))
 
 

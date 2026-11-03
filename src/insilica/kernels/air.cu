@@ -527,7 +527,8 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
                                       const real* uabs, real* mu_in, real* theta, real* qv, real* Ts, real* ice, real dt,
                                       real* wx, real* olr, real* sw_abs, real* stored, real* rain, real* evap, real* conv,
                                       real* tsurf, real* rainp, real* dgo, real* cap, real* qocean,
-                                      real* qsw, const real* land, const real* soilcap, real* soil, real* pond, real* snow, real* cloudw, real* cloudo, const real* elev, real* flash) {
+                                      real* qsw, const real* land, const real* soilcap, real* soil, real* pond, real* snow, real* cloudw, real* cloudo, const real* elev, real* flash,
+                                      const real* radf) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= N) return;
 #ifdef NL
@@ -679,6 +680,11 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
       eps[k] = 1 - (1 - eps[k]) * (1 - fc[k] * OMEXP(kl * cwp[k]));
     }
   real ldown = 0;
+  // the k-tables' longwave (V2-6a, lw_column at the last radiation step): rows up, dn, tr at the L + 1 layer edges from the
+  // top, the clear sky's top-of-air flux and transmission; the air's emission as saved, the surface's spread by tr
+  const int RW = L + 1;
+  if (radf) ldown = radf[(size_t)(2 * RW - 1) * N + i];
+  else
   for (int k = 0; k < L; k++) {
     real dn = eps[k] * P.sigma * T[k] * T[k] * T[k] * T[k];
     for (int j = k + 1; j < L; j++) dn -= eps[j] * dn;
@@ -708,6 +714,23 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
 
   // ---- longwave from the emitting surface, up through the layers ----
   real up = P.eps_s * P.sigma * tsk * tsk * tsk * tsk;
+  if (radf) {
+    const real Es = up;
+    #define RF(r, k) radf[(size_t)((r) * RW + (k)) * N + i]
+    for (int k = 0; k < L; k++)                                  // the layer's net longwave: edges' net fluxes, and its share of the surface's
+      Q[k] += (RF(0, k + 1) - RF(1, k + 1)) - (RF(0, k) - RF(1, k)) + (RF(2, k + 1) - RF(2, k)) * Es;
+    up = RF(0, 0) + RF(2, 0) * Es;
+    if (cloudy && cloudo) {
+      real clear = 1;
+      for (int k = 0; k < L; k++) { cloudo[(size_t)k * N + i] = fc[k]; clear *= 1 - fc[k]; }
+      cloudo[(size_t)L * N + i] = 1 - clear;
+      cloudo[(size_t)(L + 1) * N + i] = swS - (I - toAir) * (1 - alb);
+      cloudo[(size_t)(L + 2) * N + i] = radf[(size_t)(3 * RW) * N + i] + radf[(size_t)(3 * RW + 1) * N + i] * Es - up;
+      for (int k = 0; k < L; k++)                                // in-cloud longwave optical depth, for the next radiation step
+        cloudo[(size_t)(L + 3 + k) * N + i] = fc[k] > (real)1e-6 ? (liq[k] * P.k_lw_liq + (1 - liq[k]) * P.k_lw_ice) * cwp[k] : (real)0;
+    }
+    #undef RF
+  } else {
   for (int k = bot; k >= 0; k--) {
     const real a = eps[k] * up;
     Q[k] += a;
@@ -728,6 +751,8 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
     real dn = eps[k] * P.sigma * T[k] * T[k] * T[k] * T[k];
     for (int j = k + 1; j < L; j++) { const real a = eps[j] * dn; Q[j] += a; dn -= a; }
   }
+  }
+  olr[i] = up;
 
   // ---- sensible heat and evaporation into the bottom air ----
   const real H = hs * (tsk - Tsa);
@@ -1055,4 +1080,197 @@ extern "C" __global__ void hs_column(int N, int L, const real* par, const real* 
   for (int k = 0; k < L; k++) { theta[(size_t)k * N + i] = th[k]; E1 += mu[k] * pib[k] * th[k]; }
   qnet[i] = Qs;
   stored[i] = E1 - E0;
+}
+
+// ---- longwave by the k-tables (V2-6a, SPEC #109, #110): one block per column, one thread per g-point ----
+// Each layer is split into NSUB sub-levels (the top layer's from the top at 0.05, 0.2, 0.5 of its depth, the others even);
+// their temperatures follow the layer's theta as the capacity has it: the top layer (L >= 3) isothermal at its mean
+// temperature, a middle layer spread between its edges' theta* (sat_prof), otherwise uniform theta; their vapor at the
+// layer's mean relative humidity (q scaled to each sub-level's saturation); ozone from a profile in pressure, CO2, N2O,
+// CH4 well mixed. Clouds: each layer's cover and water path (the column's own rules), spread through it by mass, mixed
+// with the clear sky in every sub-level. Two-stream, one diffusivity angle (1/1.66), source linear in optical depth.
+// radf rows (each N wide): up and down from the air's emission at the L + 1 layer edges (the surface emitting nothing),
+// tr (the share of the surface's emission reaching each edge), the clear sky's top up flux and transmission.
+#define NSUB 4
+#define NSMAX (NSUB * LMAX)
+#define NCOMP 6
+__device__ __forceinline__ fast lw_through(fast I, fast tau, fast Bn, fast Bf) {
+  const fast x = tau * (fast)1.66, t = (fast)FEXP(-x);
+  const fast lin = x > (fast)1e-3 ? 1 - (1 - t) / x : x * ((fast)0.5 - x / 6);
+  return I * t + Bf * (1 - t) + (Bn - Bf) * lin;
+}
+// The sub-levels' properties for lw_column (one thread per layer of a column): per sub-level s of the column, sub[(s * NV
+// + v) * N + i] for v = edge temperatures (top, bottom), table positions (log p, T), amounts (H2O, CO2, O3, N2O, CH4;
+// molecules / cm^2), H2O's place between its two tables, cloud optical depth and cover.
+#define NV 12
+extern "C" __global__ void lw_setup(int N, int L_in, const real* par, int NP, int NT, real lp0, real dlp, real t0, real dtt,
+                                    const float* o3, int NO3, real o3lp0, real o3dlp, real co2, real n2o, real ch4,
+                                    const real* mu_in, const real* theta, const real* qv, const real* cloudo, float* sub) {
+  const int i = blockIdx.x * blockDim.x + threadIdx.x, k = blockIdx.y;
+  if (i >= N) return;
+#ifdef NL
+  const int L = NL;
+#else
+  const int L = L_in;
+#endif
+  Par P = unpack(par);
+  P.Lm1 = L - 1;
+  #define W(s, v) sub[((size_t)(s) * NV + (v)) * N + i]
+  {
+    real mu[LMAX], th[LMAX], q[LMAX], pb[LMAX], pib[LMAX];
+    for (int j = 0; j < L; j++) {
+      mu[j] = mu_in[(size_t)j * N + i]; th[j] = theta[(size_t)j * N + i]; q[j] = qv ? qv[(size_t)j * N + i] : (real)0;
+    }
+    layer_exner(L, mu, P, pb, pib);
+    const real pt = k ? pb[k - 1] : (real)0, pbk = pb[k];
+    const bool iso = L >= 3 && k == 0;
+    const bool spread = P.sat_prof > 0 && k > 0 && k < L - 1 && th[k] < tstar(k - 1, L, P);
+    const real ea = spread ? tstar(k, L, P) : (real)0, eb = spread ? tstar(k - 1, L, P) : (real)0;
+    const real sh = spread ? edge_shape(ea, eb, th[k]) : (real)0, es = spread ? ES(sh) : (real)0;
+    const real Tiso = pib[k] * th[k] / P.cp;
+    auto Tof = [&](real p) -> real {
+      if (iso) return Tiso;
+      const real m = (pbk - p) / (pbk - pt);
+      const real tn = spread ? ea + (eb - ea) * SPREAD(m, sh, es) : th[k];
+      return tn * FPOW(p / P.p0, P.kappa);
+    };
+    // the layer's cloud: cover and in-cloud longwave optical depth, as the column's last step had them (cloudo)
+    const fast fcl = cloudo ? (fast)cloudo[(size_t)k * N + i] : (fast)0, tcl = cloudo ? (fast)cloudo[(size_t)(L + 3 + k) * N + i] : (fast)0;
+    const real FT[5] = {0, 0.05, 0.2, 0.5, 1}, FE[5] = {0, 0.25, 0.5, 0.75, 1};
+    fast qs[NSUB], qm = 0, uas[NSUB];
+    real pe[NSUB + 1];
+    for (int j = 0; j <= NSUB; j++) pe[j] = pt + (k == 0 ? FT[j] : FE[j]) * (pbk - pt);
+    for (int j = 0; j < NSUB; j++) {
+      const int s = k * NSUB + j;
+      const real a = pe[j], b = pe[j + 1], pm = a > 0 ? (b - a) / log(b / a) : (real)0.5 * b;
+      const real Tm = Tof((real)0.5 * (a + b));
+      W(s, 0) = (float)Tof(a); W(s, 1) = (float)Tof(b);
+      qs[j] = Tm < 160 ? (fast)0 : qsat((fast)Tm, (fast)pm);
+      qm += qs[j] * (fast)((b - a) / (pbk - pt));
+      // table position: log pressure down from the table's top pressure, temperature up from t0
+      fast x = (fast)((lp0 - log(pm)) / dlp), y = (fast)((Tm - t0) / dtt);
+      x = fminf(fmaxf(x, 0.f), (fast)(NP - 1) - 1e-4f); y = fminf(fmaxf(y, 0.f), (fast)(NT - 1) - 1e-4f);
+      W(s, 2) = x; W(s, 3) = y;
+      const fast ua = (fast)((b - a) / (P.grav * 28.9647e-3) * 6.02214076e23 / 1e4);    // air molecules / cm^2
+      fast yo = (fast)((o3lp0 - log(pm)) / o3dlp);
+      yo = fminf(fmaxf(yo, 0.f), (fast)(NO3 - 1) - 1e-4f);
+      const int io = (int)yo;
+      const fast xo3 = o3[io] + (o3[io + 1] - o3[io]) * (yo - (fast)io);
+      W(s, 5) = (float)((fast)co2 * ua); W(s, 6) = (float)(xo3 * ua); W(s, 7) = (float)((fast)n2o * ua); W(s, 8) = (float)((fast)ch4 * ua);
+      W(s, 10) = (float)(tcl * (fast)((b - a) / (pbk - pt))); W(s, 11) = (float)fcl;
+      uas[j] = ua;
+    }
+    for (int j = 0; j < NSUB; j++) {
+      const int s = k * NSUB + j;
+      const fast qj = qm > 0 ? (fast)q[k] * qs[j] / qm : (fast)q[k];
+      const fast x = qj / (1 - qj) * (fast)(28.9647 / 18.01528);                          // H2O volume mixing ratio
+      W(s, 4) = (float)(x * uas[j]);
+      W(s, 9) = (float)(x / (fast)0.04);
+    }
+  }
+  #undef W
+}
+
+extern "C" __global__ void lw_column(int N, int L_in, const real* par, int NG, const float* lk, const float* pg,
+                                     int NP, int NT, int NTP, real tp0,
+                                     const float* sub, const real* Ts, real* radf) {
+  const int i = blockIdx.x, g = threadIdx.x;
+#ifdef NL
+  const int L = NL;
+#else
+  const int L = L_in;
+#endif
+  __shared__ fast su[NSMAX][NCOMP - 1], sfh[NSMAX], sfp[NSMAX], sft[NSMAX], sTt[NSMAX], sTb[NSMAX], stc[NSMAX], sfc[NSMAX];
+  __shared__ int sip[NSMAX], sit[NSMAX];
+  __shared__ float red[3 * (LMAX + 1) + 3][256];             // per g-point (32-bit), summed in 64-bit
+  __shared__ real sums[3 * (LMAX + 1) + 3];
+  if (g < NSUB * L) {                             // the column's sub-levels, from lw_setup
+    const int s = g;
+    #define R_(v) sub[((size_t)s * NV + (v)) * N + i]
+    sTt[s] = R_(0); sTb[s] = R_(1);
+    const fast x = R_(2), y = R_(3);
+    sip[s] = (int)x; sfp[s] = x - (fast)sip[s]; sit[s] = (int)y; sft[s] = y - (fast)sit[s];
+    for (int c = 0; c < NCOMP - 1; c++) su[s][c] = R_(4 + c);
+    sfh[s] = R_(9); stc[s] = R_(10); sfc[s] = R_(11);
+    #undef R_
+  }
+  __syncthreads();
+  const int NS = NSUB * L;
+  const int RW = L + 1, rows = 3 * RW + 3;
+  if (g < NG) {
+    // the g-point's optical depth per sub-level: bilinear in (log p, T) of each component's log k
+    fast tau[NSMAX];
+    const size_t cs = (size_t)NP * NT * NG;
+    for (int s = 0; s < NS; s++) {
+      const size_t b0 = ((size_t)sip[s] * NT + sit[s]) * NG + g;
+      const fast fp = sfp[s], ft = sft[s];
+      fast lkc[NCOMP];
+      for (int c = 0; c < NCOMP; c++) {
+        const float* K = lk + c * cs + b0;
+        const fast v00 = K[0], v01 = K[NG], v10 = K[(size_t)NT * NG], v11 = K[(size_t)NT * NG + NG];
+        lkc[c] = (fast)FEXP(v00 + (v10 - v00) * fp + (v01 - v00) * ft + (v00 - v01 - v10 + v11) * fp * ft);
+      }
+      tau[s] = su[s][0] * (lkc[0] + (lkc[1] - lkc[0]) * sfh[s]) + su[s][1] * lkc[2] + su[s][2] * lkc[3] +
+               su[s][3] * lkc[4] + su[s][4] * lkc[5];
+    }
+    auto Bof = [&](fast T) -> fast {
+      fast y = T - (fast)tp0;
+      y = fminf(fmaxf(y, 0.f), (fast)(NTP - 1) - 1e-4f);
+      const int j = (int)y;
+      return pg[(size_t)j * NG + g] + (pg[(size_t)(j + 1) * NG + g] - pg[(size_t)j * NG + g]) * (y - (fast)j);
+    };
+    const fast PIf = (fast)PI_;
+    // down from the top; a layer's cloud fills the same share of every one of its sub-levels (overlapped within the layer,
+    // at random between layers), so the clear and the cloudy part pass the layer separately and mix at its lower edge
+    fast I = 0;
+    red[RW][g] = 0;
+    for (int k = 0; k < L; k++) {
+      const fast f = sfc[k * NSUB];
+      fast Ic = I, Id = I;
+      for (int s = k * NSUB; s < (k + 1) * NSUB; s++) {
+        const fast Bt = Bof(sTt[s]), Bb = Bof(sTb[s]);
+        Ic = lw_through(Ic, tau[s], Bb, Bt);
+        if (f > 0) Id = lw_through(Id, tau[s] + stc[s] / (fast)1.66, Bb, Bt);
+      }
+      I = f > 0 ? (1 - f) * Ic + f * Id : Ic;
+      red[RW + k + 1][g] = PIf * I;
+    }
+    // up: the air's emission over a surface emitting nothing, the surface's transmission, and both in clear sky
+    const fast Bs = Bof((fast)Ts[i]);
+    fast Iu = 0, tr = 1, Iuc = 0, trc = 1;
+    red[L][g] = 0; red[2 * RW + L][g] = Bs;
+    for (int k = L - 1; k >= 0; k--) {
+      const fast f = sfc[k * NSUB];
+      fast Ic = Iu, Id = Iu, tc = tr, td = tr;
+      for (int s = (k + 1) * NSUB - 1; s >= k * NSUB; s--) {
+        const fast Bt = Bof(sTt[s]), Bb = Bof(sTb[s]);
+        const fast t1 = (fast)FEXP(-tau[s] * (fast)1.66);
+        Iuc = lw_through(Iuc, tau[s], Bt, Bb);
+        trc *= t1;
+        Ic = lw_through(Ic, tau[s], Bt, Bb);
+        tc *= t1;
+        if (f > 0) {
+          Id = lw_through(Id, tau[s] + stc[s] / (fast)1.66, Bt, Bb);
+          td *= t1 * (fast)FEXP(-stc[s]);
+        }
+      }
+      Iu = f > 0 ? (1 - f) * Ic + f * Id : Ic;
+      tr = f > 0 ? (1 - f) * tc + f * td : tc;
+      red[k][g] = PIf * Iu; red[2 * RW + k][g] = tr * Bs;
+    }
+    red[3 * RW][g] = PIf * Iuc; red[3 * RW + 1][g] = trc * Bs; red[3 * RW + 2][g] = Bs;
+  }
+  __syncthreads();
+  if (g < rows) {                                 // sums over the g-points in a fixed order
+    real sum = 0;
+    for (int j = 0; j < NG; j++) sum += (real)red[g][j];
+    sums[g] = sum;
+  }
+  __syncthreads();
+  if (g < rows) {
+    const real Bsum = sums[3 * RW + 2];
+    real v = sums[g];
+    if ((g >= 2 * RW && g < 3 * RW) || g == 3 * RW + 1) v /= Bsum;     // shares of the surface's emission
+    radf[(size_t)g * N + i] = v;
+  }
 }

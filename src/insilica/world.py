@@ -95,7 +95,10 @@ class World:
             phys = dict(self.air.get('physics', {}), floor_=floor, **P.get('physics', {}))
             phys = {k: (v(self.grid) if callable(v) else v) for k, v in phys.items()}     # e.g. θ* from the case
             self.physics = AirPhysics(self.dg, self.L, phys, mean_sun=P.get('mean_sun', self.air.get('mean_sun', False)),
-                                      forcing=self.air.get('forcing', 'radiation'))
+                                      forcing=self.air.get('forcing', 'radiation'),
+                                      longwave=P.get('longwave', self.air.get('longwave', 'gray')))
+            # radiation steps (V2-6a): the k-tables' longwave every rad_dt s (an hour), and on the first tick
+            self.rad_every = max(1, int(round(P.get('rad_dt', self.air.get('rad_dt', 3600.0)) / self.dt)))
             self.theta = cp.asarray(np.asarray(extra['theta'], dtype=float))
             self.Ts = cp.asarray(np.asarray(extra['Ts'], dtype=float))
             self.time = cp.zeros(1)
@@ -151,7 +154,8 @@ class World:
         self._Fm, self._M1 = cp.zeros_like(self.u), cp.zeros_like(self.M)
         # A blocking stream: work on it orders with the default stream, so reads after step() see the results.
         self._stream = cp.cuda.Stream(non_blocking=False)
-        self._graphs, self._tick0 = {}, 0                 # one captured graph per kind of tick (air; + ocean; + mixing)
+        self._graphs, self._tick0 = {}, 0                 # one captured graph per kind of tick (air; + ocean; + mixing; + radiation)
+        self._rad0 = 0                                    # the tick radiation steps count from (the first after a build or load)
         self.recorder = None
 
     STATE = ('h', 'u', 'M', 'psi')
@@ -169,7 +173,10 @@ class World:
             return 0
         return 2 if (tick + 1) % (self.ocean_every * self.sea.mix_every) == 0 else 1
 
-    def _tick(self, kind=0):
+    def _radiates(self, tick):
+        return self.air and self.physics.lw is not None and (tick - self._rad0) % self.rad_every == 0
+
+    def _tick(self, kind=0, rad=False):
         """One tick's kernels, on fixed buffers (no allocation), so the sequence can be captured as a graph:
         the layers' dynamics, transport of the tracer (and θ), then for air the column physics and the θ* crossings."""
         rec = self.recorder                                   # the ocean's forcing being recorded (spinup.Recorder)
@@ -194,6 +201,9 @@ class World:
             self.core.k['vmix_heat'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.sea.diss, g.cellEdge, g.le, g.de,
                                                        g.areaCell, R(GRAV), R(CP_DRY), R(KAPPA), R(P0), self.theta))
         if self.air:
+            if rad:
+                self.physics.radiate(self.h, self.theta, self.Ts, q=self.q if self.moist else None,
+                                     cw=self.cw if self.moist else None)
             if rec:
                 rec.pre_column()
             self.physics.column(self.h, self.theta, self.Ts, self.u, self.time, self.dt,
@@ -227,18 +237,18 @@ class World:
 
     def launch_tick(self, graph=True):
         """Queue one tick on this world's stream without waiting for it (step() and Ensemble.step() call this)."""
-        kind = self._kind(self.tick)
+        kind = (self._kind(self.tick), self._radiates(self.tick))
         gr = self._graphs.get(kind)
         if graph and gr is None and self.tick > self._tick0:
             with self._stream:
                 self._stream.begin_capture()
-                self._tick(kind)
+                self._tick(*kind)
                 gr = self._graphs[kind] = self._stream.end_capture()
         if graph and gr is not None:
             gr.launch(self._stream)
         else:
             with self._stream:
-                self._tick(kind)
+                self._tick(*kind)
         self.tick += 1
 
     def set_recorder(self, rec):
@@ -418,5 +428,5 @@ class World:
             getattr(w, k)[...] = cp.asarray(a)          # into the existing buffers a captured graph uses
         if w.sea is not None:
             w._sync_sea()
-        w.tick = w._tick0 = w._tick_start = meta['tick']
+        w.tick = w._tick0 = w._tick_start = w._rad0 = meta['tick']
         return w

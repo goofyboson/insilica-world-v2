@@ -95,3 +95,23 @@ and do the arithmetic in 32-bit, then measure again against these numbers.
 | Date | Change | Commit | n = 6 per step | ×baseline | Identical? |
 |---|---|---|---|---|---|
 | 2026-11-02 | Baseline | 19ee5b0 | 8.89 ms | 1.00 | — |
+| 2026-11-03 | Lever 1: column computed once where it repeated, compiled for its layer count (`air_column` 3.28 → 2.50 ms) | (this) | 8.19 ms | 1.09 | yes: 8 presets |
+
+### Lever 1 notes (2026-11-03)
+
+Identical by state hash after 3 days at n = 4 of `earth`, `earth` with `bl_mix`, `aqua`, `aqua5`, `continent`,
+`held_suarez` (2 layers), `rce` and `aqua_dry`. Changes, each reusing a value computed again from the same inputs by the
+same expression (`--fmad=false` keeps rewritten code's rounding the same):
+
+| Change | `air_column` at n = 6 |
+|---|---|
+| Before | 3.28 ms |
+| Capacity nodes' (p/p0)^κ once per step (were 3× per layer); plume's Exner from its parcel, its entrainment and expm1(s) per layer, not per sub-level; crossing's edge shape once per layer (was up to 3×); Tsa's power from `layer_exner` | 2.61 ms |
+| Compiled for the world's layer count (`-DNL=L`): local memory 3,088 → 1,344 bytes per thread | 2.50 ms |
+
+Short of the ≤ 1.5 ms target. What is left is 64-bit arithmetic, not memory: 254 registers, and the 4070 has 2 FP64 units
+per SM. Switching pieces off (timing only) shows where it goes: clouds about 0.95 ms (about ten layer-capacity evaluations
+per column, four `exp` each), the deep plume 0.43 ms, the middle layer's spread capacity 0.3 ms. Skipping a repeat in only
+some columns gains nothing (a warp waits for its slowest column), so the next gains change results: fewer or cheaper
+capacity evaluations, or 32-bit transcendentals (the whole column was 0.68 ms in the 32-bit trial). Those belong with V2-7's
+mixed-precision decision.

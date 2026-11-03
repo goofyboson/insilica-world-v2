@@ -30,9 +30,10 @@ def source_hash():
 
 
 @lru_cache(maxsize=None)
-def module(name, real='double'):
-    """Compiled RawModule for kernels/<name>, with REAL = double (engine) or float (speed probe)."""
-    return cp.RawModule(code=kernel_source(name), options=NVRTC_OPTIONS + (f'-DREAL={real}',))
+def module(name, real='double', defines=()):
+    """Compiled RawModule for kernels/<name>, with REAL = double (engine) or float (speed probe), and any further
+    -D defines (e.g. the air column's layer count, so its arrays fit in registers; V2-5)."""
+    return cp.RawModule(code=kernel_source(name), options=NVRTC_OPTIONS + (f'-DREAL={real}',) + tuple(defines))
 
 
 def grid_dims(n, layers=1):
@@ -61,8 +62,8 @@ class DeviceGrid:
         self.d2idx = cp.asarray(idx)
         self.d2wt = cp.asarray(wt.astype(self.dtype))
 
-    def kernel(self, name, file='trisk.cu'):
-        return module(file, self.real).get_function(name)
+    def kernel(self, name, file='trisk.cu', defines=()):
+        return module(file, self.real, tuple(defines)).get_function(name)
 
 
 def d2_stencil(g):

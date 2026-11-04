@@ -43,6 +43,18 @@ physics, not tuned constants. SPEC #109.
   in every sub-level below 1 hPa (0.11–0.44 in the 0.01–1 hPa one); 2×CO₂ forcing within 1.4% at the top and
   tropopause, 4.7% at the surface (tropical).
 
+## Built (model)
+
+- The k-table longwave and shortwave in the model on 4 sub-levels per layer (#110, #111), every hour; the layers at the
+  standard lapse rate, the top one isothermal; clouds in the sub-level holding their layer's vapor median.
+- The stratosphere is the top air layer, above θ* = 380 K: freeze-dried at the cold point, its vapor well mixed, heated by
+  ozone's sunlight; no fourth layer (7 layers changed nothing in the clear sky, #111).
+- `earth`'s moist physics, each departure from real physics found under the k-tables and fixed as a setting (#112): the
+  380 K crossing by the middle layer's top-edge heating, the surface air's vapor (`q_shape`), freeze-drying, edge vapor
+  across interfaces, plumes rooted in the surface air, entraining 0.1 per 100 hPa, their rain evaporating below the base.
+  `earth` n = 4, 8 years: the tropical troposphere within 1–3 K of observed; clear-sky OLR 267; too little low cloud
+  (surface sunlight +11%), rain 4.2 mm/day against about 2.7 — the boundary layer's physics, V2-6b.
+
 ## Tests
 
 | Test | Against | Limit (proposed) |
@@ -50,7 +62,7 @@ physics, not tuned constants. SPEC #109.
 | k-tables against line-by-line, US standard, tropical and subarctic-winter columns (and three unfitted) | the tool's line-by-line | OLR and surface downward longwave within 1%, heating within 0.2 K/day per sub-level below 1 hPa (#110) |
 | CO₂ doubling, instantaneous TOA and tropopause forcing, US standard column | published line-by-line results (Collins et al. 2006, RTMIP) | within 10% |
 | The line-by-line tool, US standard in their line shape (#110) | Wijngaarden & Happer (2020): OLR 277, 2×CO₂ 3.0 (top) and 5.5 (tropopause) W/m² | OLR within 2%, forcing within 10% |
-| `earth` global energy budget, all-sky and clear-sky | measured (Wild et al. 2013 and CERES EBAF): absorbed sunlight 240, OLR 239, clear-sky OLR 266, surface downward longwave 342, surface absorbed sunlight 161 W/m² | within 5% each |
+| EARTH: `earth` global energy budget, all-sky and clear-sky (year 9, n = 4) | measured (Wild et al. 2013 and CERES EBAF): absorbed sunlight 240, OLR 239, clear-sky OLR 266, surface downward longwave 342, surface absorbed sunlight 161 W/m² | within 5% each; a known failure to V2-6b (#112) |
 | Budgets | CONSERVE's | unchanged (≤ 1e-13) |
 
 Retired: `tau0`, `tau_lin`, `lw_w0`, `asw`, `sw_tau` (kept only for the gray test cases RCE and Held–Suarez, which are

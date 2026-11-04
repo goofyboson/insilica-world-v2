@@ -132,3 +132,39 @@ def test_longwave(record):
            f'kernels against NumPy {kern:.1e} of the surface down (64 columns, {clouds * 100:.0f}% of layers cloudy)',
            'OLR, surface down ≤ 1%; heating ≤ 0.2 K/day; forcing ≤ 10%; kernels ≤ 1e-4', ok)
     assert ok
+
+
+EARTH_SPIN_YEARS = 8                             # the k-tables' earth settles to within a few W/m² by 8 years (#112)
+EARTH_BUDGET = dict(sun=240.0, olr=239.0, olrc=266.0, lwdn=342.0, sws=161.0)   # Wild et al. 2013, CERES EBAF (W/m²)
+
+
+@pytest.mark.xdist_group('grid4')
+def test_earth_budget(record):
+    """EARTH earth's global energy budget with the k-tables, all-sky and clear-sky, against measured (V2-6a, SPEC #109, #112)"""
+    from insilica import runcache
+    w0 = World(4, 'earth')
+    year = int(round(365 * 86400 / w0.dt))
+    w = runcache.spun_up('earth-n4', lambda: World(4, 'earth'), EARTH_SPIN_YEARS * year)[0]
+    L, RW = w.L, w.L + 1
+    a = cp.asarray(w.grid.areaCell / w.grid.areaCell.sum())
+    acc = {k: cp.zeros(()) for k in EARTH_BUDGET}
+    day = int(round(86400 / w.dt))
+    S = 365 * 4                                  # four samples a day over the ninth year
+    for _ in range(S):
+        w.step(day // 4)
+        p, co = w.physics, w.physics.cloudo
+        f = p.sw.swf
+        acc['sun'] += a @ p.sw_abs
+        acc['olr'] += a @ p.olr
+        acc['olrc'] += a @ (p.olr + co[L + 2])
+        acc['lwdn'] += a @ p.lw.radf[2 * RW - 1]
+        acc['sws'] += a @ (p.sw_abs * f[L] / cp.maximum(f[:L + 1].sum(0), 1e-30))
+    m = {k: float(v) / S for k, v in acc.items()}
+    err = {k: m[k] / EARTH_BUDGET[k] - 1 for k in m}
+    names = dict(sun='absorbed sunlight', olr='OLR', olrc='clear-sky OLR', lwdn='surface longwave down', sws='surface sunlight')
+    ok = all(abs(e) <= 0.05 for e in err.values())
+    # known failure (#112, owner): too little low cloud lets too much sunlight reach the surface until V2-6b's boundary layer
+    record('EARTH', f'n = 4, year {EARTH_SPIN_YEARS + 1}: ' + '; '.join(f'{names[k]} {m[k]:.1f} against {EARTH_BUDGET[k]:.0f} ({err[k] * 100:+.1f}%)' for k in m)
+           + f'; net {m["sun"] - m["olr"]:+.1f}' + ('' if ok else ' — known failure to V2-6b (#112)'),
+           'each within 5%', ok)
+    assert ok

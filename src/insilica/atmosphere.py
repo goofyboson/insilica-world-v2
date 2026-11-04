@@ -90,7 +90,7 @@ class AirPhysics:
         if longwave == 'ktables':                     # (with the k-tables' shortwave)
             from .radiation import Longwave, Shortwave
             self.lw = Longwave(dg, layers, self.par, **{k: self.p[k] for k in ('co2', 'n2o', 'ch4') if k in self.p})
-            self.sw = Shortwave(dg, layers, self.par, self.lw)
+            self.sw = Shortwave(dg, layers, self.par, self.lw, **({'inhom': self.p['cloud_inhom']} if 'cloud_inhom' in self.p else {}))
             self.swalb = cp.full(N, self.p['alb'])
 
     def radiate(self, mu, theta, Ts, t, interval, q=None, cw=None):

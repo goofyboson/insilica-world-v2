@@ -1125,9 +1125,8 @@ extern "C" __global__ void hs_column(int N, int L, const real* par, const real* 
 }
 
 // ---- longwave by the k-tables (V2-6a, SPEC #109, #110): one block per column, one thread per g-point ----
-// Each layer is split into NSUB sub-levels (the top layer's from the top at 0.05, 0.2, 0.5 of its depth, the others even);
-// their temperatures follow the layer's theta as the capacity has it: the top layer (L >= 3) isothermal at its mean
-// temperature, a middle layer spread between its edges' theta* (sat_prof), otherwise uniform theta; their vapor at the
+// Each layer is split into NSUB sub-levels (the top layer's from the top at 0.05, 0.2, 0.5 of its depth, the others even),
+// each layer isothermal at its mean temperature (#111); their vapor at the
 // layer's mean relative humidity (q scaled to each sub-level's saturation); ozone from a profile in pressure, CO2, N2O,
 // CH4 well mixed. Clouds: each layer's cover and water path (the column's own rules), spread through it by mass, mixed
 // with the clear sky in every sub-level. Two-stream, one diffusivity angle (1/1.66), source linear in optical depth.
@@ -1169,17 +1168,10 @@ extern "C" __global__ void lw_setup(int N, int L_in, const real* par, int NP, in
     }
     layer_exner(L, mu, P, pb, pib);
     const real pt = k ? pb[k - 1] : (real)0, pbk = pb[k];
-    const bool iso = L >= 3 && k == 0;
-    const bool spread = P.sat_prof > 0 && k > 0 && k < L - 1 && th[k] < tstar(k - 1, L, P);
-    const real ea = spread ? tstar(k, L, P) : (real)0, eb = spread ? tstar(k - 1, L, P) : (real)0;
-    const real sh = spread ? edge_shape(ea, eb, th[k]) : (real)0, es = spread ? ES(sh) : (real)0;
+    // each layer isothermal at its mean temperature (#111: the capacity's theta spread, squeezed into a thin middle layer, made
+    // an inversion whose warm top cooled the layer away)
     const real Tiso = pib[k] * th[k] / P.cp;
-    auto Tof = [&](real p) -> real {
-      if (iso) return Tiso;
-      const real m = (pbk - p) / (pbk - pt);
-      const real tn = spread ? ea + (eb - ea) * SPREAD(m, sh, es) : th[k];
-      return tn * FPOW(p / P.p0, P.kappa);
-    };
+    auto Tof = [&](real) -> real { return Tiso; };
     // the layer's cloud: cover and in-cloud longwave optical depth, as the column's last step had them (cloudo)
     const fast fcl = cloudo ? (fast)cloudo[(size_t)k * N + i] : (fast)0, tcl = cloudo ? (fast)cloudo[(size_t)(L + 3 + k) * N + i] : (fast)0;
     const real FT[5] = {0, 0.05, 0.2, 0.5, 1}, FE[5] = {0, 0.25, 0.5, 0.75, 1};
@@ -1364,7 +1356,7 @@ __device__ void sw_layer(fast tau, fast ssa, fast g, fast mu0, fast& Rd, fast& T
 
 extern "C" __global__ void sw_column(int N, int L_in, const real* par, int NG, const float* lk, int NP, int NT, real yscale,
                                      const float* sun, const float* ray, const float* hzf, const float* cssa,
-                                     real tau550, real hssa, real hg, const float* sub, int mode, const real* t, real interval,
+                                     real tau550, real hssa, real hg, real inhom, const float* sub, int mode, const real* t, real interval,
                                      const real* pos, const real* alb, const real* cloudo, real* swf) {
   const int i = blockIdx.x, g = threadIdx.x;
 #ifdef NL
@@ -1388,7 +1380,7 @@ extern "C" __global__ void sw_column(int N, int L_in, const real* par, int NG, c
     sfh[s] = R_(9); sr[s] = R_(12); sh[s] = R_(13);
     const bool cs = s - k * NSUB == cloud_sub(k, L) && cloudo;
     sfc[s] = cs ? (fast)cloudo[(size_t)k * N + i] : (fast)0;
-    stc[s] = cs ? (fast)cloudo[(size_t)(2 * L + 3 + k) * N + i] : (fast)0;
+    stc[s] = cs ? (fast)(inhom * cloudo[(size_t)(2 * L + 3 + k) * N + i]) : (fast)0;   // uneven within the cell (#111)
     #undef R_
   }
   if (g == 0) {                                   // the sun: the mean of its cosine over the interval's daylight

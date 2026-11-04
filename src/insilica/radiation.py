@@ -47,12 +47,15 @@ SW_DATA = Path(__file__).resolve().parent / 'data' / 'sw_ktables.npz'
 # the clouds' single-scattering albedo per shortwave band (cm-1 ranges of tools/make_swtables.BANDS; estimates for drops of
 # about 10 um: water absorbs strongly from 2.5 um, weakly at 1.2-2.5 um, hardly below; after Slingo 1989's bands)
 CLOUD_SSA = (0.60, 0.75, 0.98, 0.994, 0.9995, 0.9998, 0.99999, 0.99999, 0.99999, 0.99999)
+# clouds are uneven within a cell: a plane-parallel cloud of the mean water path reflects more than the real one; the
+# standard correction scales its optical depth (Cahalan et al. 1994; #111)
+CLOUD_INHOM = 0.7
 
 
 class Shortwave:
-    def __init__(self, dg, layers, par, lw):
+    def __init__(self, dg, layers, par, lw, inhom=CLOUD_INHOM):
         t = np.load(SW_DATA)
-        self.dg, self.L, self.par, self.lwm = dg, layers, par, lw
+        self.dg, self.L, self.par, self.lwm, self.inhom = dg, layers, par, lw, inhom
         self.logk = cp.asarray(np.ascontiguousarray(t['logk']))
         self.NC, self.NP, self.NT, self.NG = self.logk.shape
         f32 = lambda a: cp.asarray(np.asarray(a, np.float32))
@@ -69,5 +72,5 @@ class Shortwave:
         from .gpu import NULL
         self.k((g.N,), (self.block,), (i32(g.N), i32(self.L), self.par, i32(self.NG), self.logk, i32(self.NP), i32(self.NT),
                                         R(self.yscale), self.sun, self.ray, self.hzf, self.cssa, R(self.haze[0]),
-                                        R(self.haze[1]), R(self.haze[2]), self.lwm.sub, i32(mode), t, R(interval), pos, alb,
+                                        R(self.haze[1]), R(self.haze[2]), R(self.inhom), self.lwm.sub, i32(mode), t, R(interval), pos, alb,
                                         cloudo if cloudo is not None else NULL, self.swf))

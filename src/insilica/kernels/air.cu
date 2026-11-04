@@ -423,8 +423,10 @@ __device__ real storm_flashes(real mflux, const real* lt, const Par& P) {
 // interface first; crossing air carries theta* (or its whole layer's theta) and its layer's vapor. Floor air stays on its
 // own side of every interface. wxo[j] (j = 0..L-2) receives the mass moved up across interface j (kg/m^2); gross, if
 // given, the up and down parts at each interface before netting and limiting (gross[2j], gross[2j+1]; diagnostics).
+// dtop, dbot (optional): each layer's heating (as theta) at its top and bottom edge, where the air crosses; the layer's mean
+// dth otherwise (decision #111: the k-tables' sub-levels give the edges their own heating)
 __device__ void crossing(int L, const Par& P, real* mu, real* th, real* q, const real* dth, real dth_up, real* pib,
-                         real* wxo, real* gross = 0, real* cl = 0) {
+                         real* wxo, real* gross = 0, real* cl = 0, const real* dtop = 0, const real* dbot = 0) {
   for (int j = 0; j + 1 < L; j++) wxo[j] = 0;
   if (P.theta_star <= 0) return;                           // theta_star <= 0: no crossing (diagnostics)
   real dmj[LMAX], thcj[LMAX];
@@ -450,16 +452,17 @@ __device__ void crossing(int L, const Par& P, real* mu, real* th, real* q, const
         dm = -fmin(mu[a] * dth[b] * fa, fmax(mu[a] - P.mu_bl, (real)0) * P.bl_cap);
         thc = ts_ - (real)0.5 * dth[b];
       }
-    } else if (dth[b] > 0) {
+    } else if ((dtop ? dtop[b] : dth[b]) > 0) {
+      const real eh = dtop ? dtop[b] : dth[b];              // the heating at b's top edge
       if (th[b] >= ts_) { dm = mu[b] - P.floor_; thc = th[b]; }
-      else if (b == L - 1) dm = mu[b] * dth[b] / (2 * (ts_ - (th[b] - dth[b])));
+      else if (b == L - 1) dm = mu[b] * eh / (2 * (ts_ - (th[b] - dth[b])));
       else {                                                // a middle layer's top edge
         real fa, fb;
         dens(b, fa, fb);
-        dm = mu[b] * dth[b] * fb;
+        dm = mu[b] * eh * fb;
       }
     }
-    const real da = a == 0 ? dth_up : dth[a];
+    const real da = dbot ? dbot[a] : (a == 0 ? dth_up : dth[a]);
     if (da < 0) {
       real down;
       if (th[a] <= ts_) { down = mu[a] - P.floor_; thc = th[a]; }
@@ -608,6 +611,8 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   const real hs = rough * (P.bulk_c > 0 ? P.cp * bulk : P.h_sens * (1 + uabs[i] / P.u0));
 
   // ---- shortwave; the surface's albedo with the ice cover ----
+  real qrad[LMAX], qet[LMAX], qeb[LMAX];                         // k-tables: each layer's radiative heating, and its top and bottom sub-level's (W/m^2)
+  for (int k = 0; k < L; k++) { qrad[k] = 0; qet[k] = 0; qeb[k] = 0; }
   real I;
   if (mode == 0) {
     const real ang = 2 * PI_ * t[0] / P.year_s;
@@ -639,7 +644,12 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   const real toAir = swf ? [&]() { real s = 0; for (int k = 0; k < L; k++) s += swf[(size_t)k * N + i]; return s * I; }()
                          : P.asw * (mt / P.mu_ref) * I;
   if (swf)
-    for (int k = 0; k < L; k++) Q[k] += I * swf[(size_t)k * N + i];
+    for (int k = 0; k < L; k++) {
+      Q[k] += I * swf[(size_t)k * N + i];
+      qrad[k] += I * swf[(size_t)k * N + i];
+      qet[k] += I * swf[(size_t)(L + 2 + 2 * k) * N + i];
+      qeb[k] += I * swf[(size_t)(L + 3 + 2 * k) * N + i];
+    }
   else if (P.sw_tau > 1) {                  // split like the vapor part (s^4) of the longwave profile (decision #59)
     const real ps_ = pb[bot];
     real st = 0;
@@ -722,8 +732,17 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   if (radf) {
     const real Es = up;
     #define RF(r, k) radf[(size_t)((r) * RW + (k)) * N + i]
-    for (int k = 0; k < L; k++)                                  // the layer's net longwave: edges' net fluxes, and its share of the surface's
-      Q[k] += (RF(0, k + 1) - RF(1, k + 1)) - (RF(0, k) - RF(1, k)) + (RF(2, k + 1) - RF(2, k)) * Es;
+    for (int k = 0; k < L; k++) {                                // the layer's net longwave: edges' net fluxes, and its share of the surface's
+      const real ql = (RF(0, k + 1) - RF(1, k + 1)) - (RF(0, k) - RF(1, k)) + (RF(2, k + 1) - RF(2, k)) * Es;
+      Q[k] += ql;
+      // its top and bottom sub-levels' (the levels inside: rows 3 RW + 3 + 6k + {up, dn, tr} below the top sub-level, + 3 above the bottom one)
+      #define RE(r) radf[(size_t)(3 * RW + 3 + 6 * k + (r)) * N + i]
+      const real n1 = RE(0) - RE(1) + RE(2) * Es, n2 = RE(3) - RE(4) + RE(5) * Es;
+      qrad[k] += ql;
+      qet[k] += n1 - ((RF(0, k) - RF(1, k)) + RF(2, k) * Es);
+      qeb[k] += ((RF(0, k + 1) - RF(1, k + 1)) + RF(2, k + 1) * Es) - n2;
+      #undef RE
+    }
     up = RF(0, 0) + RF(2, 0) * Es;
     if (cloudy && cloudo) {
       real clear = 1;
@@ -867,7 +886,22 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   // ---- dry crossing of the interfaces ----
   real wxo[LMAX];
   if (P.bl_mix > 0 && L > 2) P.theta_star = fmin(fmax(ts_base, th[bot]), th[bot - 1] - 1);
-  crossing(L, P, mu, th, q, dth, dth[top], pib, wxo, gross, cloudy ? cl : (real*)0);
+  // the k-tables' sub-levels: the edges' own heating, the layer's mean radiative heating swapped for its edge sub-level's (#111)
+  real dtop[LMAX], dbot[LMAX];
+  if (radf) {
+    real pt_ = 0;
+    for (int k = 0; k < L; k++) {
+      const real pbk = pt_ + P.grav * mu[k], dp = pbk - pt_;
+      const real ft = k == 0 ? (real)0.05 : (real)0.25, fb = k == 0 ? (real)0.5 : (real)0.25;
+      const real pit = P.cp * FPOW((pt_ + 0.5 * ft * dp) / P.p0, P.kappa), pibt = P.cp * FPOW((pbk - 0.5 * fb * dp) / P.p0, P.kappa);
+      const real mean = qrad[k] * dt / (mu[k] * pib[k]);
+      dtop[k] = dth[k] - mean + qet[k] * dt / (ft * mu[k] * pit);
+      dbot[k] = dth[k] - mean + qeb[k] * dt / (fb * mu[k] * pibt);
+      if (k == L - 1 && P.bl_mix > 0) dtop[k] = dbot[k] = dth[k];    // the mixed bottom layer heats evenly
+      pt_ = pbk;
+    }
+  }
+  crossing(L, P, mu, th, q, dth, dth[top], pib, wxo, gross, cloudy ? cl : (real*)0, radf ? dtop : (real*)0, radf ? dbot : (real*)0);
   // the surface's buoyancy flux sets the layer's depth (decision #98): rising, it entrains air from above at bl_ent of that flux across the jump to it
   // (Tennekes 1973); falling, turbulence dies and the layer gives its top back as residual air, at the whole flux, down to a thin night layer
   if (P.bl_mix > 0 && L > 2) {
@@ -1196,8 +1230,8 @@ extern "C" __global__ void lw_column(int N, int L_in, const real* par, int NG, c
 #endif
   __shared__ fast su[NSMAX][NCOMP - 1], sfh[NSMAX], sfp[NSMAX], sft[NSMAX], sTt[NSMAX], sTb[NSMAX], stc[NSMAX], sfc[NSMAX];
   __shared__ int sip[NSMAX], sit[NSMAX];
-  __shared__ float red[3 * (LMAX + 1) + 3][256];             // per g-point (32-bit), summed in 64-bit
-  __shared__ real sums[3 * (LMAX + 1) + 3];
+  __shared__ float red[3 * (LMAX + 1) + 3 + 6 * LMAX][144];   // per g-point (32-bit, NG <= 144), summed in 64-bit
+  __shared__ real sums[3 * (LMAX + 1) + 3 + 6 * LMAX];
   if (g < NSUB * L) {                             // the column's sub-levels, from lw_setup
     const int s = g;
     #define R_(v) sub[((size_t)s * NV + (v)) * N + i]
@@ -1210,7 +1244,7 @@ extern "C" __global__ void lw_column(int N, int L_in, const real* par, int NG, c
   }
   __syncthreads();
   const int NS = NSUB * L;
-  const int RW = L + 1, rows = 3 * RW + 3;
+  const int RW = L + 1, E0 = 3 * RW + 3, rows = E0 + 6 * L;
   if (g < NG) {
     // the g-point's optical depth per sub-level: bilinear in (log p, T) of each component's log k
     fast tau[NSMAX];
@@ -1245,6 +1279,9 @@ extern "C" __global__ void lw_column(int N, int L_in, const real* par, int NG, c
         const fast Bt = Bof(sTt[s]), Bb = Bof(sTb[s]);
         Ic = lw_through(Ic, tau[s], Bb, Bt);
         if (f > 0) Id = lw_through(Id, tau[s] + stc[s] / (fast)1.66, Bb, Bt);
+        // the levels below the layer's top sub-level and above its bottom one (the edges' own heating, for the crossing)
+        if (s == k * NSUB) red[E0 + 6 * k + 1][g] = PIf * (f > 0 ? (1 - f) * Ic + f * Id : Ic);
+        if (s == (k + 1) * NSUB - 2) red[E0 + 6 * k + 4][g] = PIf * (f > 0 ? (1 - f) * Ic + f * Id : Ic);
       }
       I = f > 0 ? (1 - f) * Ic + f * Id : Ic;
       red[RW + k + 1][g] = PIf * I;
@@ -1267,6 +1304,11 @@ extern "C" __global__ void lw_column(int N, int L_in, const real* par, int NG, c
           Id = lw_through(Id, tau[s] + stc[s] / (fast)1.66, Bt, Bb);
           td *= t1 * (fast)FEXP(-stc[s]);
         }
+        const int e = s == (k + 1) * NSUB - 1 ? 3 : (s == k * NSUB + 1 ? 0 : -1);
+        if (e >= 0) {
+          red[E0 + 6 * k + e][g] = PIf * (f > 0 ? (1 - f) * Ic + f * Id : Ic);
+          red[E0 + 6 * k + e + 2][g] = (f > 0 ? (1 - f) * tc + f * td : tc) * Bs;
+        }
       }
       Iu = f > 0 ? (1 - f) * Ic + f * Id : Ic;
       tr = f > 0 ? (1 - f) * tc + f * td : tc;
@@ -1284,7 +1326,7 @@ extern "C" __global__ void lw_column(int N, int L_in, const real* par, int NG, c
   if (g < rows) {
     const real Bsum = sums[3 * RW + 2];
     real v = sums[g];
-    if ((g >= 2 * RW && g < 3 * RW) || g == 3 * RW + 1) v /= Bsum;     // shares of the surface's emission
+    if ((g >= 2 * RW && g < 3 * RW) || g == 3 * RW + 1 || (g >= E0 && (g - E0) % 3 == 2)) v /= Bsum;   // shares of the surface's emission
     radf[(size_t)g * N + i] = v;
   }
 }
@@ -1333,8 +1375,8 @@ extern "C" __global__ void sw_column(int N, int L_in, const real* par, int NG, c
   __shared__ fast su[NSMAX][7], sfh[NSMAX], sfp[NSMAX], sft[NSMAX], sr[NSMAX], sh[NSMAX], stc[NSMAX], sfc[NSMAX];
   __shared__ int sip[NSMAX], sit[NSMAX];
   __shared__ fast smu;
-  __shared__ float red[LMAX + 2][256];
-  __shared__ real sums[LMAX + 2];
+  __shared__ float red[3 * LMAX + 2][144];
+  __shared__ real sums[3 * LMAX + 2];
   const Par P = unpack(par);
   if (g < NSUB * L) {
     const int s = g, k = s / NSUB;
@@ -1395,7 +1437,7 @@ extern "C" __global__ void sw_column(int N, int L_in, const real* par, int NG, c
       } else { Rd[s] = cRd[s]; Td[s] = cTd[s]; Rs[s] = cRs[s]; Ts[s] = cTs[s]; Tdd[s] = cTdd[s]; }
     }
     // adding: the albedos of what lies below each level, then the fluxes down from the top
-    fast Ad[NSMAX + 1], As[NSMAX + 1];
+    fast Ad[NSMAX + 1], As[NSMAX + 1], etop[LMAX], ebot[LMAX];
     auto add = [&](const fast* Rd, const fast* Td, const fast* Rs, const fast* Ts, const fast* Tdd, fast* absk, fast& surf) -> fast {
       Ad[NS] = a; As[NS] = a;
       for (int s = NS - 1; s >= 0; s--) {
@@ -1412,21 +1454,24 @@ extern "C" __global__ void sw_column(int N, int L_in, const real* par, int NG, c
         Fdir = Fdn;
         const fast n2 = Fdir + Fdif - (Ad[s + 1] * Fdif + As[s + 1] * Fdir);
         absk[s / NSUB] += net - n2;
+        if (s % NSUB == 0) etop[s / NSUB] = net - n2;              // the layers' top and bottom sub-levels (the crossing's edges)
+        if (s % NSUB == NSUB - 1) ebot[s / NSUB] = net - n2;
         net = n2;
       }
       surf = net;
       return As[0];
     };
-    fast absk[LMAX], surf, cabs[LMAX], csurf;
+    fast absk[LMAX], surf, cabs[LMAX], csurf, et[LMAX], eb[LMAX];
     add(Rd, Td, Rs, Ts, Tdd, absk, surf);
+    for (int k = 0; k < L; k++) { et[k] = etop[k]; eb[k] = ebot[k]; }
     const fast crefl = add(cRd, cTd, cRs, cTs, cTdd, cabs, csurf);
     const fast w = sun[g];
-    for (int k = 0; k < L; k++) red[k][g] = w * absk[k];
+    for (int k = 0; k < L; k++) { red[k][g] = w * absk[k]; red[L + 2 + 2 * k][g] = w * et[k]; red[L + 3 + 2 * k][g] = w * eb[k]; }
     red[L][g] = w * surf;
     red[L + 1][g] = w * crefl;
   }
   __syncthreads();
-  if (g < L + 2) {
+  if (g < 3 * L + 2) {
     real sum = 0;
     for (int j = 0; j < NG; j++) sum += (real)red[g][j];
     sums[g] = sum;

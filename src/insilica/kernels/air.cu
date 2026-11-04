@@ -1130,7 +1130,8 @@ extern "C" __global__ void lw_setup(int N, int L_in, const real* par, int NP, in
   {
     real mu[LMAX], th[LMAX], q[LMAX], pb[LMAX], pib[LMAX];
     for (int j = 0; j < L; j++) {
-      mu[j] = mu_in[(size_t)j * N + i]; th[j] = theta[(size_t)j * N + i]; q[j] = qv ? qv[(size_t)j * N + i] : (real)0;
+      mu[j] = mu_in[(size_t)j * N + i]; th[j] = theta[(size_t)j * N + i];
+      q[j] = qv ? fmax(qv[(size_t)j * N + i], (real)0) : (real)0;    // (transport can leave a trace below zero)
     }
     layer_exner(L, mu, P, pb, pib);
     const real pt = k ? pb[k - 1] : (real)0, pbk = pb[k];
@@ -1223,8 +1224,8 @@ extern "C" __global__ void lw_column(int N, int L_in, const real* par, int NG, c
         const fast v00 = K[0], v01 = K[NG], v10 = K[(size_t)NT * NG], v11 = K[(size_t)NT * NG + NG];
         lkc[c] = (fast)FEXP(v00 + (v10 - v00) * fp + (v01 - v00) * ft + (v00 - v01 - v10 + v11) * fp * ft);
       }
-      tau[s] = su[s][0] * (lkc[0] + (lkc[1] - lkc[0]) * sfh[s]) + su[s][1] * lkc[2] + su[s][2] * lkc[3] +
-               su[s][3] * lkc[4] + su[s][4] * lkc[5];
+      tau[s] = fmax((fast)0, su[s][0] * (lkc[0] + (lkc[1] - lkc[0]) * sfh[s]) + su[s][1] * lkc[2] + su[s][2] * lkc[3] +
+                             su[s][3] * lkc[4] + su[s][4] * lkc[5]);
     }
     auto Bof = [&](fast T) -> fast {
       fast y = T - (fast)tp0;
@@ -1377,8 +1378,8 @@ extern "C" __global__ void sw_column(int N, int L_in, const real* par, int NG, c
         const fast v00 = K[0], v01 = K[NG], v10 = K[(size_t)NT * NG], v11 = K[(size_t)NT * NG + NG];
         lkc[c] = (fast)FEXP(v00 + (v10 - v00) * fp + (v01 - v00) * ft + (v00 - v01 - v10 + v11) * fp * ft);
       }
-      const fast tg = su[s][0] * (lkc[0] + (lkc[1] - lkc[0]) * sfh[s]) + su[s][1] * lkc[2] + su[s][2] * lkc[3] +
-                      su[s][3] * lkc[4] + su[s][4] * lkc[5] + su[s][5] * lkc[6];
+      const fast tg = fmax((fast)0, su[s][0] * (lkc[0] + (lkc[1] - lkc[0]) * sfh[s]) + su[s][1] * lkc[2] + su[s][2] * lkc[3] +
+                                    su[s][3] * lkc[4] + su[s][4] * lkc[5] + su[s][5] * lkc[6]);
       const fast tr = ray[g] * sr[s], th = (fast)tau550 * hzf[g] * sh[s];
       const fast tt = tg + tr + th, sc = tr + (fast)hssa * th;
       const fast ssa = tt > 0 ? fmin(sc / tt, (fast)(1 - 1e-6)) : (fast)0, ga = sc > 0 ? (fast)hg * (fast)hssa * th / sc : (fast)0;

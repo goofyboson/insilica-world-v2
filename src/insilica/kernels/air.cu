@@ -912,8 +912,16 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   }
   // (off, #111: with isothermal layers an edge sub-level's temperature is not the edge's, and the middle layer's base, far colder than
   // the air below it, warmed and stopped feeding the bottom layer; kept for a temperature profile continuous across the interfaces)
+  // The 380 K interface alone takes the middle layer's top-edge heating (#112): the layer-mean heating there is a cooling, so the
+  // stratosphere's night cooling moved air down and the day's warming at the edge never moved it back, draining the top layer
   const bool edges = P.edge_heat > 0;
-  crossing(L, P, mu, th, q, dth, dth[top], pib, wxo, gross, cloudy ? cl : (real*)0, edges && radf ? dtop : (real*)0, edges && radf ? dbot : (real*)0);
+  real dtop1[LMAX];
+  if (radf && !edges && L > 1) {
+    for (int k = 0; k < L; k++) dtop1[k] = dth[k];
+    dtop1[1] = dtop[1];
+  }
+  crossing(L, P, mu, th, q, dth, dth[top], pib, wxo, gross, cloudy ? cl : (real*)0,
+           radf ? (edges ? dtop : (L > 1 ? dtop1 : (real*)0)) : (real*)0, edges && radf ? dbot : (real*)0);
   // the surface's buoyancy flux sets the layer's depth (decision #98): rising, it entrains air from above at bl_ent of that flux across the jump to it
   // (Tennekes 1973); falling, turbulence dies and the layer gives its top back as residual air, at the whole flux, down to a thin night layer
   if (P.bl_mix > 0 && L > 2) {

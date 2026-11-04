@@ -12,9 +12,9 @@ HAZE_SCALE = 1500.0                         # m, the haze's scale height (tools/
 
 
 class Longwave:
-    def __init__(self, dg, layers, par, co2=400e-6, n2o=0.32e-6, ch4=1.8e-6):
+    def __init__(self, dg, layers, par, co2=400e-6, n2o=0.32e-6, ch4=1.8e-6, tmode=2):
         t = np.load(DATA)
-        self.dg, self.L, self.par = dg, layers, par
+        self.dg, self.L, self.par, self.tmode = dg, layers, par, int(tmode)
         self.logk = cp.asarray(np.ascontiguousarray(t['logk']))
         self.planck = cp.asarray(np.ascontiguousarray(t['planck']))
         self.o3 = cp.asarray(t['o3'])
@@ -37,7 +37,7 @@ class Longwave:
         self.ks(((g.N + BLOCK - 1) // BLOCK, self.L), (BLOCK,),
                 (i32(g.N), i32(self.L), self.par, i32(self.NP), i32(self.NT), R(self.lp0), R(self.dlp), R(self.t0),
                  R(self.dtt), self.o3, i32(len(self.o3)), R(self.lp0), R(self.dlp), *(R(x) for x in self.gases), mu, theta,
-                 q if q is not None else NULL, cloudo if cloudo is not None else NULL, R(HAZE_SCALE), self.sub))
+                 q if q is not None else NULL, cloudo if cloudo is not None else NULL, R(HAZE_SCALE), i32(self.tmode), self.sub))
         self.k((g.N,), (self.block,), (i32(g.N), i32(self.L), self.par, i32(self.NG), self.logk, self.planck,
                                         i32(self.NP), i32(self.NT), i32(self.planck.shape[0]), R(self.tp0), self.sub, Ts,
                                         self.radf))

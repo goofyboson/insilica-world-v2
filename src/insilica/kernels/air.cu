@@ -901,7 +901,10 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
       pt_ = pbk;
     }
   }
-  crossing(L, P, mu, th, q, dth, dth[top], pib, wxo, gross, cloudy ? cl : (real*)0, radf ? dtop : (real*)0, radf ? dbot : (real*)0);
+  // (off, #111: with isothermal layers an edge sub-level's temperature is not the edge's, and the middle layer's base, far colder than
+  // the air below it, warmed and stopped feeding the bottom layer; kept for a temperature profile continuous across the interfaces)
+  const bool edges = false;
+  crossing(L, P, mu, th, q, dth, dth[top], pib, wxo, gross, cloudy ? cl : (real*)0, edges && radf ? dtop : (real*)0, edges && radf ? dbot : (real*)0);
   // the surface's buoyancy flux sets the layer's depth (decision #98): rising, it entrains air from above at bl_ent of that flux across the jump to it
   // (Tennekes 1973); falling, turbulence dies and the layer gives its top back as residual air, at the whole flux, down to a thin night layer
   if (P.bl_mix > 0 && L > 2) {
@@ -1146,10 +1149,10 @@ __device__ __forceinline__ fast lw_through(fast I, fast tau, fast Bn, fast Bf) {
 // (molecules / cm^2), the haze's share. A layer's cloud sits in one sub-level (CLOUD_SUB: the bottom layer's middle, a
 // middle layer's top, where the plumes' outflow is, the top layer's bottom), so its cover mixes once in each stream.
 #define NV 14
-__device__ __forceinline__ int cloud_sub(int k, int L) { return k == L - 1 ? 1 : (k == 0 ? NSUB - 1 : 0); }
+__device__ __forceinline__ int cloud_sub(int k, int L) { return k == L - 1 ? 1 : (k == 0 ? NSUB - 1 : 1); }
 extern "C" __global__ void lw_setup(int N, int L_in, const real* par, int NP, int NT, real lp0, real dlp, real t0, real dtt,
                                     const float* o3, int NO3, real o3lp0, real o3dlp, real co2, real n2o, real ch4,
-                                    const real* mu_in, const real* theta, const real* qv, const real* cloudo, real hs, float* sub) {
+                                    const real* mu_in, const real* theta, const real* qv, const real* cloudo, real hs, int tmode, float* sub) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x, k = blockIdx.y;
   if (i >= N) return;
 #ifdef NL
@@ -1168,10 +1171,15 @@ extern "C" __global__ void lw_setup(int N, int L_in, const real* par, int NP, in
     }
     layer_exner(L, mu, P, pb, pib);
     const real pt = k ? pb[k - 1] : (real)0, pbk = pb[k];
-    // each layer isothermal at its mean temperature (#111: the capacity's theta spread, squeezed into a thin middle layer, made
-    // an inversion whose warm top cooled the layer away)
+    // temperatures, each keeping the layer's mean temperature (#111; the capacity's theta spread, squeezed into a thin middle
+    // layer, made an inversion whose warm top cooled the layer away): the top layer isothermal; the others, tmode 2, at the
+    // standard lapse rate (T ~ p^n, n = R 6.5 K/km / g = 0.190: on AFGL columns clear-sky OLR and surface down within 4 W/m^2
+    // in 3 layers), tmode 1 at uniform theta (n = kappa), tmode 0 isothermal; vapor at uniform relative humidity by uniform theta
     const real Tiso = pib[k] * th[k] / P.cp;
-    auto Tof = [&](real) -> real { return Tiso; };
+    auto Tad = [&](real p) -> real { return th[k] * FPOW(p / P.p0, P.kappa); };
+    const real nT = tmode == 1 ? P.kappa : (real)0.190;
+    const real Cn = Tiso * (nT + 1) * (pbk - pt) / (pow(pbk, nT + 1) - pow(pt, nT + 1));
+    auto Tof = [&](real p) -> real { return tmode == 0 || (k == 0 && L >= 3) ? Tiso : Cn * FPOW(p, nT); };
     // the layer's cloud: cover and in-cloud longwave optical depth, as the column's last step had them (cloudo)
     const fast fcl = cloudo ? (fast)cloudo[(size_t)k * N + i] : (fast)0, tcl = cloudo ? (fast)cloudo[(size_t)(L + 3 + k) * N + i] : (fast)0;
     const real FT[5] = {0, 0.05, 0.2, 0.5, 1}, FE[5] = {0, 0.25, 0.5, 0.75, 1};
@@ -1183,7 +1191,9 @@ extern "C" __global__ void lw_setup(int N, int L_in, const real* par, int NP, in
       const real a = pe[j], b = pe[j + 1], pm = a > 0 ? (b - a) / log(b / a) : (real)0.5 * b;
       const real Tm = Tof((real)0.5 * (a + b));
       W(s, 0) = (float)Tof(a); W(s, 1) = (float)Tof(b);
-      qs[j] = Tm < 160 ? (fast)0 : qsat((fast)Tm, (fast)pm);
+      // (the top layer's vapor well mixed, as the stratosphere's is)
+      const real Tq = Tad((real)0.5 * (a + b));
+      qs[j] = k == 0 && L >= 3 ? (fast)1 : (Tq < 160 ? (fast)0 : qsat((fast)Tq, (fast)pm));
       qm += qs[j] * (fast)((b - a) / (pbk - pt));
       // table position: log pressure down from the table's top pressure, temperature up from t0
       fast x = (fast)((lp0 - log(pm)) / dlp), y = (fast)((Tm - t0) / dtt);
@@ -1195,10 +1205,21 @@ extern "C" __global__ void lw_setup(int N, int L_in, const real* par, int NP, in
       const int io = (int)yo;
       const fast xo3 = o3[io] + (o3[io + 1] - o3[io]) * (yo - (fast)io);
       W(s, 5) = (float)((fast)co2 * ua); W(s, 6) = (float)(xo3 * ua); W(s, 7) = (float)((fast)n2o * ua); W(s, 8) = (float)((fast)ch4 * ua);
-      W(s, 10) = j == cloud_sub(k, L) ? (float)tcl : 0.f; W(s, 11) = (float)fcl;
+      W(s, 10) = 0.f; W(s, 11) = (float)fcl;
       W(s, 12) = (float)ua;
       W(s, 13) = (float)(FPOW(b / pb[L - 1], (real)8000 / hs) - FPOW(a / pb[L - 1], (real)8000 / hs));
       uas[j] = ua;
+    }
+    // the layer's cloud sits in the sub-level holding the median of its vapor (condensate forms where the vapor is: with
+    // uniform relative humidity, in the layer's warm lower part; #111)
+    {
+      fast cum = 0;
+      int jc = NSUB - 1;
+      for (int j = 0; j < NSUB; j++) {
+        cum += qm > 0 ? qs[j] * (fast)((pe[j + 1] - pe[j]) / (pbk - pt)) / qm : (fast)0.25;
+        if (cum >= (fast)0.5) { jc = j; break; }
+      }
+      W(k * NSUB + jc, 10) = (float)tcl;
     }
     for (int j = 0; j < NSUB; j++) {
       const int s = k * NSUB + j;
@@ -1378,7 +1399,7 @@ extern "C" __global__ void sw_column(int N, int L_in, const real* par, int NG, c
     for (int c = 0; c < 5; c++) su[s][c] = R_(4 + c);
     su[s][5] = (fast)0.2095 * R_(12);                         // O2
     sfh[s] = R_(9); sr[s] = R_(12); sh[s] = R_(13);
-    const bool cs = s - k * NSUB == cloud_sub(k, L) && cloudo;
+    const bool cs = R_(10) > 0 && cloudo;                    // the layer's cloud sub-level (lw_setup's)
     sfc[s] = cs ? (fast)cloudo[(size_t)k * N + i] : (fast)0;
     stc[s] = cs ? (fast)(inhom * cloudo[(size_t)(2 * L + 3 + k) * N + i]) : (fast)0;   // uneven within the cell (#111)
     #undef R_

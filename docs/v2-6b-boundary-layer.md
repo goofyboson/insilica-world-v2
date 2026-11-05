@@ -67,3 +67,22 @@ every edge, land and sea.
 Over the sea the surface air read from the deep bottom layer's mean theta is 2–5 K warmer than the sea (stable 88–97% of the time), so
 the sea's heat exchange falls to 5–8 W/m²/K and the planet warms (Ts +0.5 K a year at year 9). The stability needs the boundary layer
 as its own mixed layer (step 3); `sfc` is re-measured on the four-layer earth.
+
+## Step 3: the four-layer earth (`earth4`, SPEC #115)
+
+Layers from the top: stratosphere (above 380 K), upper troposphere (305–380 K), lower free troposphere (the mixed layer's top to 305 K),
+the mixed boundary layer (`bl_mix`, `bl_q`, `sfc`). Plumes leave the mixed layer only where its top is saturated (Neggers, Stevens &
+Neelin 2006). Six numerical faults that thin and emptied layers exposed are fixed (SPEC #115).
+
+| `earth4` n = 4, year 9 | value | observed |
+|---|---|---|
+| absorbed sunlight | 242.2 | 240 |
+| OLR | 239.7 | 239 |
+| clear-sky OLR | 259.3 | 266 |
+| surface longwave down | 351.9 | 342 |
+| surface sunlight | 170.4 | 161 |
+| net (still falling) | +2.4 | ~0.6 |
+| mixed layer, tropical / subtropical / mid-latitude sea, land (hPa) | 20 / 74 / 101 / 74 | |
+| eddy momentum flux at 35°S / 35°N (kg/s²) | −21,000 / +62,000 | about −200,000 / +150,000 |
+
+The radiation budget is now near observed; the eddies have collapsed, and with them the surface winds: the next thing to find.

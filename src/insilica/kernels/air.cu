@@ -280,7 +280,10 @@ __device__ real edge_q(int k, bool top, const real* mu, const real* th, const re
   const real te = spread ? (top ? tstar(k - 1, L, P) : tstar(k, L, P)) : th[k];
   const real T = te * FPOW(p / P.p0, P.kappa);
   const real qe = T < 160 ? (real)0 : q[k] * (real)qsat((fast)T, (fast)p) / qs;
-  return m > 0 ? fmin(qe, mu[k] * q[k] / m) : qe;
+  // a slice taking a share f of the layer from its edge holds, for a linear profile, the edge's vapor plus f of the way to the mean (V2-6b):
+  // all of the layer the mean, and what stays at most twice the mean; (taking the edge's alone left a nearly emptied layer's excess in its floor air)
+  const real f = m > 0 ? fmin((real)1, m / mu[k]) : (real)0;
+  return m > 0 ? fmin(qe + (q[k] - qe) * f, mu[k] * q[k] / m) : qe;
 }
 
 // The cell's water spread evenly over +-b about its mean qt, b = (1 - rh_crit) qs (Sundqvist-style statistics): its
@@ -506,6 +509,9 @@ __device__ void crossing(int L, const Par& P, real* mu, real* th, real* q, const
         dm = -fmin(mu[a] * dth[b] * fa, fmax(mu[a] - P.mu_bl, (real)0) * P.bl_cap);
         thc = ts_ - (real)0.5 * dth[b];
       }
+    } else if (P.bl_mix > 0 && b < L - 1 && th[b] >= ts_) {
+      // (the four-layer air, V2-6b: a middle layer warmer than its top edge, the residual of a hot mixed layer's night release, belongs above it, heated or not)
+      dm = mu[b] - P.floor_; thc = th[b];
     } else if ((dtop ? dtop[b] : dth[b]) > 0) {
       const real eh = dtop ? dtop[b] : dth[b];              // the heating at b's top edge
       if (th[b] >= ts_) { dm = mu[b] - P.floor_; thc = th[b]; }
@@ -517,7 +523,13 @@ __device__ void crossing(int L, const Par& P, real* mu, real* th, real* q, const
       }
     }
     const real da = dbot ? dbot[a] : (a == 0 ? dth_up : dth[a]);
-    if (da < 0) {
+    if (P.bl_mix > 0 && a >= 1 && th[a] <= ts_ && dm <= 0) {
+      // (and one colder than its bottom edge belongs below it)
+      const real down = mu[a] - P.floor_;
+      thc = th[a];
+      dm -= down;
+      if (gross) gross[2 * j + 1] = down;
+    } else if (da < 0) {
       real down;
       if (th[a] <= ts_) { down = mu[a] - P.floor_; thc = th[a]; }
       else if (a == 0) down = mu[a] * (-da) / (2 * ((th[a] - dth[a]) - ts_));
@@ -655,7 +667,8 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   real wbl[LMAX], thb = 0, qb = 0, mb = 0;
   {
     // the air touching the ground is the mixed bottom layer, as deep as it is down to a share bl_bot of mu_bl; what it takes from the layer above is that layer's coldest air, at its lower edge, not its warm mean (decision #94)
-    real need = P.bl_bot > 0 && mu[bot] < P.mu_bl ? fmax(mu[bot], P.bl_bot * P.mu_bl) : P.mu_bl;
+    // (bl_mix, V2-6b: the bottom layer is the mixed boundary layer, and the surface's fluxes go into it alone)
+    real need = P.bl_mix > 0 ? mu[bot] : P.bl_bot > 0 && mu[bot] < P.mu_bl ? fmax(mu[bot], P.bl_bot * P.mu_bl) : P.mu_bl;
     for (int k = bot; k >= 0; k--) { const real m = mu[k] < need ? mu[k] : need; wbl[k] = m; need -= m; thb += m * (P.bl_bot > 0 && k < bot && th[k] > tstar(k, L, P) ? tstar(k, L, P) : th[k]); qb += m * q[k]; mb += m; }
   }
   thb /= mb; qb /= mb;
@@ -678,6 +691,9 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
     const real gt = ps / (287.0 * Tsa) * P.bulk_w * (Ts[i] > Tsa ? (real)3 : (real)1);
     bulk = bulk * gt / (bulk + gt);
   }
+  // (sfc: the air's side taken implicitly, as the surface's is: the exchange over a step can at most bring the air touching the ground,
+  // mass mb, to the surface's value, however thin the mixed layer; conductance g / (1 + g dt / mb))
+  if (sfc) bulk = bulk / (1 + bulk * dt / mb);
   const real hs = rough * (P.bulk_c > 0 || sfc ? P.cp * bulk : P.h_sens * (1 + uabs[i] / P.u0));
 
   // ---- shortwave; the surface's albedo with the ice cover ----
@@ -1049,6 +1065,9 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
         const real rise = thp - tstar(bot - 1, L, P);
         mc = fmin(A / (rise > 1 ? rise : (real)1), mu[bot] - P.floor_) * OMEXP(dt / P.tau_conv);
         if (P.plume_root > 0 && q0 > 0) mc = fmin(mc, mu[bot] * q[bot] / q0);   // (its moist root takes at most the layer's vapor)
+        // the mixed boundary layer (V2-6b): plumes leave it only where its top is saturated, the cloud-core share there (Neggers, Stevens &
+        // Neelin 2006): a layer below its condensation level has no cloud to leave through and deepens until it reaches it
+        if (P.bl_mix > 0 && P.bl_q > 0) { real l_, f_, d_; if (mixed_cloud(bot, mu, th[bot], q[bot] + (cloudy ? cl[bot] : (real)0), P, l_, f_, d_)) mc *= f_; }
         if (mc > 0) {
           // the plume keeps l_det of its condensate and leaves it as cloud; the rest rains inside it
           const real cond = fmax((real)0, q0 - qc - xs), det = cloudy ? fmin(cond, P.l_det) : (real)0;
@@ -1171,6 +1190,21 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   }
   if (rainp) { rainp[i] = Rk[0] / dt; rainp[(size_t)N + i] = Rk[1] / dt; rainp[(size_t)2 * N + i] = Rc / dt; }
 
+  // A layer emptied to its floor keeps a theta within its edges (V2-6b): its theta's jump enters the Montgomery potential of every layer
+  // above at full weight whatever its mass, so a scrap of 10 kg/m^2 at 3,700 K drove the winds to 10^54 m/s over the Australian desert.
+  // Its heat beyond the edge goes to the nearest layer with mass, the column's energy unchanged.
+  if (P.bl_mix > 0)
+    for (int k = 1; k < bot; k++) {
+      if (mu[k] > 2 * P.floor_) continue;
+      const real lo = tstar(k, L, P), hi = tstar(k - 1, L, P), tn = fmin(fmax(th[k], lo), hi);
+      if (tn == th[k]) continue;
+      int n = -1;
+      for (int j = k + 1; j < L && n < 0; j++) if (mu[j] > 2 * P.floor_) n = j;
+      for (int j = k - 1; j >= 0 && n < 0; j--) if (mu[j] > 2 * P.floor_) n = j;
+      if (n < 0) continue;
+      th[n] += mu[k] * pib[k] * (th[k] - tn) / (mu[n] * pib[n]);
+      th[k] = tn;
+    }
   const real E1 = column_energy(L, mu, pib, th, q, P) + Cw * Ts[i] - P.Lf * m_ice;
   for (int k = 0; k < L; k++) { theta[(size_t)k * N + i] = th[k]; if (moist) qv[(size_t)k * N + i] = q[k]; if (cloudy) cloudw[(size_t)k * N + i] = cl[k]; }
   stored[i] = E1 - E0;

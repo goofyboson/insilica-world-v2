@@ -78,7 +78,8 @@ class World:
                            div_damp=P.get('div_damp', DIV_DAMP),
                            air=dict(t_ref=self.air.get('t_ref', 288.0)) if self.air else None,
                            vmix=P.get('vmix', spec.get('vmix', 0.0)),
-                           thin_wind=P.get('thin_wind', THIN_WIND if spec.get('air') else 0.0))
+                           thin_wind=P.get('thin_wind', THIN_WIND if spec.get('air') else 0.0),
+                           shelf=P.get('shelf', spec.get('shelf', 0.0)))   # (air, V2-6b: a layer squeezed below it over terrain loses its pressure force, as the sea's over its floor, #97)
         self.dynamics = P.get('dynamics', spec.get('dynamics', True))
         self.tracer = P.get('tracer', spec.get('tracer', True))   # transport the demo tracer psi (off for air: #42)
         if nu4:

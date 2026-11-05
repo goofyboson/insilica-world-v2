@@ -389,6 +389,30 @@ def earth_bed(g):
 PRESETS['earth'] = dict(PRESETS['coupled'], build=earth, land=lambda g: earth_land(g)[0], ocean=dict(surface_drag=SURFACE_DRAG, bed=earth_bed, land_drag=8.0),
                         air=dict(AIR, longwave='ktables', physics=dict(AIR3, moist=1.0, k_evap=4.8e-3, plume_deep=1.0, sat_prof=1.0, bl_bot=0.25, cloud=1.0, tau0=1.3, land_exch=2.0,
                                                                               q_shape=1.0, freeze_dry=1.0, edge_vap=1.0, plume_root=1.0, plume_ent=1e-5, conv_revap=0.05)))
+def earth4(g, rise=5.0e-3, bl=1.0e4):
+    """The four-layer start (V2-6b, #113): earth's three layers with its bottom layer split, its lowest bl (Pa) the mixed
+    boundary layer (theta as the bottom layer's, the air above it 4 K warmer, below 305 K); vapor 80% of saturation in the
+    boundary layer, 60% above it."""
+    h3, b, u3, x = earth(g, rise)
+    h = np.concatenate([h3[:2], np.maximum(h3[2:] - bl / GRAV, h3[2:] * 0.3), np.minimum(np.full_like(h3[2:], bl / GRAV), h3[2:] * 0.7)])
+    th = np.concatenate([x['theta'][:2], np.minimum(x['theta'][2:] + 4.0, 304.0), x['theta'][2:]])
+    th[2] = np.maximum(th[2], th[3] + 1.0)
+    ps = h.sum(0) * GRAV
+    pt = ps - 0.5 * h[3] * GRAV
+    pm = np.stack([ps - h[3] * GRAV - 0.5 * h[2] * GRAV, pt])
+    T = th[2:] * (pm / P0) ** KAPPA
+    qs = 0.622 * 611.0 * np.exp(17.27 * (T - 273.15) / (T - 35.85)) / pm
+    q = np.concatenate([x['q'][:2], np.array([0.6, 0.8])[:, None] * qs])
+    return h, b, np.concatenate([u3, u3[2:]]), dict(x, theta=th, q=q)
+
+
+# V2-6b (#113): the boundary layer as a fourth air layer: its top's theta* follows its theta (bl_mix, base 200 K: wherever the
+# air above is warmer), its depth set by its outflow, entrainment and night collapse; its vapor even, cloud at its top (bl_q);
+# the surface layer's exchange (sfc, #114).
+PRESETS['earth4'] = dict(PRESETS['earth'], build=earth4, stress=[0.0] * 4, shelf=100.0,
+                         air=dict(PRESETS['earth']['air'], physics=dict(PRESETS['earth']['air']['physics'], theta_stars=[380.0, 305.0, 200.0],
+                                                                        bl_mix=1.0, bl_q=1.0, sfc=1.0)))
+
 PRESETS['rce'] = dict(build=aqua_dry, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True, physics=AIR3), dynamics=False)
 
 

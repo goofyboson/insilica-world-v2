@@ -86,3 +86,12 @@ Neelin 2006). Six numerical faults that thin and emptied layers exposed are fixe
 | eddy momentum flux at 35°S / 35°N (kg/s²) | −21,000 / +62,000 | about −200,000 / +150,000 |
 
 The radiation budget is now near observed; the eddies have collapsed, and with them the surface winds: the next thing to find.
+
+Moving the middle interface does not bring the eddies back. `earth4` was started fresh with it at each of 295, 300, 310 and 315 K, run 9 years, and measured for a year (eddy flux in kg/s²):
+
+| Middle interface (K) | 295 | 300 | 305 | 310 | 315 | 3-layer |
+|---|---|---|---|---|---|---|
+| eddy flux 35°S | −36,000 | −46,000 | −51,000 | −62,000 | −59,000 | −284,000 |
+| eddy flux 35°N | +54,000 | +51,000 | +40,000 | +46,000 | +57,000 | +160,000 |
+| the interface, tropics → 55°S (hPa) | 963 → 551 | 969 → 476 | 934 → 485 | 841 → 411 | 732 → 376 | 879 → 640 |
+| Ts (K) | 289.1 | 289.9 | 291.9 | 292.5 | 292.7 | |

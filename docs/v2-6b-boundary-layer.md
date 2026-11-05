@@ -95,3 +95,15 @@ Moving the middle interface does not bring the eddies back. `earth4` was started
 | eddy flux 35°N | +54,000 | +51,000 | +40,000 | +46,000 | +57,000 | +160,000 |
 | the interface, tropics → 55°S (hPa) | 963 → 551 | 969 → 476 | 934 → 485 | 841 → 411 | 732 → 376 | 879 → 640 |
 | Ts (K) | 289.1 | 289.9 | 291.9 | 292.5 | 292.7 | |
+
+Four plain isentropic layers, without the mixed-layer physics (`bl_mix`, `bl_q` off), recover only part of the eddy flux (kg/s²):
+
+| Run (θ* in K) | 35°S | 35°N | layer 1 θ, tropics / 55°S (K) |
+|---|---|---|---|
+| 380 / 305 / 290, `sfc` | −86,000 | +64,000 | 321.8 / 315.6 |
+| 380 / 305 / 290, no `sfc` | −37,000 | +47,000 | 319.2 / 315.8 |
+| 380 / 305 / 295, `sfc` | −85,000 | +89,000 | 323.3 / 318.5 |
+| `earth4` (mixed layer) | −51,000 | +40,000 | 324.0 / 317.1 |
+| 3-layer `earth` | −284,000 | +160,000 | 331.1 / 314.3 |
+
+The fourth layer itself loses the eddies. In every four-layer run, the 305–380 K layer is 7–9 K colder in the tropics than in the 3-layer earth, so its equator-to-pole contrast, and with it its baroclinicity, is a half to a third as large.

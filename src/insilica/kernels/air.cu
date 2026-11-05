@@ -1065,9 +1065,18 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
         const real rise = thp - tstar(bot - 1, L, P);
         mc = fmin(A / (rise > 1 ? rise : (real)1), mu[bot] - P.floor_) * OMEXP(dt / P.tau_conv);
         if (P.plume_root > 0 && q0 > 0) mc = fmin(mc, mu[bot] * q[bot] / q0);   // (its moist root takes at most the layer's vapor)
-        // the mixed boundary layer (V2-6b): plumes leave it only where its top is saturated, the cloud-core share there (Neggers, Stevens &
-        // Neelin 2006): a layer below its condensation level has no cloud to leave through and deepens until it reaches it
-        if (P.bl_mix > 0 && P.bl_q > 0) { real l_, f_, d_; if (mixed_cloud(bot, mu, th[bot], q[bot] + (cloudy ? cl[bot] : (real)0), P, l_, f_, d_)) mc *= f_; }
+        // the mixed boundary layer (V2-6b): plumes leave it through the clouds at its top, at most rho a w* with a their share there and w* the
+        // free convection's velocity scale (Neggers, Stevens & Neelin 2006): a layer below its condensation level has no cloud to leave
+        // through and deepens until it reaches it; above it, the deep convection's own closure decides
+        if (P.bl_mix > 0 && P.bl_q > 0) {
+          real l_, f_, d_;
+          if (mixed_cloud(bot, mu, th[bot], q[bot] + (cloudy ? cl[bot] : (real)0), P, l_, f_, d_)) {
+            const real rho = ps / ((real)287.0 * Tsa), Bk = fmax((real)0, (H + (real)0.61 * P.cp * Tsa * E) / (rho * P.cp));
+            const real hb = (real)287.0 * Tsa / P.grav * log(ps / fmax(ps - P.grav * mu[bot], (real)1));
+            const real ws = cbrt(P.grav / Tsa * Bk * hb);
+            mc = fmin(mc, rho * f_ * ws * dt);
+          }
+        }
         if (mc > 0) {
           // the plume keeps l_det of its condensate and leaves it as cloud; the rest rains inside it
           const real cond = fmax((real)0, q0 - qc - xs), det = cloudy ? fmin(cond, P.l_det) : (real)0;

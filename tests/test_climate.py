@@ -314,8 +314,11 @@ def test_weather(record):
 def test_spinup(record, tmp_path):
     """SPINUP The deep ocean's asynchronous spin-up (V2-5, #107): a recorded coupled year replayed under the ocean alone against the coupled year"""
     from insilica.spinup import Recorder, OceanOnly
-    w0 = World(4, 'earth')
-    w = runcache.spun_up('earth-n4', lambda: World(4, 'earth'), _year_ticks(w0, 1))[0]   # a year in: the ocean still takes up heat
+    # the replay method on earth as V2-5 tested it (#112, owner): the gray longwave and V2-5's physics; a year into the k-tables'
+    # earth the ocean takes up +53 W/m², a drift this daily-forcing test was not made for
+    gray = dict(longwave='gray', physics=dict(q_shape=0.0, freeze_dry=0.0, edge_vap=0.0, plume_root=0.0, plume_ent=0.0, conv_revap=0.0))
+    w0 = World(4, 'earth', params=gray)
+    w = runcache.spun_up('earth-gray-n4', lambda: World(4, 'earth', params=gray), _year_ticks(w0, 1))[0]   # a year in: the ocean still takes up heat
     f = tmp_path / 'start.iw2'
     w.save(f)
     s = w.sea
@@ -336,7 +339,7 @@ def test_spinup(record, tmp_path):
     heat = abs(up_o - up_c) / abs(up_c)
     salt = abs(r.sea.salt() - salt0) / salt0
     ok = rms <= 0.5 and heat <= 0.15 and salt <= 1e-13
-    record('SPINUP', f'earth n = 4 a year in, the next year coupled and replayed alone (daily forcing, λ 10 W/m²/K, fresh water '
+    record('SPINUP', f'earth n = 4 (gray, V2-5 physics) a year in, the next year coupled and replayed alone (daily forcing, λ 10 W/m²/K, fresh water '
            f'balanced): SST rms {rms:.2f} K (mean {d.mean():+.2f}); heat uptake {up_o:+.2f} against {up_c:+.2f} W/m² ({heat * 100:.0f}% off); '
            f'salt {fmt(salt)}', 'SST rms ≤ 0.5 K; heat within 15%; salt ≤ 1e-13', ok)
     assert ok

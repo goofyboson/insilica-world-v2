@@ -12,6 +12,8 @@ A planet simulator with two moving ocean layers and three moving air layers, run
 
 ## Current status
 
+**V2-6a Radiation closed 2026-11-04 (43/45 with PERF; EARTH and ICE open). Next: V2-6b boundary layer and winds.** Radiation by correlated-k from HITRAN line lists: longwave within 0.04% of line-by-line OLR on seven AFGL columns (LONGWAVE), a k-table shortwave, the stratosphere as the top layer above 380 K, freeze-dried. `earth` now runs them by default, with moist physics fixed on the way (SPEC #112): the tropical troposphere within 1–3 K of observed, clear-sky OLR 268 (266 measured). **EARTH** (the global budget within 5% of measured) is a known failure to V2-6b: too little low cloud lets 179 W/m² of sunlight reach the surface (161 measured), and rain is 4.2 mm/day (about 2.7). ICE's drift (−146 → −201) is weather, not a change. PERF air n = 6 23.2 ms per model hour. docs/v2-6a-radiation.md.
+
 **V2-5 Speed closed 2026-11-03 (42/43 with PERF; ICE open). Next: V2-6 real physics.** `earth` n = 6 per step 8.89 → 4.22 ms
 (×2.11: 139 → 281 model years per day; PERF air n = 6 39.6 → 22.9 ms per model hour), n = 4 1.76 → 1.10 ms; ensembles ×2.9 at
 n = 4; mixed precision by default (SPEC #106: 64-bit state and ledgers, 32-bit where the arithmetic is bound, its 16-year climate
@@ -65,6 +67,7 @@ bug carried over from v1; V2-0 ported v1's grid and solver to 64-bit CUDA.
 | V2-4d | General layers: any number of air and ocean layers from lists; defaults stay at 3 and 3 (SPEC #101) | ✅ Closed (41/42; ICE open) |
 | V2-4e | Clouds, convection and rain on `earth`, then lightning from storm physics; weak surface winds paused to V2-6 (SPEC #102) | ✅ Closed (41/42; ICE open; earth, clouds and lightning reported, untested) |
 | V2-5 | Speed for development: ensembles in one launch, faster spin-up (the deep ocean's centuries), kernel profiling and removing wasted work, a first 32-bit trial; results unchanged or measured against 64-bit; mixed precision now too (SPEC #106) | ✅ Closed (42/43; ICE open; n = 6 ×2.11, ensembles ×2.9) |
+| V2-6a | Radiation: correlated-k longwave and shortwave from line lists, stratosphere, `earth` on them (SPEC #109–#112) | ✅ Closed (43/45; EARTH known failure to V2-6b, ICE open) |
 | V2-6 | Real physics for the stand-ins (radiation (air and haze scattering, vapor-dependent longwave, sunlight absorbed by vapor and ozone, stratosphere), ice in the air with freezing heat, mountain and gravity-wave drag, stability-dependent surface exchange, land cover map, plume entrainment and downdrafts, rain evaporation, Earth's orbit, sea-ice motion, deep-water formation, firn with stored cold (closes the ICE failure, SPEC #100), gas composition (H₂O, CO₂, CH₄, O₃, N₂O by amount, N₂ and O₂ setting heat capacity and molecular weight), transported composition tracers with exact budgets, per-world planet settings), Moon and tides, UI polish | ⏳ Planned |
 | V2-7 | Final optimization: mixed time steps, 32-bit sign-off, then approximations (reduced model, learned emulator) against the 64-bit reference ([plan §7.1](docs/v2-plan.md)) | ⏳ Planned |
 | V2-8 | Two resolutions: air n = 6 coupled to ocean n = 8 | ⏳ Planned |

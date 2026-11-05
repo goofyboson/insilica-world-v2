@@ -312,6 +312,8 @@ water 2.2e-16, salt 8.7e-17, energy change − TOA +0.031 W/m², reload identica
 ice's flow: their ice is too thin to move (polar `relief` 229 kg/m², about 25 cm, level since year 4, largest 628 kg/m²). So no ice sheet grows by itself yet. PERF land
 n = 6 44.8 ms per model hour (gate 50). Suite 1695 s with 4 processes and spin-ups rebuilt, PERF 23 s.
 
+**V2-6a close (2026-11-04, 43/45 with PERF; #109–#112):** LONGWAVE OLR 0.04%, surface down 0.16%, heating 0.101 K/day, 2×CO₂ forcing 1.4%, kernels 9.8e-7. EARTH (year 9, `earth` n = 4 with the k-tables and option C): absorbed sunlight 250.7 (+4.5%), OLR 248.6 (+4.0%), clear-sky OLR 268.2 (+0.8%), surface down 359.8 (+5.2%), surface sunlight 179.0 (+11.2%), net +2.1 W/m²: a known failure to V2-6b. SPINUP on the gray `earth` with V2-5's physics (#112, owner): SST rms 0.26 K, uptake 3% off (a year into the k-tables' `earth` the ocean takes up +53 W/m², rms 0.55). ICE open (#100), its sheet −201 kg/m²/yr is weather (V2-5's code perturbed by 1e-12: −146, −171, −182). Every earlier world unchanged in kind (gray longwave): CLIMATE 290.97 K, coupled 290.21 K, land 288.76 K. PERF air n = 6 23.2, coupled 26.9, land 27.0, ocean n = 8 74.4 ms per model hour. Suite 1291 s with 2 processes (warm, EARTH's 8-year spin-up built once, about 17 min), PERF 19 s.
+
 **Stage history.** V2-0 closed with 41/41 and V2-0b with 45/45 under the earlier, finer-grained suite (IDs F0,
 G1–G4, K1, K2, C1, D1, S1, P1, W1, R1, E1–E4); its results are in #15–#21 and the git history (`880afb0`,
 `224b4dd`). #22 maps those checks onto the suite above.

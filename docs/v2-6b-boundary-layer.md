@@ -50,3 +50,20 @@ Column eddy momentum flux (kg/s²): −285,000 at 35°S, +155,000 at 35°N: 5–
 no longer the main shortfall. Short now: the northern trades (−2 to −3 m/s) and northern westerlies (+1 to +1.5 m/s at
 the bottom, where the eddies ask for 0.05–0.08 N/m² of surface stress); the stratosphere's jets, 130 m/s at 55°S as an
 annual mean (observed about 30–40), with nothing to drag them.
+
+## Step 2: the surface layer (built, off: SPEC #114)
+
+`sfc` (kernel `surface_layer`): rho C_D U and rho C_H U per cell from the log law at a tenth of the bottom layer's depth, Charnock's sea
+roughness, `z0_land` 0.1 m, Louis (1979) stability from the virtual temperature difference, free-convection gusts. The drag uses it at
+every edge, land and sea.
+
+`earth` n = 4 with it on, 9 years: zonal-mean bottom-layer wind (m/s), against the baseline:
+
+| Latitude | 55S | 45S | 15S | 15N | 25N | 45N | 55N | 65N |
+|---|---|---|---|---|---|---|---|---|
+| baseline | 13.2 | 9.7 | −5.3 | −3.0 | −2.2 | 1.2 | 1.5 | 0.8 |
+| `sfc` | 15.3 | 14.3 | −5.5 | −3.3 | −2.8 | 3.7 | 6.7 | 7.3 |
+
+Over the sea the surface air read from the deep bottom layer's mean theta is 2–5 K warmer than the sea (stable 88–97% of the time), so
+the sea's heat exchange falls to 5–8 W/m²/K and the planet warms (Ts +0.5 K a year at year 9). The stability needs the boundary layer
+as its own mixed layer (step 3); `sfc` is re-measured on the four-layer earth.

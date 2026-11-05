@@ -41,7 +41,7 @@ struct Par {
   real S0, asw, tau0, mu_ref, eps_s, h_sens, u0, alb, c_slab, mu_bl, theta_star, floor_, sigma, grav, cp, kappa, p0;
   real tilt, year_s, day_s, tau_lin, theta_star2;
   real moist, Lv, Lf, Tf, k_evap, tau_conv, alb_ice, rho_ice, ice_cover, k_ice, Rv, sat_layer, sw_tau;
-  real alb_dry, alb_wet, soil_beta, k_inf, pond_cover, alb_snow, alb_ice_melt, alb_snow_melt, alb_glacier, snow_cover, alb_ramp, land_exch, plume_deep, lw_w0, c_dry, c_wet, sat_prof, land_rs, sat_base, bl_bot, cloud, rh_crit, re_liq, re_ice, cloud_g, k_lw_liq, k_lw_ice, c_auto, q_auto, v_ice, l_det, tau_erode, k_revap, mu_cloud, theta_rise, bl_mix, mu_night, bl_ent, bl_cap, bulk_c, bulk_gust, bulk_z, bulk_w, plume_ent, l_ice, storm_area, graupel_v, ice_small, q_shape, edge_heat, freeze_dry, edge_vap, conv_revap, plume_root, bl_q;
+  real alb_dry, alb_wet, soil_beta, k_inf, pond_cover, alb_snow, alb_ice_melt, alb_snow_melt, alb_glacier, snow_cover, alb_ramp, land_exch, plume_deep, lw_w0, c_dry, c_wet, sat_prof, land_rs, sat_base, bl_bot, cloud, rh_crit, re_liq, re_ice, cloud_g, k_lw_liq, k_lw_ice, c_auto, q_auto, v_ice, l_det, tau_erode, k_revap, mu_cloud, theta_rise, bl_mix, mu_night, bl_ent, bl_cap, bulk_c, bulk_gust, bulk_z, bulk_w, plume_ent, l_ice, storm_area, graupel_v, ice_small, q_shape, edge_heat, freeze_dry, edge_vap, conv_revap, plume_root, bl_q, sfc, z0_land;
   int Lm1;                                         // the column's bottom layer
   real ths[LMAX];                                  // the theta* of the interfaces above the lowest one, from the top (decision #101)
 };
@@ -54,7 +54,7 @@ __device__ Par unpack(const real* a) {
   P.kappa = a[15]; P.p0 = a[16]; P.tilt = a[17]; P.year_s = a[18]; P.day_s = a[19]; P.tau_lin = a[20]; P.theta_star2 = a[21];
   P.moist = a[22]; P.Lv = a[23]; P.Lf = a[24]; P.Tf = a[25]; P.k_evap = a[26]; P.tau_conv = a[27]; P.alb_ice = a[28];
   P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32]; P.sat_layer = a[33]; P.sw_tau = a[34];
-  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; P.plume_ent = a[78]; P.l_ice = a[79]; P.storm_area = a[80]; P.graupel_v = a[81]; P.ice_small = a[82]; P.q_shape = a[83]; P.edge_heat = a[84]; P.freeze_dry = a[85]; P.edge_vap = a[86]; P.conv_revap = a[87]; P.plume_root = a[88]; P.bl_q = a[89]; for (int j = 0; j < LMAX; j++) P.ths[j] = a[90 + j];
+  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; P.plume_ent = a[78]; P.l_ice = a[79]; P.storm_area = a[80]; P.graupel_v = a[81]; P.ice_small = a[82]; P.q_shape = a[83]; P.edge_heat = a[84]; P.freeze_dry = a[85]; P.edge_vap = a[86]; P.conv_revap = a[87]; P.plume_root = a[88]; P.bl_q = a[89]; P.sfc = a[90]; P.z0_land = a[91]; for (int j = 0; j < LMAX; j++) P.ths[j] = a[92 + j];
   return P;
 }
 
@@ -600,7 +600,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
                                       real* wx, real* olr, real* sw_abs, real* stored, real* rain, real* evap, real* conv,
                                       real* tsurf, real* rainp, real* dgo, real* cap, real* qocean,
                                       real* qsw, const real* land, const real* soilcap, real* soil, real* pond, real* snow, real* cloudw, real* cloudo, const real* elev, real* flash,
-                                      const real* radf, const real* swf, real* swalb) {
+                                      const real* radf, const real* swf, real* swalb, const real* ch) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= N) return;
 #ifdef NL
@@ -661,7 +661,8 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   thb /= mb; qb /= mb;
   const real ps = pb[bot];
   const real Tsa = thb * exi[bot];
-  const real rough = moist && land && land[i] > (real)0.5 ? P.land_exch : (real)1;
+  const bool sfc = P.sfc > 0 && ch;               // the surface layer's exchange (V2-6b): rho C_H U from surface_layer, roughness and stability in it
+  const real rough = !sfc && moist && land && land[i] > (real)0.5 ? P.land_exch : (real)1;
   // the bulk exchange (decision #102): rho C (|U| + gust) per unit difference, zero but for the gusts in calm air; bulk_c 0 keeps v1's form,
   // whose 10 W/m^2/K at calm thermally damped the bottom layer's storms in about 2 days
   // and the air's stability (Louis 1979, bulk Richardson number over a height bulk_z): warm air over a cold surface hardly mixes, cold air over a warm one mixes more
@@ -670,14 +671,14 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
     const real Ub = uabs[i] + P.bulk_gust, Ri = P.grav * P.bulk_z * (Tsa - Ts[i]) / (Tsa * Ub * Ub);
     stab = Ri > 0 ? 1 / (1 + 10 * Ri * (1 + 5 * Ri)) : 1 - 10 * Ri / (1 + 10 * sqrt(-Ri));
   }
-  real bulk = P.bulk_c > 0 ? ps / (287.0 * Tsa) * P.bulk_c * stab * (uabs[i] + P.bulk_gust) : (real)0;
+  real bulk = sfc ? ch[i] : P.bulk_c > 0 ? ps / (287.0 * Tsa) * P.bulk_c * stab * (uabs[i] + P.bulk_gust) : (real)0;
   // a thin surface layer in series, quasi-steady (a test, decision #102): what the surface gives reaches the bottom layer's air only as turbulence carries it up,
   // at bulk_w (m/s) through a neutral or stable top, three times that when the ground heats the air; so conductances add as 1/g = 1/g_surface + 1/g_top
-  if (P.bulk_c > 0 && P.bulk_w > 0) {
+  if (!sfc && P.bulk_c > 0 && P.bulk_w > 0) {
     const real gt = ps / (287.0 * Tsa) * P.bulk_w * (Ts[i] > Tsa ? (real)3 : (real)1);
     bulk = bulk * gt / (bulk + gt);
   }
-  const real hs = rough * (P.bulk_c > 0 ? P.cp * bulk : P.h_sens * (1 + uabs[i] / P.u0));
+  const real hs = rough * (P.bulk_c > 0 || sfc ? P.cp * bulk : P.h_sens * (1 + uabs[i] / P.u0));
 
   // ---- shortwave; the surface's albedo with the ice cover ----
   real qrad[LMAX], qet[LMAX], qeb[LMAX];                         // k-tables: each layer's radiative heating, and its top and bottom sub-level's (W/m^2)
@@ -865,13 +866,13 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
       if (qsl > 0) qa = fmin(qb * qss / qsl, qss);
     }
     const real def = qsat(tsk, ps) - qa;
-    E = def > 0 ? rough * (P.bulk_c > 0 ? bulk : P.k_evap * (1 + uabs[i] / P.u0)) * def * (1 - fice) : (real)0;   // kg/m^2/s, open water only
+    E = def > 0 ? rough * (P.bulk_c > 0 || sfc ? bulk : P.k_evap * (1 + uabs[i] / P.u0)) * def * (1 - fice) : (real)0;   // kg/m^2/s, open water only
     if (isl) {
       const real full = P.soil_beta * soilcap[i];
       real Es = (1 - pcov) * E, Ep = pcov * E;
       // soil and plants hold their water back: a surface resistance land_rs (s/m) in series with the air's (decision #92); open water has none
       if (P.land_rs > 0 && E > 0) {
-        const real rho = ps / (287.0 * Tsa), ra = rho / (rough * (P.bulk_c > 0 ? bulk : P.k_evap * (1 + uabs[i] / P.u0)));
+        const real rho = ps / (287.0 * Tsa), ra = rho / (rough * (P.bulk_c > 0 || sfc ? bulk : P.k_evap * (1 + uabs[i] / P.u0)));
         Es *= ra / (ra + P.land_rs);
       }
       if (wet < full) Es *= wet / full;
@@ -1190,6 +1191,58 @@ extern "C" __global__ void cell_speed(int N, const real* u, const int* cellEdge,
     ke += le[e] * de[e] * (real)0.25 * u[e] * u[e];
   }
   out[i] = sqrt(2 * ke / areaCell[i]);
+}
+
+// The surface layer (V2-6b, decision #114): the exchange of momentum, heat and vapor between the ground or sea and the
+// bottom layer's air, rho C U per unit difference, from Monin-Obukhov's log law and stability as the bulk form of
+// Louis (1979; Louis, Tiedtke & Geleyn 1981). The bottom layer is mixed, its wind and theta even above its surface layer,
+// the lowest tenth of its depth: so the reference height z_r = 0.1 of its depth. Roughness: the sea's by Charnock (0.011,
+// Smith 1988) with the smooth-flow term 0.11 nu/u*, its heat's and vapor's 0.40 nu/u* (Beljaars 1995); sea ice 1 mm; land
+// z0_land, its heat's a tenth of that. Stability by the bulk Richardson number from the virtual temperature difference;
+// the wind adds in quadrature the gusts of the free convection, 1.2 w* (Beljaars 1995), w* from the buoyancy flux through
+// the layer's depth, and bulk_gust (m/s) of the mesoscale. Out: cd, ch = rho C_D U, rho C_H U (kg/m^2/s) per cell.
+extern "C" __global__ void surface_layer(int N, int L, const real* par, const real* uabs, const real* mu_in, const real* theta,
+                                         const real* qv, const real* Ts, const real* ice, const real* land, real* cd, real* ch) {
+  const int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= N) return;
+  const Par P = unpack(par);
+  const int bot = L - 1;
+  real ps = 0;
+  for (int k = 0; k < L; k++) ps += P.grav * mu_in[(size_t)k * N + i];
+  const real mb = mu_in[(size_t)bot * N + i], th = theta[(size_t)bot * N + i];
+  const real Ta = th * pow(ps / P.p0, P.kappa), T0 = Ts[i];
+  const real rho = ps / ((real)287.0 * Ta);
+  const real qa = qv ? qv[(size_t)bot * N + i] : (real)0;
+  const bool isl = land && land[i] > (real)0.5;
+  const real q0 = qv && P.moist > 0 && !isl ? qsat(T0, ps) : qa;          // over land the surface's vapor is the air's (its wetness unknown here): dry buoyancy
+  const real fice = qv && P.moist > 0 && ice && !isl ? fmin((real)1, ice[i] / P.rho_ice / P.ice_cover) : (real)0;
+  const real depth = (real)287.0 * Ta / P.grav * log(ps / fmax(ps - P.grav * mb, (real)1));
+  const real zr = fmax((real)10, (real)0.1 * depth);
+  const real dthv = (Ta - T0) + (real)0.61 * Ta * (qa - q0);              // air minus surface, virtual (K)
+  const real K = 0.4, nu = 1.5e-5, b = 5, c = 5;
+  real U = sqrt(uabs[i] * uabs[i] + P.bulk_gust * P.bulk_gust), Cd = 1e-3, Ch = 1e-3;
+  for (int it = 0; it < 4; it++) {
+    const real us = fmax(sqrt(Cd) * U, (real)1e-3);
+    real z0, zh;
+    if (isl) { z0 = P.z0_land; zh = (real)0.1 * P.z0_land; }
+    else {
+      const real zs = (real)0.011 * us * us / P.grav + (real)0.11 * nu / us, zsh = (real)0.40 * nu / us;
+      z0 = (1 - fice) * zs + fice * (real)1e-3; zh = (1 - fice) * zsh + fice * (real)1e-4;
+    }
+    const real lm = log(zr / z0), lh = log(zr / zh);
+    const real CdN = K * K / (lm * lm), ChN = K * K / (lm * lh);
+    const real Ri = P.grav * zr * dthv / (Ta * U * U);
+    real fm, fh;
+    if (Ri > 0) { const real s = sqrt(1 + c * Ri); fm = 1 / (1 + 2 * b * Ri / s); fh = 1 / (1 + 3 * b * Ri * s); }
+    else { const real d = 1 + 3 * b * c * CdN * sqrt(zr / z0 * -Ri); fm = 1 - 2 * b * Ri / d; fh = 1 - 3 * b * Ri / d; }
+    Cd = CdN * fm; Ch = ChN * fh;
+    // the buoyancy flux (m/s K) and the free convection's gusts through the layer's depth
+    const real B = -Ch * U * dthv;
+    const real ws = B > 0 ? cbrt(P.grav / Ta * B * depth) : (real)0;
+    U = sqrt(uabs[i] * uabs[i] + P.bulk_gust * P.bulk_gust + (real)1.44 * ws * ws);
+  }
+  cd[i] = rho * Cd * U;
+  ch[i] = rho * Ch * U;
 }
 
 // Held & Suarez (1994) forcing for two layers (decision #35): Newtonian relaxation of each layer's theta toward the

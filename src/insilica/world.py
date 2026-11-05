@@ -195,7 +195,10 @@ class World:
             g, i32, R = self.dg, np.int32, self.dg.dtype.type
             if rec:
                 rec.pre_couple()
-            self.sea.couple(self.h, self.u, self.surface_drag, self.dt)
+            if self.air and self.physics.sfc:
+                self.physics.surface(self.h, self.theta, self.Ts, self.u, q=self.q if self.moist else None,
+                                     ice=self.ice if self.moist else None, land=self.land)
+            self.sea.couple(self.h, self.u, self.surface_drag, self.dt, cd=self.physics.cd if self.air else None)
             if rec:
                 rec.post_couple()
             self.core.k['vmix_heat'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.sea.diss, g.cellEdge, g.le, g.de,

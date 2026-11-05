@@ -107,3 +107,14 @@ Four plain isentropic layers, without the mixed-layer physics (`bl_mix`, `bl_q` 
 | 3-layer `earth` | −284,000 | +160,000 | 331.1 / 314.3 |
 
 The fourth layer itself loses the eddies. In every four-layer run, the 305–380 K layer is 7–9 K colder in the tropics than in the 3-layer earth, so its equator-to-pole contrast, and with it its baroclinicity, is a half to a third as large.
+
+Where the tropics' heat lands: 30 days from year 9 over the tropical sea (|lat| < 15°), from `air_column`'s diagnostics:
+
+| | 3-layer `earth` | `earth4` | four plain layers (290 K) |
+|---|---|---|---|
+| bottom layer (hPa) | 116 | 15 (mixed layer); lower free troposphere 44 | 1 (emptied) |
+| plume mass into 305–380 K (kg/m²/day) | 1,007 | 243 (+99 into the layer below) | 0 |
+| rain (mm/day): total / convective | 8.9 / 8.9 | 5.3 / 4.1 | 6.2 / 0 (large-scale in layer 1) |
+| 305–380 K layer's radiative cooling (W/m²) | 212 | 115 | 109 |
+
+The four-layer tropics convect a quarter as much into the upper troposphere, which heats it less: the colder tropical upper troposphere, and so the weaker eddies.

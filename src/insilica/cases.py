@@ -408,10 +408,11 @@ def earth4(g, rise=5.0e-3, bl=1.0e4):
 
 # V2-6b (#113): the boundary layer as a fourth air layer: its top's theta* follows its theta (bl_mix, base 200 K: wherever the
 # air above is warmer), its depth set by its outflow, entrainment and night collapse; its vapor even, cloud at its top (bl_q);
-# the surface layer's exchange (sfc, #114).
+# the surface layer's exchange (sfc, #114); convective downdrafts (0.3 of the plume's base mass) and the updraft's entrainment of the
+# cloud layer's air (1e-4 per m), both Tiedtke (1989) (#116).
 PRESETS['earth4'] = dict(PRESETS['earth'], build=earth4, stress=[0.0] * 4, shelf=100.0,
                          air=dict(PRESETS['earth']['air'], physics=dict(PRESETS['earth']['air']['physics'], theta_stars=[380.0, 305.0, 200.0],
-                                                                        bl_mix=1.0, bl_q=1.0, sfc=1.0)))
+                                                                        bl_mix=1.0, bl_q=1.0, sfc=1.0, downdraft=0.3, ent_cloud=1e-4)))
 
 PRESETS['rce'] = dict(build=aqua_dry, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True, physics=AIR3), dynamics=False)
 

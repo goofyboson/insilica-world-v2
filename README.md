@@ -12,6 +12,8 @@ A planet simulator with two moving ocean layers and three moving air layers, run
 
 ## Current status
 
+**V2-6b in progress (2026-11-05):** the four-layer earth (`earth4`, SPEC #115) with convective downdrafts and cloud-layer entrainment (#116); a +29 W/m² energy leak in the plumes' mixing (since #112) found and fixed, so `earth`'s budget is open again (EARTH net +16.7 W/m² at year 9). Suite 41/44 (EARTH, CLIMATE 291.01 K, ICE).
+
 **V2-6a Radiation closed 2026-11-04 (43/45 with PERF; EARTH and ICE open). Next: V2-6b boundary layer and winds.** Radiation by correlated-k from HITRAN line lists: longwave within 0.04% of line-by-line OLR on seven AFGL columns (LONGWAVE), a k-table shortwave, the stratosphere as the top layer above 380 K, freeze-dried. `earth` now runs them by default, with moist physics fixed on the way (SPEC #112): the tropical troposphere within 1–3 K of observed, clear-sky OLR 268 (266 measured). **EARTH** (the global budget within 5% of measured) is a known failure to V2-6b: too little low cloud lets 179 W/m² of sunlight reach the surface (161 measured), and rain is 4.2 mm/day (about 2.7). ICE's drift (−146 → −201) is weather, not a change. PERF air n = 6 23.2 ms per model hour. docs/v2-6a-radiation.md.
 
 **V2-5 Speed closed 2026-11-03 (42/43 with PERF; ICE open). Next: V2-6 real physics.** `earth` n = 6 per step 8.89 → 4.22 ms

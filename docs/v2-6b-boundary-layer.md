@@ -130,3 +130,24 @@ What holds the plumes back, over the tropical sea for 30 days, from a scratch co
 | plumes stopping below 305 K | 0% | 29% |
 
 The four-layer earth's plumes are starved. They take air only from the mixed layer, and nothing refills it as fast as the closure asks to empty it: the model has no convective downdrafts and no entrainment of the cloud layer's air into the updrafts.
+
+## Downdrafts, cloud-layer entrainment and the energy leak (SPEC #116)
+
+Both switches are on in `earth4` and off in `earth`, each with Tiedtke's (1989) value:
+
+- **`downdraft` 0.3:** air from the layer above the mixed layer is saturated by evaporating the plumes' rain and sinks into the mixed layer. Its mass is 0.3 of the plume's base mass, as far as the rain allows.
+- **`ent_cloud` 1e-4 per m:** as the updraft crosses that layer, it takes in the surrounding air.
+
+Extending CONSERVE to the four-layer column found an energy leak. The plumes' mixing counted the vapor it gives the layers it passes twice. That created **+28.8 W/m² from nothing in `earth`** and +14.2 in `earth4`, all of it in the layer where the plumes detrain. It is now fixed.
+
+Tropical sea and eddy flux on the fixed code (eddy flux in kg/s²):
+
+| | 3-layer before the fix | 3-layer fixed | `earth4` before | `earth4` + downdrafts and entrainment |
+|---|---|---|---|---|
+| mixed or bottom layer (hPa) | 116 | 157 | 15 | 53 |
+| plume mass into 305–380 K (kg/m²/day) | 1,007 | 1,116 | 243 | 459 |
+| rain (mm/day) | 8.9 | 7.4 | 5.3 | 6.5 |
+| 305–380 K layer θ, tropics (K) | 331.1 | 321.8 | 324.0 | 320.4 |
+| eddy flux 35°S / 35°N | −284,000 / +160,000 | −198,000 / +88,000 | −51,000 / +40,000 | −38,000 / +64,000 |
+
+EARTH on the fixed code, year 9: absorbed 238.5, OLR 221.8, net +16.7. The moist physics of V2-6a (#112) was set while the leak was in place.

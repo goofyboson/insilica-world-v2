@@ -206,11 +206,21 @@ def conserve_air(record):
     e0 = j.energy()
     j.step(int(15 * 86400 / j.dt))
     drift = (j.energy() - e0) / e0
-    ok = worst <= 1e-13 and water <= 1e-13 and mass <= 1e-13 and tracer <= 1e-13 and vapor <= 1e-13 and abs(drift) < 1e-4
+    # the four-layer earth's columns (V2-6b): the mixed layer, deep plumes taking in the cloud layer's air, their downdrafts, the land
+    e = World(4, 'earth4')
+    e4 = e4w = 0.0
+    for _ in range(48):
+        W0, E0 = e.water(), e.energy()
+        e.step(1)
+        p = e.physics
+        e4 = max(e4, abs(float(cp.sum(A * p.stored)) - float(cp.sum(A * (p.sw_abs - p.olr))) * e.dt) / abs(E0))
+        e4w = max(e4w, abs(e.water() - W0 - float(cp.sum(A * (p.evap - p.rain))) * e.dt) / e.water())
+    ok = worst <= 1e-13 and water <= 1e-13 and mass <= 1e-13 and tracer <= 1e-13 and vapor <= 1e-13 and abs(drift) < 1e-4 and e4 <= 1e-13 and e4w <= 1e-13
     record('CONSERVE air', f'moist column ledgers, 48 steps: energy worst {fmt(worst)} of the energy stored ({fmt(per_step)} of one step of sunlight), '
            f'water {fmt(water)}; moist aqua 10 d (3 layers; dynamics, radiation, crossings ~{crossed:.2f} kg/m² per step, convection, rain): '
            f'air mass {fmt(mass)}, tracer {fmt(tracer)}, vapor against evaporation − rain {fmt(vapor)}; adiabatic air (two layers), '
-           f'15 d: energy drift {fmt(drift)}', '≤ 1e-13; ≤ 1e-13; drift < 1e-4', ok)
+           f'15 d: energy drift {fmt(drift)}; four-layer earth, 48 steps (mixed layer, plumes with downdrafts and cloud-layer entrainment): '
+           f'column energy {fmt(e4)} of the energy stored, water {fmt(e4w)}', '≤ 1e-13; ≤ 1e-13; drift < 1e-4', ok)
     return ok
 
 

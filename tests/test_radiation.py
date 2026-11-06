@@ -134,7 +134,17 @@ def test_longwave(record):
     assert ok
 
 
-EARTH_SPIN_YEARS = 8                             # the k-tables' earth settles to within a few W/m² by 8 years (#112)
+EARTH_SPIN_YEARS = 3                             # coupled years before the asynchronous cycles (#117)
+EARTH_CYCLES = (5, 20)                           # (1 coupled year + 20 ocean-only years) × 5, then a coupled year: the thermocline at equilibrium (#107, #117)
+
+
+def _earth_equilibrium():
+    from insilica import spinup
+    w = World(4, 'earth')
+    year = int(round(365 * 86400 / w.dt))
+    w.step(EARTH_SPIN_YEARS * year)
+    spinup.spin_up(w, *EARTH_CYCLES)
+    return w.step(year)
 EARTH_BUDGET = dict(sun=240.0, olr=239.0, olrc=266.0, lwdn=342.0, sws=161.0)   # Wild et al. 2013, CERES EBAF (W/m²)
 
 
@@ -142,14 +152,12 @@ EARTH_BUDGET = dict(sun=240.0, olr=239.0, olrc=266.0, lwdn=342.0, sws=161.0)   #
 def test_earth_budget(record):
     """EARTH earth's global energy budget with the k-tables, all-sky and clear-sky, against measured (V2-6a, SPEC #109, #112)"""
     from insilica import runcache
-    w0 = World(4, 'earth')
-    year = int(round(365 * 86400 / w0.dt))
-    w = runcache.spun_up('earth-n4', lambda: World(4, 'earth'), EARTH_SPIN_YEARS * year)[0]
+    w = runcache.spun_up(f'earth-n4-eq{EARTH_SPIN_YEARS}x{EARTH_CYCLES[0]}x{EARTH_CYCLES[1]}', _earth_equilibrium, 0)[0]
     L, RW = w.L, w.L + 1
     a = cp.asarray(w.grid.areaCell / w.grid.areaCell.sum())
     acc = {k: cp.zeros(()) for k in EARTH_BUDGET}
     day = int(round(86400 / w.dt))
-    S = 365 * 4                                  # four samples a day over the ninth year
+    S = 365 * 4                                  # four samples a day over the measured year
     for _ in range(S):
         w.step(day // 4)
         p, co = w.physics, w.physics.cloudo
@@ -164,7 +172,7 @@ def test_earth_budget(record):
     names = dict(sun='absorbed sunlight', olr='OLR', olrc='clear-sky OLR', lwdn='surface longwave down', sws='surface sunlight')
     ok = all(abs(e) <= 0.05 for e in err.values())
     # known failure (#112, owner): too little low cloud lets too much sunlight reach the surface until V2-6b's boundary layer
-    record('EARTH', f'n = 4, year {EARTH_SPIN_YEARS + 1}: ' + '; '.join(f'{names[k]} {m[k]:.1f} against {EARTH_BUDGET[k]:.0f} ({err[k] * 100:+.1f}%)' for k in m)
+    record('EARTH', f'n = 4, at equilibrium ({EARTH_SPIN_YEARS} coupled years, {EARTH_CYCLES[0]} × (1 coupled + {EARTH_CYCLES[1]} ocean-only), 1 coupled; the next year): ' + '; '.join(f'{names[k]} {m[k]:.1f} against {EARTH_BUDGET[k]:.0f} ({err[k] * 100:+.1f}%)' for k in m)
            + f'; net {m["sun"] - m["olr"]:+.1f}' + ('' if ok else ' — known failure to V2-6b (#112)'),
            'each within 5%', ok)
     assert ok

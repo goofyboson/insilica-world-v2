@@ -118,3 +118,15 @@ Where the tropics' heat lands: 30 days from year 9 over the tropical sea (|lat| 
 | 305–380 K layer's radiative cooling (W/m²) | 212 | 115 | 109 |
 
 The four-layer tropics convect a quarter as much into the upper troposphere, which heats it less: the colder tropical upper troposphere, and so the weaker eddies.
+
+What holds the plumes back, over the tropical sea for 30 days, from a scratch copy of the kernel with the plume closure's limits instrumented:
+
+| | 3-layer `earth` | `earth4` |
+|---|---|---|
+| plumes buoyant (share of steps) | 98% | 49% |
+| closure asks, when buoyant (kg/m²/day) | 1,030 | 12,600 |
+| plume mass delivered (kg/m²/day) | 1,007 | 342 |
+| limit that binds: closure / layer mass / rho a w* / moist root | 100 / 0 / 0 / 0% | 27 / 42 / 30 / 0% |
+| plumes stopping below 305 K | 0% | 29% |
+
+The four-layer earth's plumes are starved. They take air only from the mixed layer, and nothing refills it as fast as the closure asks to empty it: the model has no convective downdrafts and no entrainment of the cloud layer's air into the updrafts.

@@ -184,3 +184,39 @@ A 90-day sample of the equilibrium state:
 | cloud effect on longwave (W/m²) | +36 | +28 |
 
 The fixed `earth` balances, but about 4.7 K too warm. The causes are too much high cloud (longwave effect +8 W/m²), too little low cloud (surface sunlight +11 W/m²) and rain nearly twice the observed.
+
+### Both earths at equilibrium: the surface budget (SPEC #117)
+
+EARTH's procedure (#117) applied to both earths: 3 coupled years, then 5 × (1 coupled + 20 ocean-only), a settling year, then a year measured. Fluxes in W/m².
+
+| | `earth` | `earth4` | observed |
+|---|---|---|---|
+| absorbed sunlight / OLR | 237.9 / 235.5 | 245.3 / 246.9 | 240 / 239 |
+| clear-sky OLR | 270.2 | 266.5 | 266 |
+| surface sunlight / longwave down | 172.1 / 360.6 | 172.8 / 365.1 | 161 / 342 |
+| Ts (K) | 292.8 | 292.1 | ~288 |
+| rain (mm/day) | 4.9 | 4.3 | ~2.7 |
+| cloud cover; cloud effect on sunlight / longwave | 0.82; −49 / +35 | 0.64; −44 / +20 | ~0.67; −47 / +28 |
+| surface net radiation | 115 | 119 | ~106 |
+| latent heat | 141 | 123 | ~84 |
+| sensible heat (net radiation − latent − storage) | about −27 | about −3 | ~20 |
+
+Over the sea, a year in each latitude band:
+
+| | `earth` | `earth4` |
+|---|---|---|
+| bottom-layer air at the surface − sea surface temperature (K): 0–15° / 15–35° / 35–60° | +1.1 / +1.9 / +1.9 | −0.4 / −0.7 / −0.5 |
+| bottom layer's vapor / saturation at the sea's temperature | 0.30 / 0.30 / 0.24 | 0.80 / 0.66 / 0.55 |
+| evaporation (mm/day) | 7.4 / 7.0 / 5.0 | 6.3 / 5.3 / 3.7 |
+
+In the 3-layer earth, the surface air is read from the deep bottom layer's mean. That air is warmer than the sea and dry, so the air heats the sea and the sea evaporates the surplus: sensible heat is negative and latent heat is 1.7 times observed. The four-layer earth's mixed layer gets the sign right over the sea. Even so, both earths shed nearly all of the surface's energy by evaporation: global sensible heat is about 0, against an observed +20. Both run 4–5 K warm.
+
+**Surface emissivity, tried and left at 0.95.** The surface absorbs all of the longwave reaching it but emits ε σT⁴, with ε = 0.95. That is not Kirchhoff-consistent, though energy is conserved. Trial with `eps_s` 1, at equilibrium:
+
+| | `earth` | `earth4` |
+|---|---|---|
+| Ts (K) | 292.4 (−0.4) | 293.8 (+1.7) |
+| rain (mm/day) | 4.6 | 3.7 |
+| cloud cover | 0.80 | 0.60 |
+
+The emissivity is not the warm bias.

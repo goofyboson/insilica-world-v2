@@ -256,3 +256,39 @@ The thin ground gives land a real daily cycle: stable, nearly still nights and d
 - The air in the mixed layer is only 0.27 K colder than the sea (observed ~1 K).
 - The saturation over the sea is that of fresh water. Salt lowers it by 2%, which is about 0.4 g/kg of the 5.4 g/kg deficit, or about 7% of the latent heat.
 - The wind of 9.4 m/s (with gusts) is at the high end. The exchange coefficient itself, C_H ≈ 1.0e-3, is right.
+
+## The surface: ground skin, stomata, salt (SPEC #118)
+
+The three fixes, in `earth4` only:
+
+- **Ground skin** (`c_deep`): a daily-cycle skin of 1.2e5 J/m²/K over 2e6 of deep ground, coupled at the force-restore rate and stepped implicitly.
+- **Stomata:** 70 s/m in full sun, closing to 5000 s/m in the dark (Jarvis).
+- **Salt:** the sea's saturation × 0.98.
+
+At equilibrium, measured over a year (budget) and over 20 days at 24 samples a day (fluxes):
+
+| | `earth4` before | after | observed |
+|---|---|---|---|
+| land: sensible / latent heat (W/m²) | 10 / 81 | 34 / 31 | ~30–40 / ~40 |
+| land: Bowen ratio | 0.13 | 1.1 | ~1 |
+| tropical land by night: latent heat (W/m²) | 137 | 3 | small |
+| sea: sensible / latent heat (W/m²) | 6.7 / 135 | 7.8 / 133 | 10–15 / ~100 |
+| rain (mm/day) | 4.26 | 3.67 | ~2.7 |
+| Ts (K) | 292.1 | 294.4 | ~288 |
+| cloud cover | 0.64 | 0.57 | ~0.67 |
+| absorbed sunlight / OLR (W/m²) | 245.3 / 246.9 | 246.8 / 249.9 | 240 / 239 |
+
+Left out one at a time:
+
+| left out | Ts (K) | rain (mm/day) | cover |
+|---|---|---|---|
+| the skin | 294.1 | 4.11 | 0.60 |
+| the stomata | 293.75 | 3.66 | 0.57 |
+
+The run without salt went NaN.
+
+The land now behaves like land: the Bowen ratio is about 1, and nights are still and stable. The sea is barely changed. Salt's −2% shows up as only −1.5% in the sea's latent heat. The sea's excess evaporation stays: its air is only 0.5 K colder than the sea, and the winds are strong.
+
+**The planet warms, because cloud thins as the land dries (0.64 → 0.57).** The warm bias is in the clouds, not the surface.
+
+**The NaN, an existing fragility.** At day 990 of the run without salt, off Japan (38°N, 144°E), the layer above the mixed layer was emptied to its floor (0.98 hPa) and already stood at θ 862 K. One column step heated it to 1912 K. Two steps later the column and the winds failed (θ −320,000 K, winds 776 m/s). Hot near-empty layers exist in the earlier `earth4` states too. For example, the old equilibrium state has a mixed layer at 1.5 hPa with θ 424 K, and about 500 cells with a layer under 2 hPa. A layer at its floor should not take heating it cannot hold.

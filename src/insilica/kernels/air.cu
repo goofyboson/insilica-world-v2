@@ -41,7 +41,7 @@ struct Par {
   real S0, asw, tau0, mu_ref, eps_s, h_sens, u0, alb, c_slab, mu_bl, theta_star, floor_, sigma, grav, cp, kappa, p0;
   real tilt, year_s, day_s, tau_lin, theta_star2;
   real moist, Lv, Lf, Tf, k_evap, tau_conv, alb_ice, rho_ice, ice_cover, k_ice, Rv, sat_layer, sw_tau;
-  real alb_dry, alb_wet, soil_beta, k_inf, pond_cover, alb_snow, alb_ice_melt, alb_snow_melt, alb_glacier, snow_cover, alb_ramp, land_exch, plume_deep, lw_w0, c_dry, c_wet, sat_prof, land_rs, sat_base, bl_bot, cloud, rh_crit, re_liq, re_ice, cloud_g, k_lw_liq, k_lw_ice, c_auto, q_auto, v_ice, l_det, tau_erode, k_revap, mu_cloud, theta_rise, bl_mix, mu_night, bl_ent, bl_cap, bulk_c, bulk_gust, bulk_z, bulk_w, plume_ent, l_ice, storm_area, graupel_v, ice_small, q_shape, edge_heat, freeze_dry, edge_vap, conv_revap, plume_root, bl_q, sfc, z0_land, downdraft, ent_cloud;
+  real alb_dry, alb_wet, soil_beta, k_inf, pond_cover, alb_snow, alb_ice_melt, alb_snow_melt, alb_glacier, snow_cover, alb_ramp, land_exch, plume_deep, lw_w0, c_dry, c_wet, sat_prof, land_rs, sat_base, bl_bot, cloud, rh_crit, re_liq, re_ice, cloud_g, k_lw_liq, k_lw_ice, c_auto, q_auto, v_ice, l_det, tau_erode, k_revap, mu_cloud, theta_rise, bl_mix, mu_night, bl_ent, bl_cap, bulk_c, bulk_gust, bulk_z, bulk_w, plume_ent, l_ice, storm_area, graupel_v, ice_small, q_shape, edge_heat, freeze_dry, edge_vap, conv_revap, plume_root, bl_q, sfc, z0_land, downdraft, ent_cloud, c_deep, rs_max, rs_sun, q_sea;
   int Lm1;                                         // the column's bottom layer
   real ths[LMAX];                                  // the theta* of the interfaces above the lowest one, from the top (decision #101)
 };
@@ -54,7 +54,7 @@ __device__ Par unpack(const real* a) {
   P.kappa = a[15]; P.p0 = a[16]; P.tilt = a[17]; P.year_s = a[18]; P.day_s = a[19]; P.tau_lin = a[20]; P.theta_star2 = a[21];
   P.moist = a[22]; P.Lv = a[23]; P.Lf = a[24]; P.Tf = a[25]; P.k_evap = a[26]; P.tau_conv = a[27]; P.alb_ice = a[28];
   P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32]; P.sat_layer = a[33]; P.sw_tau = a[34];
-  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; P.plume_ent = a[78]; P.l_ice = a[79]; P.storm_area = a[80]; P.graupel_v = a[81]; P.ice_small = a[82]; P.q_shape = a[83]; P.edge_heat = a[84]; P.freeze_dry = a[85]; P.edge_vap = a[86]; P.conv_revap = a[87]; P.plume_root = a[88]; P.bl_q = a[89]; P.sfc = a[90]; P.z0_land = a[91]; P.downdraft = a[92]; P.ent_cloud = a[93]; for (int j = 0; j < LMAX; j++) P.ths[j] = a[94 + j];
+  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; P.plume_ent = a[78]; P.l_ice = a[79]; P.storm_area = a[80]; P.graupel_v = a[81]; P.ice_small = a[82]; P.q_shape = a[83]; P.edge_heat = a[84]; P.freeze_dry = a[85]; P.edge_vap = a[86]; P.conv_revap = a[87]; P.plume_root = a[88]; P.bl_q = a[89]; P.sfc = a[90]; P.z0_land = a[91]; P.downdraft = a[92]; P.ent_cloud = a[93]; P.c_deep = a[94]; P.rs_max = a[95]; P.rs_sun = a[96]; P.q_sea = a[97]; for (int j = 0; j < LMAX; j++) P.ths[j] = a[98 + j];
   return P;
 }
 
@@ -818,6 +818,32 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
 
   // ---- the surface: open water at Ts, or (ice thicker than ice_cover) a zero-heat-capacity skin at Tsk balancing
   // conduction through the ice against sunlight, longwave and sensible heat, capped at freezing (v1 SPEC 18 #11) ----
+  // the air's exchange per unit vapor deficit (kg/m^2/s), the vapor of the air touching the surface, the share of open water's
+  // evaporation the soil and plants let through, and the saturation of the surface's water
+  const real kex = rough * (P.bulk_c > 0 || sfc ? bulk : P.k_evap * (1 + uabs[i] / P.u0));
+  // q_shape (#112): the air at the surface holds the bottom layer's vapor at its relative humidity there, as the radiation
+  // spreads it (uniform relative humidity through the layer), not the deep layer's mean
+  real qa = qb;
+  if (moist && P.q_shape > 0 && !(P.bl_q > 0)) {   // (bl_q: the vapor is even, the surface air holds the layer's mean)
+    real qsl, dqsl;
+    layer_cap(bot, mu, th[bot], P, qsl, dqsl, cloudy ? gx : (real*)0);
+    const real qss = qsat(Tsa, ps);
+    if (qsl > 0) qa = fmin(qb * qss / qsl, qss);
+  }
+  // soil and plants hold their water back: a surface resistance in series with the air's (decision #92); open water has none.
+  // rs_max (#118): the stomata open with the sunlight (Jarvis 1976, as Noah's F1): rs = land_rs / F1, F1 = (land_rs / rs_max + f) / (1 + f),
+  // f = the sunlight reaching the ground / rs_sun; land_rs by day, rs_max at night
+  real rfac = 1;
+  if (isl && P.land_rs > 0 && kex > 0) {
+    real rs = P.land_rs;
+    if (P.rs_max > 0) {
+      const real f = swS / fmax(1 - alb, (real)0.05) / P.rs_sun;
+      rs = P.land_rs * (1 + f) / (P.land_rs / P.rs_max + f);
+    }
+    const real ra = ps / (287.0 * Tsa) / kex;
+    rfac = ra / (ra + rs);
+  }
+  const real qfac = !isl && P.q_sea > 0 ? P.q_sea : (real)1;     // q_sea (#118): salt lowers the sea's saturation (Raoult, 2% at 35 psu)
   const real ts = Ts[i];
   real tsk = ts, melt_top = 0, cond = 0;
   const bool skin = moist && dice > P.ice_cover;
@@ -835,6 +861,21 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
     melt_top = kc * (ts - x) - P.eps_s * P.sigma * x4 + swS + ldown - hs * (x - Tsa);
     tsk = x;
     cond = kc * (ts - tsk);                                      // W/m^2 up from the slab into the skin
+  }
+  // the ground's skin (c_deep, #118): the daily cycle's thin layer (its capacity cap), stepped implicitly, since its capacity is
+  // too small for the explicit step: the temperature x with C (x - ts) = dt F(x), F the surface's net gain (sunlight, longwave,
+  // sensible heat and the evaporation as computed below, before the water runs short), solved by Newton; every flux then
+  // takes the skin at x, so the ground's change below is C (x - ts) and the energy is exact
+  if (isl && !skin && P.c_deep > 0) {
+    const real beta = moist ? kex * (pcov + (1 - pcov) * rfac * fmin((real)1, wet / fmax(P.soil_beta * soilcap[i], (real)1e-9))) * (1 - fice) : (real)0;
+    real x = ts;
+    for (int it = 0; it < 6; it++) {
+      const real x3 = x * x * x, d = qsat(x, ps) - qa;
+      const real e = d > 0 ? beta * d : (real)0, de = d > 0 ? beta * (qsat(x + (real)0.01, ps) - qsat(x - (real)0.01, ps)) * 50 : (real)0;
+      const real g = Cw * (x - ts) - dt * (swS + ldown - P.eps_s * P.sigma * x3 * x - hs * (x - Tsa) - P.Lv * e);
+      x -= g / (Cw + dt * (4 * P.eps_s * P.sigma * x3 + hs + P.Lv * de));
+    }
+    tsk = x;
   }
 
   // ---- longwave from the emitting surface, up through the layers ----
@@ -896,25 +937,12 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   for (int k = 0; k < L; k++) Q[k] += H * wbl[k] / mb;
   real E = 0;
   if (moist) {
-    // q_shape (#112): the air at the surface holds the bottom layer's vapor at its relative humidity there, as the radiation
-    // spreads it (uniform relative humidity through the layer), not the deep layer's mean
-    real qa = qb;
-    if (P.q_shape > 0 && !(P.bl_q > 0)) {          // (bl_q: the vapor is even, the surface air holds the layer's mean)
-      real qsl, dqsl;
-      layer_cap(bot, mu, th[bot], P, qsl, dqsl, cloudy ? gx : (real*)0);
-      const real qss = qsat(Tsa, ps);
-      if (qsl > 0) qa = fmin(qb * qss / qsl, qss);
-    }
-    const real def = qsat(tsk, ps) - qa;
-    E = def > 0 ? rough * (P.bulk_c > 0 || sfc ? bulk : P.k_evap * (1 + uabs[i] / P.u0)) * def * (1 - fice) : (real)0;   // kg/m^2/s, open water only
+    const real def = qfac * qsat(tsk, ps) - qa;
+    E = def > 0 ? kex * def * (1 - fice) : (real)0;   // kg/m^2/s, open water only
     if (isl) {
       const real full = P.soil_beta * soilcap[i];
       real Es = (1 - pcov) * E, Ep = pcov * E;
-      // soil and plants hold their water back: a surface resistance land_rs (s/m) in series with the air's (decision #92); open water has none
-      if (P.land_rs > 0 && E > 0) {
-        const real rho = ps / (287.0 * Tsa), ra = rho / (rough * (P.bulk_c > 0 || sfc ? bulk : P.k_evap * (1 + uabs[i] / P.u0)));
-        Es *= ra / (ra + P.land_rs);
-      }
+      Es *= rfac;                                  // the surface resistance (above)
       if (wet < full) Es *= wet / full;
       if (Es * dt > wet) Es = wet / dt;
       if (Ep * dt > pw) Ep = pw / dt;
@@ -940,7 +968,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   // with the skin's surplus ----
   real qS;
   if (skin) qS = -cond;
-  else qS = swS + ldown - P.eps_s * P.sigma * ts * ts * ts * ts - H - P.Lv * E;
+  else qS = swS + ldown - P.eps_s * P.sigma * tsk * tsk * tsk * tsk - H - P.Lv * E;   // (tsk: the slab's own, or the ground's skin)
   real Tn = ts + qS * dt / Cw;
   if (qocean) qocean[i] = qS;                                    // W/m^2 into the surface water (before ice)
   if (qsw) qsw[i] = skin ? (real)0 : swS;                      // its sunlight (open water), part of which passes below
@@ -1314,7 +1342,7 @@ extern "C" __global__ void surface_layer(int N, int L, const real* par, const re
   const real rho = ps / ((real)287.0 * Ta);
   const real qa = qv ? qv[(size_t)bot * N + i] : (real)0;
   const bool isl = land && land[i] > (real)0.5;
-  const real q0 = qv && P.moist > 0 && !isl ? qsat(T0, ps) : qa;          // over land the surface's vapor is the air's (its wetness unknown here): dry buoyancy
+  const real q0 = qv && P.moist > 0 && !isl ? (P.q_sea > 0 ? P.q_sea : (real)1) * qsat(T0, ps) : qa;          // over land the surface's vapor is the air's (its wetness unknown here): dry buoyancy
   const real fice = qv && P.moist > 0 && ice && !isl ? fmin((real)1, ice[i] / P.rho_ice / P.ice_cover) : (real)0;
   const real depth = (real)287.0 * Ta / P.grav * log(ps / fmax(ps - P.grav * mb, (real)1));
   const real zr = fmax((real)10, (real)0.1 * depth);

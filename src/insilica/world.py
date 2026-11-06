@@ -135,7 +135,7 @@ class World:
             ocfg = dict(spec['ocean'], **P.get('ocean', {}))
             self.surface_drag = ocfg.pop('surface_drag')
             self.sea = Ocean(self.dg, ocfg, Tsurf=extra['Ts'], state=extra.get('ocean'), land=land,
-                             c_land=self.physics.p['c_land'])
+                             c_land=self.physics.p['c_land'], c_deep=self.physics.p['c_deep'])
             ratio = self.sea.cfg['dt'] / self.dt
             if abs(ratio - round(ratio)) > 1e-9 or round(ratio) < 1:
                 raise ValueError(f'the ocean step {self.sea.cfg["dt"]} s must be a whole number of air steps ({self.dt} s)')
@@ -220,6 +220,7 @@ class World:
             if rec:
                 rec.post_column()
             if self.sea is not None:
+                self.sea.ground(self.dt)
                 self.sea.accumulate(self.dt, self.physics.evap, self.physics.rain, self.ice, self.mouth)
             if self.L > 1:
                 self.core.exchange(self.physics.wx, self.h, self.u, self.M, self.psi, theta=self.theta)

@@ -218,6 +218,20 @@ extern "C" __global__ void ocn_heat(int N, int L, const real* h, const real* T, 
   H[i] += sign * rho_cw * s;
 }
 
+// The ground below its skin (#118), on land cells: T1 holds the deep ground's temperature (capacity c_deep, J/m^2/K) under the
+// skin's T0 (capacity cap). They exchange heat by conduction at the force-restore rate (Deardorff 1978): the skin relaxes to the
+// deep ground at the daily frequency omega, so the conductance is omega times the skin's capacity. Taken exactly over the step
+// (two bodies), energy conserved.
+extern "C" __global__ void ocn_ground(int N, const real* land, real* T, const real* cap, real c_deep, real dt) {
+  LOOP1(i, N)
+  if (!(land[i] > (real)0.5)) return;
+  const real Cs = cap[i], a = T[i], b = T[(size_t)N + i];
+  const real k = (real)(2 * 3.14159265358979323846 / 86400.0) * Cs, Te = (Cs * a + c_deep * b) / (Cs + c_deep);
+  const real d = (a - b) * exp(-k * dt * (1 / Cs + 1 / c_deep));
+  T[i] = Te + d * c_deep / (Cs + c_deep);
+  T[(size_t)N + i] = Te - d * Cs / (Cs + c_deep);
+}
+
 // The mixed layer's heat capacity per cell for the air's surface physics: rho_w c_w h0 (J/m^2/K).
 extern "C" __global__ void ocn_cap(int N, const real* h, real rho_cw, real* cap, const real* land, real c_land) {
   LOOP1(i, N)

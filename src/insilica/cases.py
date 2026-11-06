@@ -409,10 +409,14 @@ def earth4(g, rise=5.0e-3, bl=1.0e4):
 # V2-6b (#113): the boundary layer as a fourth air layer: its top's theta* follows its theta (bl_mix, base 200 K: wherever the
 # air above is warmer), its depth set by its outflow, entrainment and night collapse; its vapor even, cloud at its top (bl_q);
 # the surface layer's exchange (sfc, #114); convective downdrafts (0.3 of the plume's base mass) and the updraft's entrainment of the
-# cloud layer's air (1e-4 per m), both Tiedtke (1989) (#116).
+# cloud layer's air (1e-4 per m), both Tiedtke (1989) (#116). The surface (#118): the ground a skin of the daily cycle's capacity,
+# rho c D / 2 with D = sqrt(2 kappa / omega) = 0.12 m (rho c 2e6 J/m^3/K, kappa 5e-7 m^2/s), over the deep ground of SPEC #84's
+# 2e6 (about the yearly cycle's, D 2.2 m); a surface resistance of 70 s/m in full sun (FAO's grass reference) closing to
+# 5000 s/m in the dark (Jarvis 1976; Noah's F1 with LAI 2, so rs_sun 180 W/m^2); the sea's saturation 2% below fresh water's.
 PRESETS['earth4'] = dict(PRESETS['earth'], build=earth4, stress=[0.0] * 4, shelf=100.0,
                          air=dict(PRESETS['earth']['air'], physics=dict(PRESETS['earth']['air']['physics'], theta_stars=[380.0, 305.0, 200.0],
-                                                                        bl_mix=1.0, bl_q=1.0, sfc=1.0, downdraft=0.3, ent_cloud=1e-4)))
+                                                                        bl_mix=1.0, bl_q=1.0, sfc=1.0, downdraft=0.3, ent_cloud=1e-4,
+                                                                        c_land=1.2e5, c_deep=2.0e6, land_rs=70.0, rs_max=5000.0, rs_sun=180.0, q_sea=0.98)))
 
 PRESETS['rce'] = dict(build=aqua_dry, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True, physics=AIR3), dynamics=False)
 

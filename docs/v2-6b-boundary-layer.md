@@ -220,3 +220,39 @@ In the 3-layer earth, the surface air is read from the deep bottom layer's mean.
 | cloud cover | 0.80 | 0.60 |
 
 The emissivity is not the warm bias.
+
+## earth4's sensible heat, measured directly
+
+The "about −3" above was a residual (net radiation − latent heat) sampled four times a day. Measured directly instead: H = c_p ρC_H U (Ts − T_air), 24 samples a day for 20 days from the equilibrium state. Sun up means sunlight absorbed in the column. Fluxes are in W/m².
+
+| | H day / night / all | LH day / night / all | Ts − T_air (K), all | U (m/s) | soil / capacity |
+|---|---|---|---|---|---|
+| sea | 6.4 / 7.1 / 6.7 | 130 / 140 / 135 | +0.27 | 9.4 | – |
+| sea 0–15° | 3.1 / 3.7 / 3.3 | 164 / 192 / 178 | +0.40 | 10.3 | – |
+| land | 15.0 / 4.4 / 10.4 | 73 / 84 / 81 | −1.66 | 6.1 | 0.39 |
+| land < 35° | 25.4 / 20.3 / 23.2 | 104 / **137** / 124 | +1.00 | 5.3 | 0.34 |
+| land 35–60° | 15.3 / −0.1 / 7.4 | 68 / 53 / 60 | −1.26 | 7.0 | 0.49 |
+
+Global H is about +8 (sea 6.7 × 0.715 + land 10.4 × 0.285), against an observed ~20. The two surfaces fall short for different reasons:
+
+**Land evaporates like a sea, and as much by night as by day.** Land latent heat is 81 W/m² (2.8 mm/day), against an observed ~40 (~1.4 mm/day). Its Bowen ratio is 0.13, against an observed ~1. Tropical land evaporates more at night (137) than by day (104), and stays 0.8 K warmer than its air at night. Two departures from real land:
+
+- **The ground's heat capacity.** It is one slab of 2e6 J/m²/K (SPEC #84), about 1 m of soil. The daily cycle reaches only the top ~0.1 m, about 2e5 J/m²/K (ρc √(κP/π) with κ ≈ 5e-7 m²/s). So the ground carries the day's heat into the night and keeps evaporating.
+- **No surface resistance.** `land_rs` is 0 (it was tried and switched off in SPEC #92), so wet soil evaporates through the air's resistance alone. Real leaves close their stomata at night and resist ~50–100 s/m by day.
+
+**Trial: ground capacity 2e5.** A diagnostic only: `sea.cap` was set on land from the equilibrium state, then 30 days of settling and 10 days measured. The baseline was run over the same days.
+
+| land | H day / night / all | LH day / night / all | Bowen |
+|---|---|---|---|
+| baseline, 2e6 | 18.3 / 7.1 / 13.5 | 94 / 91 / 95 | 0.14 |
+| 2e5 | 40.8 / −7.2 / 17.5 | 119 / 36 / 80 | 0.22 |
+| baseline, < 35° | 24.6 / 20.3 / 23.2 | 106 / 134 / 123 | 0.19 |
+| 2e5, < 35° | 51.5 / 1.9 / 27.5 | 123 / 57 / 95 | 0.29 |
+
+The thin ground gives land a real daily cycle: stable, nearly still nights and doubled daytime sensible heat. The Bowen ratio is still 0.22, because the wet soil has no resistance by day. Tropical land's daytime mixed layer stays thin (25–35 hPa, against 100–200 observed). That ties to the open "desert mixed layers" item.
+
+**The sea evaporates about a third too much (135 against ~100), and its sensible heat is half observed (6.7 against 10–15).**
+
+- The air in the mixed layer is only 0.27 K colder than the sea (observed ~1 K).
+- The saturation over the sea is that of fresh water. Salt lowers it by 2%, which is about 0.4 g/kg of the 5.4 g/kg deficit, or about 7% of the latent heat.
+- The wind of 9.4 m/s (with gusts) is at the high end. The exchange coefficient itself, C_H ≈ 1.0e-3, is right.

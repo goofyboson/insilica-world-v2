@@ -151,3 +151,36 @@ Tropical sea and eddy flux on the fixed code (eddy flux in kg/s²):
 | eddy flux 35°S / 35°N | −284,000 / +160,000 | −198,000 / +88,000 | −51,000 / +40,000 | −38,000 / +64,000 |
 
 EARTH on the fixed code, year 9: absorbed 238.5, OLR 221.8, net +16.7. The moist physics of V2-6a (#112) was set while the leak was in place.
+
+### `earth` re-checked on the fixed code
+
+At year 9 the planet is not in balance, and the leak had hidden that. The whole planet's energy closes, with the change in stored energy matching the TOA flux to within 0.04 W/m² over 2 days. Over year 9 it stores 16.8 W/m², almost all of it in the ocean's thermocline layer:
+
+- The thermocline starts at 286.1 K and is still warming at year 8.
+- The deep layer stays at 273.15 K.
+- Before the fix, the thermocline took up about 32 W/m². That was the TOA's +3.2 plus the leak's +28.8. So #112's near-balance at year 9 came from the leak, not from equilibrium.
+
+Taken to equilibrium with the asynchronous spin-up (#107): from the cached year-8 state, 4 × (1 coupled year + 10 ocean-only years), then a settling year and a measured year:
+
+| | year 9 (EARTH now) | equilibrium | observed |
+|---|---|---|---|
+| absorbed sunlight | 238.5 | 237.9 (−0.9%) | 240 |
+| OLR | 221.8 | 235.6 (−1.4%) | 239 |
+| clear-sky OLR | 258.9 | 270.0 (+1.5%) | 266 |
+| surface longwave down | 337.6 | 360.5 (+5.4%) | 342 |
+| surface sunlight | 174.6 | 172.1 (+6.9%) | 161 |
+| net | +16.7 | +2.3 | ~0.6 |
+| Ts (K) | 289.3 | 292.7 | ~288 |
+| thermocline (K) | 288.3 | 291.1 | |
+
+A 90-day sample of the equilibrium state:
+
+| | equilibrium | observed |
+|---|---|---|
+| rain (mm/day) | 4.9 | about 2.7 |
+| tropical rain (mm/day) | 7.3 | |
+| cloud cover | 0.82 | about 0.67 |
+| cloud effect on sunlight (W/m²) | −48 | −47 |
+| cloud effect on longwave (W/m²) | +36 | +28 |
+
+The fixed `earth` balances, but about 4.7 K too warm. The causes are too much high cloud (longwave effect +8 W/m²), too little low cloud (surface sunlight +11 W/m²) and rain nearly twice the observed.

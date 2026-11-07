@@ -140,7 +140,7 @@ EARTH_CYCLES = (5, 20)                           # (1 coupled year + 20 ocean-on
 
 def _earth_equilibrium():
     from insilica import spinup
-    w = World(4, 'earth')
+    w = World(4, 'earth4')                     # the four-layer earth, its boundary layer a layer of its own (V2-6b, SPEC #125)
     year = int(round(365 * 86400 / w.dt))
     w.step(EARTH_SPIN_YEARS * year)
     spinup.spin_up(w, *EARTH_CYCLES)
@@ -150,9 +150,9 @@ EARTH_BUDGET = dict(sun=240.0, olr=239.0, olrc=266.0, lwdn=342.0, sws=161.0)   #
 
 @pytest.mark.xdist_group('grid4')
 def test_earth_budget(record):
-    """EARTH earth's global energy budget with the k-tables, all-sky and clear-sky, against measured (V2-6a, SPEC #109, #112)"""
+    """EARTH earth4's global energy budget with the k-tables, all-sky and clear-sky, against measured (V2-6a, SPEC #109, #112; earth4 since #125)"""
     from insilica import runcache
-    w = runcache.spun_up(f'earth-n4-eq{EARTH_SPIN_YEARS}x{EARTH_CYCLES[0]}x{EARTH_CYCLES[1]}', _earth_equilibrium, 0)[0]
+    w = runcache.spun_up(f'earth4-n4-eq{EARTH_SPIN_YEARS}x{EARTH_CYCLES[0]}x{EARTH_CYCLES[1]}', _earth_equilibrium, 0)[0]
     L, RW = w.L, w.L + 1
     a = cp.asarray(w.grid.areaCell / w.grid.areaCell.sum())
     acc = {k: cp.zeros(()) for k in EARTH_BUDGET}
@@ -171,8 +171,7 @@ def test_earth_budget(record):
     err = {k: m[k] / EARTH_BUDGET[k] - 1 for k in m}
     names = dict(sun='absorbed sunlight', olr='OLR', olrc='clear-sky OLR', lwdn='surface longwave down', sws='surface sunlight')
     ok = all(abs(e) <= 0.05 for e in err.values())
-    # known failure (#112, owner): too little low cloud lets too much sunlight reach the surface until V2-6b's boundary layer
-    record('EARTH', f'n = 4, at equilibrium ({EARTH_SPIN_YEARS} coupled years, {EARTH_CYCLES[0]} × (1 coupled + {EARTH_CYCLES[1]} ocean-only), 1 coupled; the next year): ' + '; '.join(f'{names[k]} {m[k]:.1f} against {EARTH_BUDGET[k]:.0f} ({err[k] * 100:+.1f}%)' for k in m)
-           + f'; net {m["sun"] - m["olr"]:+.1f}' + ('' if ok else ' — known failure to V2-6b (#112)'),
+    record('EARTH', f'earth4, n = 4, at equilibrium ({EARTH_SPIN_YEARS} coupled years, {EARTH_CYCLES[0]} × (1 coupled + {EARTH_CYCLES[1]} ocean-only), 1 coupled; the next year): ' + '; '.join(f'{names[k]} {m[k]:.1f} against {EARTH_BUDGET[k]:.0f} ({err[k] * 100:+.1f}%)' for k in m)
+           + f'; net {m["sun"] - m["olr"]:+.1f}',
            'each within 5%', ok)
     assert ok

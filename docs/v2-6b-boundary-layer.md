@@ -332,3 +332,29 @@ Two errors fed each other:
 | Ts (K) | 304 | 320 |
 | deep ground (K) | (not used) | 314 |
 | soil (share of capacity) | 0.57 | 0.12–0.17 |
+
+## The mixed layer reaches through an emptied layer (SPEC #120)
+
+After #118 the land's sensible heat rose (Bowen 0.13 → 1.1), the tropical mixed layer warmed past 305 K, and the cloud layer above it went to its floor. The mixed
+layer then took air only from that empty layer, so it stayed thin and hot under colder air: absolutely unstable, with nothing to mix it.
+
+| Tropical land 0–15°, 3 h into a day | mixed layer (kg/m²) | its θ (K) | θ above (K) | cloud layer (kg/m²) |
+|---|---|---|---|---|
+| before (#119) | 168 | 327.9 | 305.3 | 11 |
+| after (#120)  | 1824 | 308.6 | 305.8 | 41 |
+
+The rule (`bl_reach`): air above colder than the mixed layer belongs in it. From each layer up, it takes a slice from the bottom edge until the mixed layer's θ equals
+the slice's top θ (θ linear in mass), at most the crossing's daily intake cap; a layer taken whole lets the next one in. Tennekes entrainment takes from the lowest layer
+above that holds air.
+
+| `earth4` at equilibrium, measured year | #119 | #120 |
+|---|---|---|
+| land 0–15°: rain / evaporation (mm/day) | 1.91 / 1.65 | 5.18 / 4.61 |
+| land 0–15°: Ts (K), soil (of capacity) | 313.0, 0.16 | 301.3, 0.76 |
+| land 15–35°: rain / evaporation, Ts | 0.92 / 0.84, 304.2 | 3.11 / 2.87, 297.9 |
+| global Ts (K), net (W/m²) | 293.93, −1.46 | 294.95, −3.75 |
+| global rain (mm/day), cover | 3.68, 0.57 | 4.44, 0.64 |
+| top layer (above 380 K), tropics / south of 30°S (kg/m²) | 1021 / 598 | 1448 / 1178 |
+
+Open: the top layer fills. From the #119 state, 10 days with and without the rule: plumes deliver nothing to the top layer either way; the dry crossing at 380 K carries
+29.2 kg/m²/day up in the tropics with it (7.5 without) against 6.0 down (5.5), and the extratropics give none back (south: 3.1 up, 4.1 down).

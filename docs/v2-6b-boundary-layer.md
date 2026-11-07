@@ -358,3 +358,39 @@ above that holds air.
 
 Open: the top layer fills. From the #119 state, 10 days with and without the rule: plumes deliver nothing to the top layer either way; the dry crossing at 380 K carries
 29.2 kg/m²/day up in the tropics with it (7.5 without) against 6.0 down (5.5), and the extratropics give none back (south: 3.1 up, 4.1 down).
+
+## The top layer's filling, and three faults behind it (SPEC #121–#124)
+
+**Why the top layer filled after #120 (#121).** Over 5 days at the #120 equilibrium, per kg/m²/day across 380 K:
+
+| | Tropics | South of 30°S | North of 30°N |
+|---|---|---|---|
+| Up / down | 13.1 / 10.7 | 2.0 / 9.9 | 3.3 / 6.7 |
+| Layer 1's mass per kelvin at 380 K | 24 kg/K | 2 | 3 |
+| Up driven by layer 1's latent heating alone | 11.5 of 13.4 | 1.6 of 2.6 | 1.6 of 2.9 |
+
+The cloud layer's condensation, spread through it, was counted at its 380 K edge. Leaving it out (`dry_edge`) brought the tropical top layer from 1407 to 1033 kg/m².
+
+**Faults found while verifying it:**
+
+| # | Where, when | What happened | Fix |
+|---|---|---|---|
+| 122 | Sumatra, day 47 after #121's equilibrium | Layer 1's mean 372 → 380 K in 8 steps under radiative cooling; then all 5612 kg/m² crossed 380 K | The reached layer's lower edge is the mixed layer's θ: #120's slices were taken at 305 K from air no colder than 323 K, a heat pump |
+| 123 | Tibet, spin-up cycle 2 | The mixed layer's top θ* (326 K) above the cloud layer's top (305 K): negative edge density, the mixed layer's intake became an outflow of all of it | A backward span holds no air at its edges |
+| 124 | Amazon, day 16 of a fresh run | The mixed layer held 8000–8500 kg/m² at θ 355 K, condensing 1300–2000 W/m² inside itself | The mixed layer ends at its condensation level; its air above leaves into the cloud layer |
+
+The faults were found by stepping one step at a time with a rolling history and stopping at the first collapsed column (a top layer over 3000 kg/m², a θ below 150 K, or winds over 400 m/s). Restarting from a save does not repeat a run exactly, because radiation counts its steps from the load, so every hunt reran from scratch (scratchpad `eq4w*.py`).
+
+**`earth4` at equilibrium with #121–#124** (measured year; #120 in brackets):
+
+| Measure | Value |
+|---|---|
+| Ts, net at the top | 289.59 K (294.95), +1.06 W/m² (−3.75) |
+| Rain, cover, surface longwave down | 3.55 mm/day (4.44), 0.65 (0.64), 345 W/m² (382) |
+| Tropical top layer, up / down across 380 K | 804 kg/m² (1448), 5.9 / 4.1 kg/m²/day (13.1 / 10.7) |
+| Layer 1's hottest θ, deepest mixed layer | 340 K (367), 5466 kg/m² (6775) |
+| Land 0–15°: rain, evaporation, Ts, soil | 4.36, 3.36 mm/day, 298.9 K, 0.49 (5.18, 4.61, 301.3, 0.76) |
+| Land 15–35°: rain, soil | 1.53 mm/day, 0.19 (3.11, 0.41) |
+| Tropical sea Ts | 298.9 K (304.5) |
+
+Open: the extratropical top layer stays light (574–684 kg/m²); subtropical land is dry; save/load is not bit-exact.

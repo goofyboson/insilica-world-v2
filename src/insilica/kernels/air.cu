@@ -41,7 +41,8 @@ struct Par {
   real S0, asw, tau0, mu_ref, eps_s, h_sens, u0, alb, c_slab, mu_bl, theta_star, floor_, sigma, grav, cp, kappa, p0;
   real tilt, year_s, day_s, tau_lin, theta_star2;
   real moist, Lv, Lf, Tf, k_evap, tau_conv, alb_ice, rho_ice, ice_cover, k_ice, Rv, sat_layer, sw_tau;
-  real alb_dry, alb_wet, soil_beta, k_inf, pond_cover, alb_snow, alb_ice_melt, alb_snow_melt, alb_glacier, snow_cover, alb_ramp, land_exch, plume_deep, lw_w0, c_dry, c_wet, sat_prof, land_rs, sat_base, bl_bot, cloud, rh_crit, re_liq, re_ice, cloud_g, k_lw_liq, k_lw_ice, c_auto, q_auto, v_ice, l_det, tau_erode, k_revap, mu_cloud, theta_rise, bl_mix, mu_night, bl_ent, bl_cap, bulk_c, bulk_gust, bulk_z, bulk_w, plume_ent, l_ice, storm_area, graupel_v, ice_small, q_shape, edge_heat, freeze_dry, edge_vap, conv_revap, plume_root, bl_q, sfc, z0_land, downdraft, ent_cloud, c_deep, rs_max, rs_sun, q_sea, bl_reach;
+  real alb_dry, alb_wet, soil_beta, k_inf, pond_cover, alb_snow, alb_ice_melt, alb_snow_melt, alb_glacier, snow_cover, alb_ramp, land_exch, plume_deep, lw_w0, c_dry, c_wet, sat_prof, land_rs, sat_base, bl_bot, cloud, rh_crit, re_liq, re_ice, cloud_g, k_lw_liq, k_lw_ice, c_auto, q_auto, v_ice, l_det, tau_erode, k_revap, mu_cloud, theta_rise, bl_mix, mu_night, bl_ent, bl_cap, bulk_c, bulk_gust, bulk_z, bulk_w, plume_ent, l_ice, storm_area, graupel_v, ice_small, q_shape, edge_heat, freeze_dry, edge_vap, conv_revap, plume_root, bl_q, sfc, z0_land, downdraft, ent_cloud, c_deep, rs_max, rs_sun, q_sea, bl_reach, dry_edge, bl_lcl;
+  real bl_room;                                            // (set per column: the mixed layer's room up to its cloud base, #124)
   int Lm1;                                         // the column's bottom layer
   real ths[LMAX];                                  // the theta* of the interfaces above the lowest one, from the top (decision #101)
 };
@@ -54,7 +55,7 @@ __device__ Par unpack(const real* a) {
   P.kappa = a[15]; P.p0 = a[16]; P.tilt = a[17]; P.year_s = a[18]; P.day_s = a[19]; P.tau_lin = a[20]; P.theta_star2 = a[21];
   P.moist = a[22]; P.Lv = a[23]; P.Lf = a[24]; P.Tf = a[25]; P.k_evap = a[26]; P.tau_conv = a[27]; P.alb_ice = a[28];
   P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32]; P.sat_layer = a[33]; P.sw_tau = a[34];
-  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; P.plume_ent = a[78]; P.l_ice = a[79]; P.storm_area = a[80]; P.graupel_v = a[81]; P.ice_small = a[82]; P.q_shape = a[83]; P.edge_heat = a[84]; P.freeze_dry = a[85]; P.edge_vap = a[86]; P.conv_revap = a[87]; P.plume_root = a[88]; P.bl_q = a[89]; P.sfc = a[90]; P.z0_land = a[91]; P.downdraft = a[92]; P.ent_cloud = a[93]; P.c_deep = a[94]; P.rs_max = a[95]; P.rs_sun = a[96]; P.q_sea = a[97]; P.bl_reach = a[98]; for (int j = 0; j < LMAX; j++) P.ths[j] = a[99 + j];
+  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; P.plume_ent = a[78]; P.l_ice = a[79]; P.storm_area = a[80]; P.graupel_v = a[81]; P.ice_small = a[82]; P.q_shape = a[83]; P.edge_heat = a[84]; P.freeze_dry = a[85]; P.edge_vap = a[86]; P.conv_revap = a[87]; P.plume_root = a[88]; P.bl_q = a[89]; P.sfc = a[90]; P.z0_land = a[91]; P.downdraft = a[92]; P.ent_cloud = a[93]; P.c_deep = a[94]; P.rs_max = a[95]; P.rs_sun = a[96]; P.q_sea = a[97]; P.bl_reach = a[98]; P.dry_edge = a[99]; P.bl_lcl = a[100]; P.bl_room = (real)1e30; for (int j = 0; j < LMAX; j++) P.ths[j] = a[101 + j];
   return P;
 }
 
@@ -408,6 +409,9 @@ __device__ void move_mass(int L, const Par& P, real* mu, real* th, real* q, real
 // fa = s / (e^s - 1) / (b - a) and fb = s e^s / (e^s - 1) / (b - a). A layer whose mean sits near one edge holds most of
 // its air there and little at the other.
 __device__ void edge_density(real a, real b, real m, real& fa, real& fb) {
+  // a span turned backwards (#123: a mixed layer warmer than 305 K sets the cloud layer's lower edge above its upper one) holds no air
+  // at its edges: its density had come out negative, and the mixed layer's intake an outflow of the whole layer
+  if (!(b > a)) { fa = 0; fb = 0; return; }
   const real W = b - a, s = edge_shape(a, b, m);
   if (fabs(s) < (real)1e-6) { fa = (1 - s / 2) / W; fb = (1 + s / 2) / W; return; }
 #if defined(MIXED)
@@ -530,7 +534,7 @@ __device__ void crossing(int L, const Par& P, real* mu, real* th, real* q, const
         real fa, fb;
         dens(a, fa, fb);
         // (turbulence takes it in over hours at the least, however little of the air above lies near the edge; dth over a day's mass as the cap)
-        dm = -fmin(mu[a] * dth[b] * fa, fmax(mu[a] - P.mu_bl, (real)0) * P.bl_cap);
+        dm = -fmin(fmin(mu[a] * dth[b] * fa, fmax(mu[a] - P.mu_bl, (real)0) * P.bl_cap), P.bl_room);
         thd = ts_ - (real)0.5 * dth[b];
       }
     } else if (P.bl_mix > 0 && b < L - 1 && th[b] >= ts_) {
@@ -963,7 +967,8 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   // diagnostics (dgo, optional, rows x N): per layer radiative + sensible heating (W/m^2), latent heating (W/m^2); per
   // interface the gross dry crossing up and down (kg/m^2 per step); per layer the convective mass delivered into it
   real dgl[LMAX], gross[2 * LMAX], cin[LMAX];
-  for (int k = 0; k < L; k++) { dgl[k] = 0; cin[k] = 0; }
+  real dlat[LMAX];                               // each layer's latent heating (as theta) before the crossing (#121)
+  for (int k = 0; k < L; k++) { dgl[k] = 0; cin[k] = 0; dlat[k] = 0; }
 
   // ---- the slab: open water takes the surface fluxes (evaporation costs it Lv per kg); under ice, the conduction up
   // into the skin. Freezing below Tf turns slab heat into ice; ice melts with slab heat above Tf and from the top
@@ -996,6 +1001,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
     for (int k = 0; k < L; k++) {
       const real dl = cloud_adjust(k, mu, th, q, cl, pib, dt, P, gx);
       dth[k] += P.Lv * dl / pib[k];
+      dlat[k] += P.Lv * dl / pib[k];
       dgl[k] += P.Lv * mu[k] * dl / dt;
       real qs, dqs, l, f;
       layer_cap(k, mu, th[k], P, qs, dqs, gx);
@@ -1019,6 +1025,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
         q[k] += ev * dt / mu[k];
         th[k] -= P.Lv * ev * dt / (mu[k] * pib[k]);
         dth[k] -= P.Lv * ev * dt / (mu[k] * pib[k]);
+        dlat[k] -= P.Lv * ev * dt / (mu[k] * pib[k]);
         dgl[k] -= P.Lv * ev;
       }
       Rk[k == bot ? 1 : 0] += mu[k] * loss - ev * dt;
@@ -1028,6 +1035,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
     for (int k = 0; k < L; k++) {
       const real dq = condense_k(k, mu, th, q, pib, P);
       dth[k] += P.Lv * dq / pib[k];
+      dlat[k] += P.Lv * dq / pib[k];
       dgl[k] += P.Lv * mu[k] * dq / dt;
       R += mu[k] * dq;
       Rk[k == bot ? 1 : 0] += mu[k] * dq;
@@ -1036,6 +1044,25 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   // ---- dry crossing of the interfaces ----
   real wxo[LMAX];
   if (P.bl_mix > 0 && L > 2) P.theta_star = fmin(fmax(ts_base, th[bot]), th[bot - 1] - 1);
+  // the mixed layer ends at its cloud base (#124): mixed dry-adiabatically with its vapor even, its air saturates where lifted to its
+  // condensation level, and above that the air is cloud, carried up by the plumes; grown past it, the mixed layer condensed inside itself
+  // (2000 W/m^2 over the Amazon), warmed past the air above, took that in too, and became the whole troposphere at theta 355 K
+  // the mixed layer's mass up to the level where its air, lifted dry-adiabatically, saturates (bisection in pressure)
+  auto lcl_mass = [&]() -> real {
+    real ps_ = 0;
+    for (int k = 0; k < L; k++) ps_ += P.grav * mu[k];
+    auto sat = [&](real p_) { return (real)qsat((fast)(th[bot] * FPOW(p_ / P.p0, P.kappa)), (fast)p_) <= q[bot]; };
+    if (sat(ps_)) return (real)0;
+    if (!sat((real)0.1 * ps_)) return (real)1e30;
+    real lo = (real)0.1 * ps_, hi = ps_;                                          // saturated at lo, not at hi
+    for (int it = 0; it < 40; it++) { const real m_ = (real)0.5 * (lo + hi); if (sat(m_)) lo = m_; else hi = m_; }
+    return (ps_ - (real)0.5 * (lo + hi)) / P.grav;
+  };
+  real mu_lcl = (real)1e30;
+  if (P.bl_lcl > 0 && P.bl_mix > 0 && L > 2) {
+    mu_lcl = lcl_mass();
+    P.bl_room = fmax((real)0, mu_lcl - mu[bot]);
+  }
   // the k-tables' sub-levels: the edges' own heating, the layer's mean radiative heating swapped for its edge sub-level's (#111)
   real dtop[LMAX], dbot[LMAX];
   if (radf) {
@@ -1050,6 +1077,9 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
       if (k == L - 1 && P.bl_mix > 0) dtop[k] = dbot[k] = dth[k];    // the mixed bottom layer heats evenly
       pt_ = pbk;
     }
+    // (#121) the 380 K edge: the layer's condensation happens in its storms' outflow far below, the edge air at the cold point holding
+    // next to no vapor; spread over the layer, its latent heat had driven the edge's air across 380 K, filling the stratosphere
+    if (P.dry_edge > 0 && L > 2) dtop[1] -= dlat[1];
   }
   // (off, #111: with isothermal layers an edge sub-level's temperature is not the edge's, and the middle layer's base, far colder than
   // the air below it, warmed and stopped feeding the bottom layer; kept for a temperature profile continuous across the interfaces)
@@ -1069,6 +1099,11 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
     // ka: the layer the mixed layer takes air from, the one above it, or with bl_reach (#120) the lowest above it that holds air: a mixed
     // layer whose neighbour above is down to its floor otherwise had no air to take in, and over hot land sat at theta 330 K under air of 305-325 K
     int ka = bot - 1;
+    // the lower edge of a layer the mixed layer touches through emptied layers (#122): the mixed layer's theta, as its own top's theta* is
+    // (the air over a mixed layer is no colder than it). At its nominal theta* the slices taken from it were colder than any air it held:
+    // the mixed layer's air, passed up into it through the emptied layer, came back colder each step, pumping heat up into it until
+    // its mean reached its top edge and the whole layer crossed into the stratosphere
+    auto reach_edge = [&](int k) -> real { return k < bot - 1 ? fmax(tstar(k, L, P), th[bot]) : tstar(k, L, P); };
     if (P.bl_reach > 0) {
       // dry convection (#120): air above colder than the mixed layer belongs in it (the encroachment of the heated layer into the profile above,
       // as a middle layer warmer than its top edge belongs above it). From each layer up, a slice from its bottom edge: with its theta linear in
@@ -1078,12 +1113,12 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
       for (int k = bot - 1; k >= 1; k--) {
         const real avail = mu[k] - P.floor_;
         if (avail > 0) {
-          const real e = tstar(k, L, P), D = th[k] - e;
+          const real e = reach_edge(k), D = th[k] - e;
           const bool spread = D > 0 && th[k] < tstar(k - 1, L, P);
           real x = spread ? (th[bot] > e ? mu[bot] / mu[k] * (sqrt(1 + mu[k] * (th[bot] - e) / (mu[bot] * D)) - 1) : (real)0)
                           : (th[k] < th[bot] ? (real)1 : (real)0);
           const real want = fmin((real)1, x) * mu[k];
-          const real m = fmin(fmin(want, avail), P.bl_cap * fmax(mu[k] - P.mu_bl, P.mu_bl));
+          const real m = fmin(fmin(fmin(want, avail), P.bl_cap * fmax(mu[k] - P.mu_bl, P.mu_bl)), fmax((real)0, mu_lcl - mu[bot]));
           if (m > 0) {
             const real fm = m / mu[k], thl = spread ? e + fm * D : th[k];
             const real qx = P.edge_vap > 0 ? edge_q(k, false, mu, th, q, m, P) : q[k];
@@ -1096,14 +1131,14 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
       ka = bot - 1;
       while (ka > 1 && !(mu[ka] > P.floor_ * (real)1.000001)) ka--;
     }
-    const real eka = tstar(ka, L, P);
+    const real eka = reach_edge(ka);
     const real Bf = H + (real)0.61 * P.cp * Tsa * E, jump = fmax((real)1, eka - th[bot]);
     if (Bf > 0) {
-      const real m = fmin(P.bl_ent * Bf * dt / (P.cp * jump), mu[ka] - P.floor_);
+      const real m = fmin(fmin(P.bl_ent * Bf * dt / (P.cp * jump), mu[ka] - P.floor_), fmax((real)0, mu_lcl - mu[bot]));
       if (m > 0) {
         // the slice it takes, a share f of the layer above from its bottom edge, holds for a linear profile the edge's theta plus f of the
         // way to the layer's mean, as its vapor does (#112): the edge's alone left a nearly emptied layer's excess heat in its floor air (#119)
-        const bool spread = ka >= 1 && th[ka] < tstar(ka - 1, L, P);
+        const bool spread = ka >= 1 && th[ka] < tstar(ka - 1, L, P) && th[ka] > eka;   // (a layer all colder than its edge gives its mean, #122)
         const real fm = fmin((real)1, m / mu[ka]);
         const real thc = spread ? eka + fm * (th[ka] - eka) : th[ka];
         const real qx = P.edge_vap > 0 ? edge_q(ka, false, mu, th, q, m, P) : q[ka];   // (edge vapor, #112)
@@ -1115,6 +1150,16 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
       const real qx = P.edge_vap > 0 ? edge_q(bot, true, mu, th, q, m, P) : q[bot];
       move_mass(L, P, mu, th, q, pib, bot, bot - 1, m, th[bot], th[bot], qx, qx, cloudy ? cl : (real*)0);
       wxo[bot - 1] += m;
+    }
+    // (#124) air of the mixed layer above its cloud base, brought there by the winds' convergence or by its own warming, is cloud: it
+    // leaves through the layer's top into the cloud layer, which condenses it, and the crossings and plumes carry it on up
+    if (P.bl_lcl > 0) {
+      const real m = mu[bot] - fmax(lcl_mass(), P.mu_night);
+      if (m > 0) {
+        const real qx = P.edge_vap > 0 ? edge_q(bot, true, mu, th, q, m, P) : q[bot];
+        move_mass(L, P, mu, th, q, pib, bot, bot - 1, m, th[bot], th[bot], qx, qx, cloudy ? cl : (real*)0);
+        wxo[bot - 1] += m;
+      }
     }
   }
 

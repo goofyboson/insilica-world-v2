@@ -522,7 +522,7 @@ __device__ void crossing(int L, const Par& P, real* mu, real* th, real* q, const
   for (int j = 0; j + 1 < L; j++) {
     const int a = j, b = j + 1;                            // the layers above and below interface j
     const real ts_ = tstar(j, L, P);
-    real dm = 0, thc = ts_;
+    real dm = 0, thc = ts_, thd = ts_;                     // thc: the rising air's theta, thd: the sinking air's (#119)
     if (gross) { gross[2 * j] = 0; gross[2 * j + 1] = 0; }
     if (dth[b] > 0 && P.bl_mix > 0 && b == L - 1) {
       // the mixed bottom layer (decision #98): heated past the air above's lowest theta it takes that air in, deepening, and never drains up by heating
@@ -531,7 +531,7 @@ __device__ void crossing(int L, const Par& P, real* mu, real* th, real* q, const
         dens(a, fa, fb);
         // (turbulence takes it in over hours at the least, however little of the air above lies near the edge; dth over a day's mass as the cap)
         dm = -fmin(mu[a] * dth[b] * fa, fmax(mu[a] - P.mu_bl, (real)0) * P.bl_cap);
-        thc = ts_ - (real)0.5 * dth[b];
+        thd = ts_ - (real)0.5 * dth[b];
       }
     } else if (P.bl_mix > 0 && b < L - 1 && th[b] >= ts_) {
       // (the four-layer air, V2-6b: a middle layer warmer than its top edge, the residual of a hot mixed layer's night release, belongs above it, heated or not)
@@ -550,12 +550,12 @@ __device__ void crossing(int L, const Par& P, real* mu, real* th, real* q, const
     if (P.bl_mix > 0 && a >= 1 && th[a] <= ts_ && dm <= 0) {
       // (and one colder than its bottom edge belongs below it)
       const real down = mu[a] - P.floor_;
-      thc = th[a];
+      thd = th[a];
       dm -= down;
       if (gross) gross[2 * j + 1] = down;
     } else if (da < 0) {
       real down;
-      if (th[a] <= ts_) { down = mu[a] - P.floor_; thc = th[a]; }
+      if (th[a] <= ts_) { down = mu[a] - P.floor_; thd = th[a]; }
       else if (a == 0) down = mu[a] * (-da) / (2 * ((th[a] - dth[a]) - ts_));
       else {                                                // a middle layer's bottom edge
         real fa, fb;
@@ -566,7 +566,9 @@ __device__ void crossing(int L, const Par& P, real* mu, real* th, real* q, const
       if (gross) gross[2 * j + 1] = down;
     }
     if (gross) gross[2 * j] = dm + gross[2 * j + 1];
-    dmj[j] = dm; thcj[j] = thc;
+    // (the net flow is the air of its own direction: air sinking from above carried the theta of the air below rising to meet it, and
+    // emptied the layer above of heat it never held; #119)
+    dmj[j] = dm; thcj[j] = dm > 0 ? thc : thd;
   }
   for (int j = L - 2; j >= 0; j--) {
     const int a = j, b = j + 1;
@@ -1068,7 +1070,13 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
     if (Bf > 0) {
       const real m = fmin(P.bl_ent * Bf * dt / (P.cp * jump), mu[bot - 1] - P.floor_);
       if (m > 0) {
-        const real thc = P.theta_star, qx = P.edge_vap > 0 ? edge_q(bot - 1, false, mu, th, q, m, P) : q[bot - 1];   // (edge vapor, #112)
+        // the slice it takes, a share f of the layer above from its bottom edge, holds for a linear profile the edge's theta plus f of the
+        // way to the layer's mean, as its vapor does (#112): the edge's alone left a nearly emptied layer's excess heat in its floor air (#119)
+        const int ka = bot - 1;
+        const bool spread = ka >= 1 && th[ka] < tstar(ka - 1, L, P);
+        const real fm = fmin((real)1, m / mu[ka]);
+        const real thc = spread ? P.theta_star + fm * (th[ka] - P.theta_star) : th[ka];
+        const real qx = P.edge_vap > 0 ? edge_q(bot - 1, false, mu, th, q, m, P) : q[bot - 1];   // (edge vapor, #112)
         move_mass(L, P, mu, th, q, pib, bot - 1, bot, m, thc, thc, qx, qx, cloudy ? cl : (real*)0); wxo[bot - 1] -= m;
       }
     } else if (mu[bot] > P.mu_night) {

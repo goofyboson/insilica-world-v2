@@ -292,3 +292,43 @@ The land now behaves like land: the Bowen ratio is about 1, and nights are still
 **The planet warms, because cloud thins as the land dries (0.64 → 0.57).** The warm bias is in the clouds, not the surface.
 
 **The NaN, an existing fragility.** At day 990 of the run without salt, off Japan (38°N, 144°E), the layer above the mixed layer was emptied to its floor (0.98 hPa) and already stood at θ 862 K. One column step heated it to 1912 K. Two steps later the column and the winds failed (θ −320,000 K, winds 776 m/s). Hot near-empty layers exist in the earlier `earth4` states too. For example, the old equilibrium state has a mixed layer at 1.5 hPa with θ 424 K, and about 500 cells with a layer under 2 hPa. A layer at its floor should not take heating it cannot hold.
+
+## Air leaving a nearly emptied layer (SPEC #119)
+
+The NaN in #118's run without salt, traced step by step at the cell where it began (38°N 144°E, day 990). The column step heated the layer above the mixed layer by roughly twice as much each step:
+
+| step | layer above the mixed layer: mass (kg/m²) after the column | θ (K) | taken by entrainment (kg/m²) | layer 1's air sinking into it, at θ (K) |
+|---|---|---|---|---|
+| 47533 | 10.0 | 305.0 | 27.7 | 305 |
+| 47534 | 24.1 | 348.9 | 31.4 | 307 |
+| 47535 | 26.7 | 421.5 | 29.3 | 349 |
+| 47536 | 21.1 | 570.3 | 30.1 | 407 |
+| 47537 | 21.9 | 862.2 | 33.2 | 541 |
+| 47538 | 21.6 | 1912.0 | 51.0 | 841 |
+
+Two errors fed each other:
+
+1. **Entrainment took the layer's coldest air only.** The growing mixed layer took up to three quarters of the layer above, all at that layer's bottom-edge θ. The remnant kept the excess heat. Now the slice taken holds the edge's θ plus f of the way to the layer's mean, as the vapor already did (#112).
+2. **The crossing's net flow took the wrong θ.** A remnant warmer than its top edge rises at its own θ. Layer 1's sinking air outweighed it, and the net, now sinking, still carried the remnant's θ. Layer 1 lost heat it never held: on the last step 1838 kg/m² at 1892 K, and its θ went to −640 K. Now the net carries its own direction's θ.
+
+`earth4` at equilibrium (3 coupled years, 5 × (1 + 20), a settling year, the next year measured):
+
+| | #118 | #119 | without salt |
+|---|---|---|---|
+| Ts (K) | 294.41 | 293.93 | 293.51 |
+| absorbed sunlight / OLR (W/m²) | 246.8 / 249.9 | 247.7 / 249.2 | 246.8 / 248.2 |
+| net (W/m²) | −3.1 | −1.5 | −1.4 |
+| rain (mm/day) | 3.67 | 3.68 | 3.72 |
+| cloud cover | 0.57 | 0.57 | 0.57 |
+| near-empty (< 2 hPa) cells above the mixed layer, hottest θ (K) | 555, 318 (layer max 387) | 434, 313 | 423, 307 |
+
+**Still open.**
+
+- **Near-empty mixed layers trap heat.** 73 cells hold under 2 hPa, up to θ 428 K over Tibet (362 K air over 272 K ground). They sit just above the floor (11 kg/m²), where the floor clamp does not reach them.
+- **Tropical land is hot and dry since #118:**
+
+| land 0–15° | before #118 | #118 / #119 |
+|---|---|---|
+| Ts (K) | 304 | 320 |
+| deep ground (K) | (not used) | 314 |
+| soil (share of capacity) | 0.57 | 0.12–0.17 |

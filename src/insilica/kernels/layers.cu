@@ -240,7 +240,7 @@ extern "C" __global__ void lay_slow(int N, int E, int L, const fast* pk, const f
                                     real floor_, real nu4, const real* lap4, const real* theta, const real* pibar,
                                     real dts, real thin, real shelf, real* Tp, real* G, real* He, real* ubs) {
   LOOP1(e, E)
-  real T[LMAX], hev[LMAX];
+  real T[LMAX], hev[LMAX], sqk[LMAX];
   real H = 0, U = 0, GT = 0;
   for (int k = 0; k < L; k++) {
     const real* hl = hedge + (size_t)k * E;
@@ -262,7 +262,10 @@ extern "C" __global__ void lay_slow(int N, int E, int L, const fast* pk, const f
     }
     // a squeezed layer's interfaces there are the floor's slope, not a pressure force: it fades with the layer, gone at twice the floor, and the
     // floor's step stops the water that is left within hours
-    const real sq = shelf > 0 && he < shelf ? (he - 2 * floor_ > 0 ? (he - 2 * floor_) / (shelf - 2 * floor_) : (real)0) : (real)1;
+    const real sq0 = shelf > 0 && he < shelf ? (he - 2 * floor_ > 0 ? (he - 2 * floor_) / (shelf - 2 * floor_) : (real)0) : (real)1;
+    // (air, V2-6b: a layer squeezed against the ground keeps its own forces here and takes its neighbours' below)
+    const real sq = theta ? (real)1 : sq0;
+    sqk[k] = sq0;
     real d = Q - DIVBY(sq * (Bl[eJ[e]] - Bl[eI[e]]), de[e]) - (drag[k] + (1 - sq) / (real)21600) * ul[e];
     if (stress[k] != 0) {
       // exact exponential decay over the stage (rate r = c / h): the effective rate (1 - e^(-r dts)) / dts is r for
@@ -280,8 +283,24 @@ extern "C" __global__ void lay_slow(int N, int E, int L, const fast* pk, const f
     hev[k] = he;
     H += he;
     U += he * ul[e];
-    GT += he * d;
   }
+  // Air squeezed against the ground over terrain (V2-6b): an emptied layer's own pressure force there is meaningless, while the column's
+  // barotropic force (the surface pressure's gradient, g times the ground's slope) reaches every layer alike and is balanced only in
+  // the layers with mass. The scrap of air is embedded in its neighbours and feels their pressure gradient: its slow tendency
+  // blends to the thickness-weighted tendency of the nearest unsqueezed layers above and below, all the way at twice the floor.
+  if (theta && shelf > 0) {
+    real Tn[LMAX];
+    for (int k = 0; k < L; k++) {
+      Tn[k] = T[k];
+      if (sqk[k] >= 1) continue;
+      real w = 0, s = 0;
+      for (int j = k - 1; j >= 0; j--) if (sqk[j] >= 1) { w += hev[j]; s += hev[j] * T[j]; break; }
+      for (int j = k + 1; j < L; j++) if (sqk[j] >= 1) { w += hev[j]; s += hev[j] * T[j]; break; }
+      if (w > 0) Tn[k] = sqk[k] * T[k] + (1 - sqk[k]) * s / w;
+    }
+    for (int k = 0; k < L; k++) T[k] = Tn[k];
+  }
+  for (int k = 0; k < L; k++) GT += hev[k] * T[k];
   const real g = GT / H;
   for (int k = 0; k < L; k++) Tp[(size_t)k * E + e] = T[k] - g;
   G[e] = g;
@@ -432,12 +451,20 @@ extern "C" __global__ void xch_edge(int N, int E, int L, const real* wx, const r
     k0 += he * uk * uk;
     if (lap4) v4 += he * uk * lap4[(size_t)k * E + e];
   }
-  for (int k = 0; k + 1 < L; k++) {
-    const real v = (real)0.5 * (wx[(size_t)k * N + eI[e]] + wx[(size_t)k * N + eJ[e]]);
-    const real ud = v > 0 ? u[(size_t)(k + 1) * E + e] : u[(size_t)k * E + e];
-    mom[k] += v * ud; mom[k + 1] -= v * ud;
-    hn[k] += v; hn[k + 1] -= v;
-  }
+  // Air moving up is taken from the bottom interface up, air moving down from the top down, each at its donor's wind as it stands
+  // (V2-6b): air passing through a layer in one step (the boundary layer's air through an emptied layer above it, a plume through
+  // the middle) carries the wind it has on the way, not the passed layer's own; taken in one order with the donors' old winds, a
+  // nearly empty layer that gave up 400 kg/m^2 before receiving 400 was left with 40 times their wind difference
+  for (int pass = 0; pass < 2; pass++)
+    for (int n = 0; n + 1 < L; n++) {
+      const int k = pass == 0 ? L - 2 - n : n;
+      const real v = (real)0.5 * (wx[(size_t)k * N + eI[e]] + wx[(size_t)k * N + eJ[e]]);
+      if (pass == 0 ? !(v > 0) : !(v < 0)) continue;
+      const int d = v > 0 ? k + 1 : k;
+      const real ud = hn[d] > floor_ ? mom[d] / hn[d] : u[(size_t)d * E + e];
+      mom[k] += v * ud; mom[k + 1] -= v * ud;
+      hn[k] += v; hn[k + 1] -= v;
+    }
   real un[LMAX];
   for (int k = 0; k < L; k++) un[k] = mom[k] / hn[k];
   if (hthin > 0)
@@ -450,6 +477,9 @@ extern "C" __global__ void xch_edge(int N, int E, int L, const real* wx, const r
       if (k > 0) { hs += hn[k - 1]; ms += hn[k - 1] * un[k - 1]; }
       if (k + 1 < L) { hs += hn[k + 1]; ms += hn[k + 1] * un[k + 1]; }
       if (hs <= 0) continue;
+      // at most to the joint mean of the layer and its neighbours (V2-6b): a layer thin in one cell but heavy at the edge (the boundary
+      // layer at a coast, 1,232 against 17 kg/m^2) otherwise paid its momentum change out of a nearly empty neighbour, 245 m/s in one step
+      w = fmin(w, hs / (hn[k] + hs));
       const real du = w * (ms / hs - un[k]);
       un[k] += du;
       const real dn = hn[k] * du / hs;

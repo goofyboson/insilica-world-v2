@@ -78,7 +78,8 @@ class World:
                            div_damp=P.get('div_damp', DIV_DAMP),
                            air=dict(t_ref=self.air.get('t_ref', 288.0)) if self.air else None,
                            vmix=P.get('vmix', spec.get('vmix', 0.0)),
-                           thin_wind=P.get('thin_wind', THIN_WIND if spec.get('air') else 0.0))
+                           thin_wind=P.get('thin_wind', THIN_WIND if spec.get('air') else 0.0),
+                           shelf=P.get('shelf', spec.get('shelf', 0.0)))   # (air, V2-6b: a layer squeezed below it over terrain loses its pressure force, as the sea's over its floor, #97)
         self.dynamics = P.get('dynamics', spec.get('dynamics', True))
         self.tracer = P.get('tracer', spec.get('tracer', True))   # transport the demo tracer psi (off for air: #42)
         if nu4:
@@ -127,6 +128,10 @@ class World:
             self.mouth = self.routing.mouth
             self.STATE = self.STATE + ('soil', 'pond', 'snow', 'mouth')
             self.cap = self.land * p['c_land'] + (1 - self.land) * p['c_slab']   # (the ocean's own when coupled)
+            if p['cover'] > 0:                                   # land cover (V2-6b, #132)
+                if spec.get('cover') is None:
+                    raise ValueError('land cover (cover) needs the preset cover map (cover)')
+                self.physics.cover = cp.asarray(np.asarray(spec['cover'](self.grid), dtype=float))
         # The ocean under the air (V2-3): its mixed layer's temperature is the air's surface temperature
         self.sea = None
         if spec.get('ocean') is not None:
@@ -134,7 +139,7 @@ class World:
             ocfg = dict(spec['ocean'], **P.get('ocean', {}))
             self.surface_drag = ocfg.pop('surface_drag')
             self.sea = Ocean(self.dg, ocfg, Tsurf=extra['Ts'], state=extra.get('ocean'), land=land,
-                             c_land=self.physics.p['c_land'])
+                             c_land=self.physics.p['c_land'], c_deep=self.physics.p['c_deep'])
             ratio = self.sea.cfg['dt'] / self.dt
             if abs(ratio - round(ratio)) > 1e-9 or round(ratio) < 1:
                 raise ValueError(f'the ocean step {self.sea.cfg["dt"]} s must be a whole number of air steps ({self.dt} s)')
@@ -145,6 +150,20 @@ class World:
             self.oh, self.ou, self.oT, self.oM, self.oS = self.sea.h, self.sea.u, self.sea.T, self.sea.M, self.sea.S
             self.STATE = tuple(k for k in self.STATE if k != 'Ts') + ('oh', 'ou', 'oT', 'oM', 'oS')
             self._sync_sea()
+        # the mountains' drag (V2-6b, #127): Lott & Miller (1997) from the sub-grid orography
+        self.oro = None
+        if self.air and self.physics.p['oro'] > 0:
+            from .orodrag import OroDrag
+            if self.sea is None or spec.get('sso') is None:
+                raise ValueError('the mountain drag (oro) needs the coupled ocean and the preset sub-grid orography (sso)')
+            self.oro = OroDrag(self.dg, self.L, spec['sso'](self.grid), self.physics.p, self.dt)
+        # the gravity waves not tied to the ground (#128): Alexander & Dunkerton (1999)
+        self.gw = None
+        if self.air and self.physics.p['gw'] > 0:
+            from .orodrag import WaveDrag
+            if self.sea is None:
+                raise ValueError('the wave drag (gw) books its heat with the wind stress: it needs the coupled ocean')
+            self.gw = WaveDrag(self.dg, self.L, self.physics.p, self.dt)
         if self.air:
             self.core.update_gfast(self.h, self.theta)
         # fast sub-steps per step: from the fastest column, with 20% room
@@ -195,7 +214,14 @@ class World:
             g, i32, R = self.dg, np.int32, self.dg.dtype.type
             if rec:
                 rec.pre_couple()
-            self.sea.couple(self.h, self.u, self.surface_drag, self.dt)
+            if self.air and self.physics.sfc:
+                self.physics.surface(self.h, self.theta, self.Ts, self.u, q=self.q if self.moist else None,
+                                     ice=self.ice if self.moist else None, land=self.land)
+            self.sea.couple(self.h, self.u, self.surface_drag, self.dt, cd=self.physics.cd if self.air else None)
+            if self.oro is not None:
+                self.oro.apply(self.h, self.theta, self.u, self.dt, self.sea.diss)
+            if self.gw is not None:
+                self.gw.apply(self.h, self.theta, self.u, self.dt, self.sea.diss)
             if rec:
                 rec.post_couple()
             self.core.k['vmix_heat'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.sea.diss, g.cellEdge, g.le, g.de,
@@ -216,6 +242,7 @@ class World:
             if rec:
                 rec.post_column()
             if self.sea is not None:
+                self.sea.ground(self.dt)
                 self.sea.accumulate(self.dt, self.physics.evap, self.physics.rain, self.ice, self.mouth)
             if self.L > 1:
                 self.core.exchange(self.physics.wx, self.h, self.u, self.M, self.psi, theta=self.theta)

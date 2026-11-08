@@ -15,9 +15,11 @@ typedef REAL real;
 // energy removed, 0.5 ma mo / (ma + mo) (du0^2 - du1^2) per unit area at the edge, goes to diss (J/m^2; booked as the
 // air's heat); the stress the ocean received (N/m^2) is added to tau_acc as tau^2 dt (for the mixed layer's u*).
 extern "C" __global__ void couple_stress(int N, int E, int La, const real* ha, real* ua, const real* ho, real* uo, const int* eI,
-                                         const int* eJ, real c, real rho_w, real dt, real* diss, real* tau_acc, const real* wall, real land_drag) {
+                                         const int* eJ, real c, real rho_w, real dt, real* diss, real* tau_acc, const real* wall, real land_drag, const real* cd) {
   LOOP1(e, E)
   const int b = La - 1;
+  // the surface layer's drag (V2-6b, #114): rho C_D U at the edge from its two cells, over land and sea alike
+  if (cd) { c = (real)0.5 * (cd[eI[e]] + cd[eJ[e]]); land_drag = 1; }
   const real ma = (real)0.5 * (ha[(size_t)b * N + eI[e]] + ha[(size_t)b * N + eJ[e]]);
   real* pa = ua + (size_t)b * E + e;
   real* po = uo + e;
@@ -214,6 +216,20 @@ extern "C" __global__ void ocn_heat(int N, int L, const real* h, const real* T, 
   real s = 0;
   for (int k = 0; k < L; k++) s += h[(size_t)k * N + i] * (T[(size_t)k * N + i] - (real)273.15);
   H[i] += sign * rho_cw * s;
+}
+
+// The ground below its skin (#118), on land cells: T1 holds the deep ground's temperature (capacity c_deep, J/m^2/K) under the
+// skin's T0 (capacity cap). They exchange heat by conduction at the force-restore rate (Deardorff 1978): the skin relaxes to the
+// deep ground at the daily frequency omega, so the conductance is omega times the skin's capacity. Taken exactly over the step
+// (two bodies), energy conserved.
+extern "C" __global__ void ocn_ground(int N, const real* land, real* T, const real* cap, real c_deep, real dt) {
+  LOOP1(i, N)
+  if (!(land[i] > (real)0.5)) return;
+  const real Cs = cap[i], a = T[i], b = T[(size_t)N + i];
+  const real k = (real)(2 * 3.14159265358979323846 / 86400.0) * Cs, Te = (Cs * a + c_deep * b) / (Cs + c_deep);
+  const real d = (a - b) * exp(-k * dt * (1 / Cs + 1 / c_deep));
+  T[i] = Te + d * c_deep / (Cs + c_deep);
+  T[(size_t)N + i] = Te - d * Cs / (Cs + c_deep);
 }
 
 // The mixed layer's heat capacity per cell for the air's surface physics: rho_w c_w h0 (J/m^2/K).

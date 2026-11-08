@@ -45,10 +45,11 @@ def wall_mask(g, walls):
 
 
 class Ocean:
-    def __init__(self, dg, cfg=None, Tsurf=None, state=None, land=None, c_land=2.0e6):
+    def __init__(self, dg, cfg=None, Tsurf=None, state=None, land=None, c_land=2.0e6, c_deep=0.0):
         """cfg overrides OCEAN; Tsurf (N, K) starts the mixed layer's temperature (from the air case's surface);
         state = (h, u, T) restores one; land (N, 0/1): cells with no water (#84), walled off, their T[0] the ground's
-        temperature with heat capacity c_land."""
+        temperature with heat capacity c_land; with c_deep > 0 (#118) that is the ground's skin, and T[1] there is the deep
+        ground's temperature (capacity c_deep) under it."""
         self.dg = dg
         self.cfg = c = dict(OCEAN, **(cfg or {}))
         N, E = dg.N, dg.E
@@ -69,7 +70,7 @@ class Ocean:
         # thin walls (decision #79): at each longitude in walls (degrees), pole to pole, the edges between the cells on its two
         # sides carry no water — a basin's coasts, with no land cells (the air still sees open water there)
         self.wall = wall_mask(g, c['walls']) if len(c['walls']) else None
-        self.c_land = c_land
+        self.c_land, self.c_deep = c_land, c_deep
         self.land = None
         if land is not None:
             m = self.wall if self.wall is not None else np.ones(g.E)
@@ -105,6 +106,8 @@ class Ocean:
             h, u, T = state[:3]
             S = state[3] if len(state) > 3 else np.full((L, N), c['S_ref'])
         self.h, self.u, self.T = cp.asarray(h, dtype=float), cp.asarray(u, dtype=float), cp.asarray(T, dtype=float)
+        if state is None and land is not None and c_deep > 0:   # the deep ground starts at its skin's temperature
+            self.T[1] = cp.where(self.land > 0.5, self.T[0], self.T[1])
         self.core.mask(self.u, L)
         self.S = cp.asarray(S, dtype=float)                     # salinity (psu, decision #76)
         self.M = self.h * cp.asarray(g.areaCell)[None, :]
@@ -125,7 +128,7 @@ class Ocean:
         self.mix_every = int(round(ratio))
         k = lambda n: dg.kernel(n, 'ocean.cu')
         self.k = {n: k(n) for n in ('couple_stress', 'ocn_column', 'ocn_cap', 'ocn_overturn', 'ocn_pen', 'ocn_fresh', 'ocn_xch_salt',
-                                    'ocn_heat')}
+                                    'ocn_heat', 'ocn_ground')}
         self.conv = None                                        # the currents' heat convergence, when tracked
         self.k['cell_speed'] = dg.kernel('cell_speed', 'air.cu')
         self.update_cap()
@@ -141,18 +144,25 @@ class Ocean:
         self.k['ocn_heat'](*grid_dims(g.N), (np.int32(g.N), np.int32(self.L), self.h, self.T, g.dtype.type(self.cfg['rho'] * self.cfg['cw']),
                                             g.dtype.type(sign), self.conv))
 
+    def ground(self, dt):
+        """The deep ground's exchange with its skin over dt (#118); nothing unless c_deep > 0."""
+        if self.c_deep > 0 and self.land is not None:
+            g = self.dg
+            self.k['ocn_ground'](*grid_dims(g.N), (np.int32(g.N), self.land, self.T, self.cap, g.dtype.type(self.c_deep), g.dtype.type(dt)))
+
     def update_cap(self):
         g = self.dg
         self.k['ocn_cap'](*grid_dims(g.N), (np.int32(g.N), self.h, g.dtype.type(self.cfg['rho'] * self.cfg['cw']), self.cap, self._land(),
                                             g.dtype.type(self.c_land)))
 
-    def couple(self, air_h, air_u, c, dt):
+    def couple(self, air_h, air_u, c, dt, cd=None):
         """The wind stress over one air step (exactly, momentum conserved); the kinetic energy it removed is left in
         self.diss (J/m² per edge) for the air to take as heat."""
         g, i32, R = self.dg, np.int32, self.dg.dtype.type
         self.k['couple_stress'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(air_h.shape[0]), air_h, air_u, self.h, self.u,
                                                   g.eI, g.eJ, R(c), R(self.cfg['rho']), R(dt), self.diss, self.tau_acc,
-                                                  self.core.wall if self.core.wall is not None else NULL, R(self.cfg['land_drag'])))
+                                                  self.core.wall if self.core.wall is not None else NULL, R(self.cfg['land_drag']),
+                                                  cd if cd is not None else NULL))
 
     def _land(self):
         return self.land if self.land is not None else NULL
@@ -214,7 +224,8 @@ class Ocean:
         rc = self.cfg['rho'] * self.cfg['cw']
         if self.land is None:
             return float(cp.sum(A * cp.sum(self.h * self.T, axis=0))) * rc
-        return float(cp.sum(A * ((1 - self.land) * rc * cp.sum(self.h * self.T, axis=0) + self.land * self.cap * (self.T[0] - 273.15))))
+        ground = self.cap * (self.T[0] - 273.15) + (self.c_deep * (self.T[1] - 273.15) if self.c_deep > 0 else 0.0)
+        return float(cp.sum(A * ((1 - self.land) * rc * cp.sum(self.h * self.T, axis=0) + self.land * ground)))
 
     def salt(self):
         """The ocean's salt (kg): ρ_w Σ A h S / 1000."""

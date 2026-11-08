@@ -134,24 +134,59 @@ def test_longwave(record):
     assert ok
 
 
-EARTH_SPIN_YEARS = 8                             # the k-tables' earth settles to within a few W/m² by 8 years (#112)
+EARTH_SPIN_YEARS = 3                             # coupled years before the asynchronous cycles (#117)
+EARTH_CYCLES = (5, 20)                           # (1 coupled year + 20 ocean-only years) × 5, then a coupled year: the thermocline at equilibrium (#107, #117)
+
+
+def _earth_equilibrium():
+    from insilica import spinup
+    w = World(4, 'earth5')                     # the five-layer earth: its boundary layer a layer of its own (#125), its stratosphere two (#129)
+    year = int(round(365 * 86400 / w.dt))
+    w.step(EARTH_SPIN_YEARS * year)
+    spinup.spin_up(w, *EARTH_CYCLES)
+    return w.step(year)
 EARTH_BUDGET = dict(sun=240.0, olr=239.0, olrc=266.0, lwdn=342.0, sws=161.0)   # Wild et al. 2013, CERES EBAF (W/m²)
+# WINDS (SPEC #126): NCEP-NCAR Reanalysis 1, monthly long-term means 1991-2020 (NOAA PSL), annual zonal means in 10°
+# bands centred on −85 … 85, cos-weighted; layers by θ from the reanalysis's temperature, mass-weighted: 0 above 380 K
+# (to the 10 hPa top), 1 at 305–380 K; the mixed layer against the 10 m wind. (value m/s, band centre °)
+WINDS_OBS = dict(trades=(-3.8, -2.9),                     # 10 m at 15°S, 15°N
+                 west=((6.4, -55), (1.6, 45)),            # 10 m peak at 35–65°, S and N
+                 jet=((24.9, -55), (16.2, 45)),           # 305–380 K peak at 25–65°
+                 strat=(26.5, 9.9),                       # above 380 K, peak at 25–85°
+                 strat_eq=-4.9)                           # above 380 K, 5°S–5°N
+# (reported, #129: 380–500 K and above 500 K, at 5°S/N and their peaks at 25–85°, S and N)
+WINDS_SPLIT = dict(low=((-1.6, -0.6), (26.7, -55), (14.3, 45)), high=((-8.6, -8.1), (26.7, -65), (8.3, 65)))
+
+
+def _winds(w, usum, hsum, S):
+    """Annual zonal means by layer in the observed bands, from the year's summed edge winds and layer masses."""
+    from insilica.grid.trisk import cell_winds
+    g = w.grid
+    lat = np.degrees(g.lat)
+    band = np.clip(((lat + 90) // 10).astype(int), 0, 17)
+    wsum = np.bincount(band, weights=g.areaCell, minlength=18)
+    zm = lambda f: np.bincount(band, weights=f * g.areaCell, minlength=18) / wsum
+    east = np.stack([-np.sin(g.lon), np.cos(g.lon), np.zeros(g.N)], 1)
+    u, h = usum.get() / S, hsum.get() / S
+    U = np.array([zm(np.sum(cell_winds(g, u[k]) * east, 1)) for k in range(w.L)])
+    H = np.array([zm(h[k]) for k in range(w.L)])
+    return U, H
 
 
 @pytest.mark.xdist_group('grid4')
 def test_earth_budget(record):
-    """EARTH earth's global energy budget with the k-tables, all-sky and clear-sky, against measured (V2-6a, SPEC #109, #112)"""
+    """EARTH earth5's global energy budget with the k-tables, all-sky and clear-sky, against measured (V2-6a, SPEC #109, #112; earth4 since #125, earth5 since #129)"""
     from insilica import runcache
-    w0 = World(4, 'earth')
-    year = int(round(365 * 86400 / w0.dt))
-    w = runcache.spun_up('earth-n4', lambda: World(4, 'earth'), EARTH_SPIN_YEARS * year)[0]
+    w = runcache.spun_up(f'earth5-n4-eq{EARTH_SPIN_YEARS}x{EARTH_CYCLES[0]}x{EARTH_CYCLES[1]}', _earth_equilibrium, 0)[0]
     L, RW = w.L, w.L + 1
     a = cp.asarray(w.grid.areaCell / w.grid.areaCell.sum())
     acc = {k: cp.zeros(()) for k in EARTH_BUDGET}
     day = int(round(86400 / w.dt))
-    S = 365 * 4                                  # four samples a day over the ninth year
+    S = 365 * 4                                  # four samples a day over the measured year
+    usum, hsum = cp.zeros_like(w.u), cp.zeros_like(w.h)
     for _ in range(S):
         w.step(day // 4)
+        usum += w.u; hsum += w.h
         p, co = w.physics, w.physics.cloudo
         f = p.sw.swf
         acc['sun'] += a @ p.sw_abs
@@ -163,8 +198,46 @@ def test_earth_budget(record):
     err = {k: m[k] / EARTH_BUDGET[k] - 1 for k in m}
     names = dict(sun='absorbed sunlight', olr='OLR', olrc='clear-sky OLR', lwdn='surface longwave down', sws='surface sunlight')
     ok = all(abs(e) <= 0.05 for e in err.values())
-    # known failure (#112, owner): too little low cloud lets too much sunlight reach the surface until V2-6b's boundary layer
-    record('EARTH', f'n = 4, year {EARTH_SPIN_YEARS + 1}: ' + '; '.join(f'{names[k]} {m[k]:.1f} against {EARTH_BUDGET[k]:.0f} ({err[k] * 100:+.1f}%)' for k in m)
-           + f'; net {m["sun"] - m["olr"]:+.1f}' + ('' if ok else ' — known failure to V2-6b (#112)'),
+    record('EARTH', f'earth5, n = 4, at equilibrium ({EARTH_SPIN_YEARS} coupled years, {EARTH_CYCLES[0]} × (1 coupled + {EARTH_CYCLES[1]} ocean-only), 1 coupled; the next year): ' + '; '.join(f'{names[k]} {m[k]:.1f} against {EARTH_BUDGET[k]:.0f} ({err[k] * 100:+.1f}%)' for k in m)
+           + f'; net {m["sun"] - m["olr"]:+.1f}',
            'each within 5%', ok)
-    assert ok
+
+    # WINDS (V2-6b, SPEC #126): the same year's zonal-mean east wind against the reanalysis
+    U, H = _winds(w, usum, hsum, S)
+    cen = np.arange(-85, 86, 10)
+    b = lambda c: int((c + 85) // 10)
+    pl = lambda p: f'{p[0]:.1f} at {abs(p[1])}°{"S" if p[1] < 0 else "N"}'
+
+    def peak(k, lo, hi, south):
+        s = [b(c) for c in (range(-hi, -lo + 1, 10) if south else range(lo, hi + 1, 10))]
+        i = max(s, key=lambda j: U[k, j])
+        return U[k, i], cen[i]
+    o, bl, ek = WINDS_OBS, w.L - 1, int(w.physics.p['edge_k'])     # ek: the 305–380 K layer, the stratosphere's layers above it (#129)
+    U = np.concatenate([(np.sum(U[:ek] * H[:ek], 0) / np.sum(H[:ek], 0))[None], U])      # row 0: the stratosphere, mass-weighted
+    S0 = ek + 1                                                                          # (U's row of the 305–380 K layer)
+    tr = (U[bl + 1, b(-15)], U[bl + 1, b(15)])
+    we = (peak(bl + 1, 35, 65, True), peak(bl + 1, 35, 65, False))
+    je = (peak(S0, 25, 65, True), peak(S0, 25, 65, False))
+    st = (peak(0, 25, 85, True)[0], peak(0, 25, 85, False)[0])
+    seq = 0.5 * (U[0, b(-5)] + U[0, b(5)])
+    split = ''
+    if ek == 2:
+        sp = WINDS_SPLIT
+        split = '; '.join(f'{nm} 5°S/N {U[r, b(-5)]:.1f}/{U[r, b(5)]:.1f} ({sp[key][0][0]}/{sp[key][0][1]}), peaks S {pl(peak(r, 25, 85, True))} '
+                          f'({pl(sp[key][1])}), N {pl(peak(r, 25, 85, False))} ({pl(sp[key][2])})'
+                          for nm, key, r in (('380–500 K', 'low', 2), ('above 500 K', 'high', 1))) + '; '
+    checks = dict(trades=all(abs(m - x) <= 1.5 for m, x in zip(tr, o['trades'])),
+                  west=all(abs(m[0] - x[0]) <= 3 and abs(m[1] - x[1]) <= 10 for m, x in zip(we, o['west'])),
+                  jet=all(abs(m[0] / x[0] - 1) <= 0.3 and abs(m[1] - x[1]) <= 10 for m, x in zip(je, o['jet'])),
+                  strat=all(abs(m - x) <= 15 for m, x in zip(st, o['strat'])) and abs(seq - o['strat_eq']) <= 7)
+    okw = all(checks.values())
+    hpa = H.mean(1) * 9.80665 / 100
+    record('WINDS', f'the same year, annual zonal means (m/s; observed NCEP 1991–2020 in brackets): trades 15°S/N {tr[0]:.1f}/{tr[1]:.1f} '
+           f'({o["trades"][0]}/{o["trades"][1]}); surface westerlies S {pl(we[0])} ({pl(o["west"][0])}), N {pl(we[1])} ({pl(o["west"][1])}); '
+           f'jet 305–380 K S {pl(je[0])} ({pl(o["jet"][0])}), N {pl(je[1])} ({pl(o["jet"][1])}); above 380 K peak S/N {st[0]:.1f}/{st[1]:.1f} '
+           f'({o["strat"][0]}/{o["strat"][1]}), 5°S–5°N {seq:.1f} ({o["strat_eq"]}); unlimited: {split}305–380 K at 5°S/N {U[S0, b(-5)]:.1f}/{U[S0, b(5)]:.1f} (−2.7/−3.4), '
+           f'cloud layer peak S/N {peak(S0 + 1, 25, 65, True)[0]:.1f}/{peak(S0 + 1, 25, 65, False)[0]:.1f} (15.3/8.8), layer masses ' + '/'.join(f'{x:.0f}' for x in hpa)
+           + ' hPa (above 380 K 126, above 500 K 51); failing: ' + (', '.join(k for k, v in checks.items() if not v) or 'none'),
+           'trades ±1.5 m/s; surface westerly peaks ±3 m/s, jet peaks ±30%, each within 10° of observed; above 380 K peaks ±15 m/s, 5°S–5°N ±7 m/s', okw,
+           title='WINDS earth5\'s zonal winds against the reanalysis (V2-6b, SPEC #126; earth5 since #129)')
+    assert ok and okw

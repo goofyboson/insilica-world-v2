@@ -132,9 +132,21 @@ extern "C" __global__ void oro_cell(int N, int E, int L, const real* mu, const r
   int kh = 0;
   for (int k = L - 1; k >= 0; k--) if (zt[k] > H) { kh = k; break; }
   const real scale = sl / upl;
+  // (#130) a wave brings the wind along its direction at most to its phase speed, 0: a layer takes no more than stops its U_p in a step,
+  // and one whose U_p is not positive (past the critical level) takes nothing, the wave ending in the layer below it; stress no layer
+  // can take is not exerted (the ground's reaction smaller by as much)
+  real fk[LMAX];
+  for (int k = 0; k < L; k++) fk[k] = 0;
+  int prev = -1;
   for (int k = kh; k >= 0 && tau > 0; k--) {
+    const real room = up[k] > 0 ? mu[(size_t)k * N + i] * up[k] / P.dt : (real)0;      // N/m^2 the layer can take
+    if (up[k] <= 0) {                                                  // the critical level lies below this layer
+      if (prev >= 0) fk[prev] = fmin(fk[prev] + tau * scale, mu[(size_t)prev * N + i] * up[prev] / P.dt);
+      tau = 0;
+      break;
+    }
     real out;
-    if (k == 0 || up[k] <= 0) out = 0;
+    if (k == 0) out = 0;
     else {
       const real norm = P.G * rho[k] * nn[k] * up[k] * q;
       const real dh2 = tau / norm, a = nn[k] * sqrt(dh2) / up[k], sq = sqrt(ri[k]);
@@ -146,12 +158,12 @@ extern "C" __global__ void oro_cell(int N, int E, int L, const real* mu, const r
         out = fmin(tau, norm * (up[k] * ac / nn[k]) * (up[k] * ac / nn[k]));
       }
     }
-    real f = (tau - out) * scale;                                      // N/m^2 against the drag's direction
-    const real mk = mu[(size_t)k * N + i], sk = sqrt(U[k] * U[k] + V[k] * V[k]);
-    f = fmin(f, mk * sk / P.dt);                                       // never more than stops the layer in a step
-    F[(size_t)(2 * k) * N + i] = -f * ex; F[(size_t)(2 * k + 1) * N + i] = -f * ey;
-    tau = out;
+    const real f = fmin((tau - out) * scale, room);                    // N/m^2 against the drag's direction
+    fk[k] = f;
+    tau = k == 0 ? (real)0 : tau - f / scale;                          // (what the layer could not take goes on up)
+    prev = k;
   }
+  for (int k = 0; k < L; k++) { F[(size_t)(2 * k) * N + i] = -fk[k] * ex; F[(size_t)(2 * k + 1) * N + i] = -fk[k] * ey; }
 }
 
 // Per edge and layer: the blocked drag (implicit) and the waves' force (along the edge's normal), the kinetic energy removed
@@ -177,18 +189,19 @@ extern "C" __global__ void oro_edge(int N, int E, int L, const real* mu, const i
 
 // Gravity waves not tied to the ground (V2-6b, decision #128): Alexander & Dunkerton (1999) as GFDL's cg_drag (MiMA; Cohen
 // et al. 2013): a spectrum of eastward and westward waves, phase speeds c from -cmax to cmax by dc, one horizontal wavelength,
-// launched at p_src with flux B0(c) = sign(c - u_src) Bw exp(-ln 2 (x / cw)^2), x = c away from the tropics (centred on the
-// ground) and c - u_src within trop_lat of the equator, scaled so the absolute fluxes add up to Bt (Pa). A wave that would be
-// reflected (|c - u_src| k at least N k / sqrt(k^2 + 1 / (4 H^2))) is not launched. Going up, a layer takes a wave where its
-// wind reaches the phase speed ((c - u_src)(c - u) <= 0), or where the wave breaks, B0 / (c - u)^3 >= (rho / rho_src) k / (2 N)
-// at the layer's top; the top layer takes the rest. The layer the waves leave takes the opposite of what they carry (each
-// column's momentum exact; Shepherd & Shaw 2004). Zonal: the force is eastward. Out: F (as oro_cell's; its north part 0).
+// launched at p_src with flux B0(c) = sign(c - u_src) Bw exp(-ln 2 ((c - u_src) / cw)^2), centred on the source's wind (#130: so
+// the waves leave with no net momentum, as GFDL's within the tropics), scaled so the absolute fluxes add up to Bt (Pa). A wave that
+// would be reflected (|c - u_src| k at least N k / sqrt(k^2 + 1 / (4 H^2))) is not launched. Going up, a wave breaks where
+// B0 / (c - u)^3 >= (rho / rho_src) k / (2 N) at a layer's top, or ends at its critical level, in the last layer whose wind is
+// still short of its phase speed; the top layer takes the rest. A layer takes no more of a wave than brings its wind to the
+// wave's phase speed in a step (#130); what none could take stays with the source layer, so each column's momentum is exact.
+// Zonal: the force is eastward. Out: F (as oro_cell's; its north part 0).
 extern "C" __global__ void gw_cell(int N, int E, int L, const real* mu, const real* theta, const real* u, const int* cellEdge,
                                   const real* op, const real* lat, const real* par, real* F) {
   LOOP1(i, N)
   for (int k = 0; k < L; k++) { F[(size_t)(2 * k) * N + i] = 0; F[(size_t)(2 * k + 1) * N + i] = 0; }
-  const real grav = par[0], p0 = par[1], kappa = par[2], rd = par[3], bt = par[4], cw = par[5], kw = par[6], trop = par[7],
-             psrc = par[8], cmax = par[9], dc = par[10];
+  const real grav = par[0], p0 = par[1], kappa = par[2], rd = par[3], bt = par[4], cw = par[5], kw = par[6], psrc = par[7],
+             cmax = par[8], dc = par[9], dt = par[10];
   const real LN2 = (real)0.69314718055994531;
   real U[LMAX], pt[LMAX], pb[LMAX], T[LMAX], nn[LMAX], p = 0;
   for (int k = 0; k < L; k++) {
@@ -220,11 +233,10 @@ extern "C" __global__ void gw_cell(int N, int E, int L, const real* mu, const re
   if (ks <= 0) return;                                         // (the source must lie under the top layer)
   const real us = U[ks], rhos = psrc / (rd * T[ks]), Hs = rd * T[ks] / grav;
   const real wc = nn[ks] * kw / sqrt(kw * kw + (real)0.25 / (Hs * Hs));
-  const bool tropics = fabs(lat[i]) < trop;
   const int nc = (int)round(2 * cmax / dc) + 1;
   real bsum = 0;
   for (int n = 0; n < nc; n++) {
-    const real c = -cmax + n * dc, x = (tropics ? c - us : c) / cw;
+    const real c = -cmax + n * dc, x = (c - us) / cw;
     if (c != us) bsum += exp(-LN2 * x * x);
   }
   if (bsum <= 0) return;
@@ -234,17 +246,21 @@ extern "C" __global__ void gw_cell(int N, int E, int L, const real* mu, const re
   for (int n = 0; n < nc; n++) {
     const real c = -cmax + n * dc, cs = c - us;
     if (cs == 0 || fabs(cs) * kw >= wc) continue;             // (no wave, or reflected)
-    const real x = (tropics ? cs : c) / cw;
-    const real b0 = (cs > 0 ? 1 : -1) * exp(-LN2 * x * x);     // m^2/s^2, before scaling
+    const real x = cs / cw, s = cs > 0 ? (real)1 : (real)-1;
+    const real b0 = s * exp(-LN2 * x * x);                     // m^2/s^2, before scaling
     int kd = 0;
     for (int k = ks; k >= 1; k--) {
       const real cu = c - U[k];
-      if (cs * cu <= 0) { kd = k; break; }                     // the wind reaches c in this layer
+      if (cs * cu <= 0) { kd = k + 1; break; }                 // past its critical level: it ended in the layer below
       const real rho = fmax(pt[k], (real)1) / (rd * T[k]);     // at the layer's top
       if (b0 / (cu * cu * cu) >= (real)0.5 * (rho / rhos) * kw / nn[k]) { kd = k; break; }
     }
-    dep[kd] += amp * b0;
-    dep[ks] -= amp * b0;                                       // the source's reaction
+    if (kd == 0 && s * (c - U[0]) <= 0) kd = 1;                // (the top layer already past c)
+    const real room = fmax((real)0, s * (c - U[kd]) * mu[(size_t)kd * N + i] / dt - s * dep[kd]);
+    dep[kd] += s * fmin(fabs(amp * b0), room);
   }
+  real net = 0;
+  for (int k = 0; k < L; k++) net += dep[k];
+  dep[ks] -= net;                                              // (what no layer could take)
   for (int k = 0; k < L; k++) F[(size_t)(2 * k) * N + i] = dep[k];
 }

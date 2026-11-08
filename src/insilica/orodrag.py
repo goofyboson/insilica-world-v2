@@ -61,8 +61,8 @@ class OroDrag:
 
 
 class WaveDrag:
-    """The gravity waves not tied to the ground (#128); p: the air physics' settings (gw_bt, gw_cw, gw_lambda, gw_trop, gw_psrc,
-    gw_cmax, gw_dc)."""
+    """The gravity waves not tied to the ground (#128, #130); p: the air physics' settings (gw_bt, gw_cw, gw_lambda, gw_psrc, gw_cmax,
+    gw_dc)."""
 
     def __init__(self, dg, L, p, dt):
         g, R = dg.host, dg.dtype
@@ -70,8 +70,8 @@ class WaveDrag:
         self.dg, self.L, self.dt = dg, L, dt
         self.op, self.nrm = cp.asarray(op.reshape(-1), dtype=R), cp.asarray(nrm.reshape(-1), dtype=R)
         self.lat = cp.asarray(np.degrees(g.lat), dtype=R)
-        self.par = cp.asarray([GRAV, P0, KAPPA, RD, p['gw_bt'], p['gw_cw'], 2 * np.pi / p['gw_lambda'], p['gw_trop'], p['gw_psrc'],
-                               p['gw_cmax'], p['gw_dc']], dtype=R)
+        self.par = cp.asarray([GRAV, P0, KAPPA, RD, p['gw_bt'], p['gw_cw'], 2 * np.pi / p['gw_lambda'], p['gw_psrc'],
+                               p['gw_cmax'], p['gw_dc'], dt], dtype=R)
         self.F, self.zero = cp.zeros((2 * L, g.N), dtype=R), cp.zeros((L, g.N), dtype=R)
         self.k = {n: dg.kernel(n, 'drag.cu') for n in ('gw_cell', 'oro_edge')}
 

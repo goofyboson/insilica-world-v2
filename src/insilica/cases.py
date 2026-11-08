@@ -450,6 +450,23 @@ PRESETS['earth4'] = dict(PRESETS['earth'], build=earth4, stress=[0.0] * 4, shelf
                                                                         bl_mix=1.0, bl_q=1.0, sfc=1.0, downdraft=0.3, ent_cloud=1e-4,
                                                                         c_land=1.2e5, c_deep=2.0e6, land_rs=70.0, rs_max=5000.0, rs_sun=180.0, q_sea=0.98, bl_reach=1.0, dry_edge=1.0, bl_lcl=1.0, oro=1.0, gw=1.0)))
 
+
+def earth5(g, top=5000.0):
+    """The five-layer start (V2-6b, #129): earth4's with its stratosphere split at 500 K, the air above it top (Pa; the 500 K surface
+    lies at 46-55 hPa in the NCEP reanalysis) at 600 K, the rest at 440 K; their vapor the stratosphere's."""
+    h4, b, u4, x = earth4(g)
+    hu = np.minimum(np.full(g.N, top / GRAV), 0.5 * h4[0])
+    h = np.concatenate([hu[None], (h4[0] - hu)[None], h4[1:]])
+    th = np.concatenate([np.full((1, g.N), 600.0), np.full((1, g.N), 440.0), x['theta'][1:]])
+    return h, b, np.concatenate([u4[:1], u4]), dict(x, theta=th, q=np.concatenate([x['q'][:1], x['q']]))
+
+
+# V2-6b (#129): earth4 with its stratosphere in two layers, split at 500 K, so the waves can leave momentum in its lower part and its
+# upper part apart; the layers above the 380 K edge (edge_k 2) are the stratosphere's: isothermal in the radiation, their vapor even.
+PRESETS['earth5'] = dict(PRESETS['earth4'], build=earth5, stress=[0.0] * 5,
+                         air=dict(PRESETS['earth4']['air'], physics=dict(PRESETS['earth4']['air']['physics'], theta_stars=[500.0, 380.0, 305.0, 200.0],
+                                                                         edge_k=2.0)))
+
 PRESETS['rce'] = dict(build=aqua_dry, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True, physics=AIR3), dynamics=False)
 
 

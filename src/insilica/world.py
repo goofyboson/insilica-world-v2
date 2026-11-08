@@ -146,6 +146,13 @@ class World:
             self.oh, self.ou, self.oT, self.oM, self.oS = self.sea.h, self.sea.u, self.sea.T, self.sea.M, self.sea.S
             self.STATE = tuple(k for k in self.STATE if k != 'Ts') + ('oh', 'ou', 'oT', 'oM', 'oS')
             self._sync_sea()
+        # the mountains' drag (V2-6b, #127): Lott & Miller (1997) from the sub-grid orography
+        self.oro = None
+        if self.air and self.physics.p['oro'] > 0:
+            from .orodrag import OroDrag
+            if self.sea is None or spec.get('sso') is None:
+                raise ValueError('the mountain drag (oro) needs the coupled ocean and the preset sub-grid orography (sso)')
+            self.oro = OroDrag(self.dg, self.L, spec['sso'](self.grid), self.physics.p, self.dt)
         if self.air:
             self.core.update_gfast(self.h, self.theta)
         # fast sub-steps per step: from the fastest column, with 20% room
@@ -200,6 +207,8 @@ class World:
                 self.physics.surface(self.h, self.theta, self.Ts, self.u, q=self.q if self.moist else None,
                                      ice=self.ice if self.moist else None, land=self.land)
             self.sea.couple(self.h, self.u, self.surface_drag, self.dt, cd=self.physics.cd if self.air else None)
+            if self.oro is not None:
+                self.oro.apply(self.h, self.theta, self.u, self.dt, self.sea.diss)
             if rec:
                 rec.post_couple()
             self.core.k['vmix_heat'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.sea.diss, g.cellEdge, g.le, g.de,

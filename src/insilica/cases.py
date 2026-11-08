@@ -360,6 +360,34 @@ def earth_land(g):
     return _EARTH[g.N]
 
 
+_SSO = {}
+
+
+def earth_sso(g):
+    """The sub-grid orography of each grid cell for the mountain drag (V2-6b, #127; Lott & Miller 1997 with Baines & Palmer 1990's
+    statistics), from ETOPO1's 1-arc-minute heights (the sea at its surface; tools/make_earth_sso.py), each 1-degree cell going to its
+    nearest grid cell as in earth_land: mu, the standard deviation of the heights about the cell's mean (m); sigma, the mean slope
+    along the principal axis; gamma, the anisotropy (1 a round hill, 0 a long ridge); theta, the principal axis's angle from east
+    (radians). Returns (mu, sigma, gamma, theta), each (N,)."""
+    if g.N not in _SSO:
+        d = np.load(Path(__file__).parent / 'data' / 'earth_sso_1deg.npz')
+        lat, lon = np.radians(np.arange(180) - 89.5), np.radians(np.arange(360) - 179.5)
+        la, lo = np.meshgrid(lat, lon, indexing='ij')
+        xyz = np.stack([np.cos(la) * np.cos(lo), np.cos(la) * np.sin(lo), np.sin(la)], axis=-1).reshape(-1, 3)
+        near = np.concatenate([np.argmax(xyz[i:i + 2000] @ g.pos.T, axis=1) for i in range(0, len(xyz), 2000)])
+        w = np.cos(la).ravel() / np.maximum(d['n'].ravel(), 1)       # each point weighted by its area
+        s = {k: np.bincount(near, w * d[k].ravel(), g.N) for k in ('n', 's1', 's2', 'gxx', 'gyy', 'gxy')}
+        n = np.maximum(s['n'], 1e-30)
+        mu = np.sqrt(np.maximum(s['s2'] / n - (s['s1'] / n) ** 2, 0.0))
+        K, Lg, M = s['gxx'] / n, s['gyy'] / n, s['gxy'] / n
+        Hp, Kp, Lp = 0.5 * (K + Lg), 0.5 * (K - Lg), M
+        r = np.sqrt(Kp ** 2 + Lp ** 2)
+        sigma = np.sqrt(np.maximum(Hp + r, 0.0))
+        gamma = np.sqrt(np.maximum(Hp - r, 0.0) / np.maximum(Hp + r, 1e-30))
+        _SSO[g.N] = mu, sigma, gamma, 0.5 * np.arctan2(Lp, Kp)
+    return _SSO[g.N]
+
+
 def earth(g, rise=5.0e-3):
     """The start over Earth's terrain with the air bent over it: the top layer as the aquaplanet's and the rest of each column's
     air shared between the middle and bottom layers as at sea level, so both thin over high ground; the bottom layer's theta rises
@@ -415,11 +443,12 @@ def earth4(g, rise=5.0e-3, bl=1.0e4):
 # 5000 s/m in the dark (Jarvis 1976; Noah's F1 with LAI 2, so rs_sun 180 W/m^2); the sea's saturation 2% below fresh water's; the mixed layer
 # takes in the air above it colder than itself, reaching through an emptied layer (#120), whose lower edge is then its own theta (#122);
 # the 380 K edge is heated by radiation alone, the cloud layer's condensation happening far below it (#121); the mixed layer ends at its
-# cloud base, its air above that leaving into the cloud layer (#124).
-PRESETS['earth4'] = dict(PRESETS['earth'], build=earth4, stress=[0.0] * 4, shelf=100.0,
+# cloud base, its air above that leaving into the cloud layer (#124). The mountains' drag: blocked flow and gravity waves from the sub-grid
+# orography (Lott & Miller 1997; #127).
+PRESETS['earth4'] = dict(PRESETS['earth'], build=earth4, stress=[0.0] * 4, shelf=100.0, sso=earth_sso,
                          air=dict(PRESETS['earth']['air'], physics=dict(PRESETS['earth']['air']['physics'], theta_stars=[380.0, 305.0, 200.0],
                                                                         bl_mix=1.0, bl_q=1.0, sfc=1.0, downdraft=0.3, ent_cloud=1e-4,
-                                                                        c_land=1.2e5, c_deep=2.0e6, land_rs=70.0, rs_max=5000.0, rs_sun=180.0, q_sea=0.98, bl_reach=1.0, dry_edge=1.0, bl_lcl=1.0)))
+                                                                        c_land=1.2e5, c_deep=2.0e6, land_rs=70.0, rs_max=5000.0, rs_sun=180.0, q_sea=0.98, bl_reach=1.0, dry_edge=1.0, bl_lcl=1.0, oro=1.0)))
 
 PRESETS['rce'] = dict(build=aqua_dry, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True, physics=AIR3), dynamics=False)
 

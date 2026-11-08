@@ -394,3 +394,50 @@ The faults were found by stepping one step at a time with a rolling history and 
 | Tropical sea Ts | 298.9 K (304.5) |
 
 Open: the extratropical top layer stays light (574–684 kg/m²); subtropical land is dry; save/load is not bit-exact.
+
+
+## Closing V2-6b (SPEC #125–#133)
+
+**EARTH and WINDS.** EARTH measures the multi-layer earth at equilibrium (#125) and passes. WINDS (#126) measures the same year's
+annual zonal winds against the NCEP 1991–2020 reanalysis, reduced to the model's layers by potential temperature
+(tools/ncep_winds.py).
+
+**Drag.** Mountains: Lott & Miller (1997), with sub-grid orography from ETOPO1 (#127). Waves not tied to the ground: Alexander &
+Dunkerton (1999), as in GFDL's cg_drag (#128). Two faults were fixed (#130):
+- a wave now never pushes a layer past its phase speed;
+- the non-orographic spectrum is now centred on the source wind.
+
+**`earth5`** (#129) splits the stratosphere at 500 K. The 380–500 K layer catches the waves' momentum apart from the air above it.
+
+**The southern jet** (#131) stays at 35°S with every drag switched off for three years. A Southern Ocean 7–8 K too warm, sea ice
+only to 65°S, and eddies whose momentum flux turns equatorward beyond 40°S hold it there. It is a known failure to V2-6d.
+
+**Land cover** (#132) comes from NCAR's MODIS-derived plant types and soil colours, with Noah's per-class values. It sets each land
+cell's roughness, albedo, snow seen between trees, and stomata.
+
+| Region (a year) | Albedo without → with | Ts (K) | Rain (mm/day) |
+|---|---|---|---|
+| All land | 0.331 → 0.285 | 283.8 → 285.5 | 2.32 → 2.22 |
+| Sahara | 0.278 → 0.363 | 297.2 → 299.4 | 1.21 → 0.83 |
+| Amazon | 0.127 → 0.096 | 297.0 → 299.3 | 9.76 → 7.05 |
+| Siberian boreal, winter | 0.647 → 0.387 | 270.4 → 272.9 | 0.98 → 1.14 |
+| Canadian boreal, winter | 0.248 → 0.168 | 279.1 → 279.8 | 1.50 → 1.45 |
+
+**At the close** (#133; full suite 44/46 with PERF):
+
+| Measure | `earth5` | Observed |
+|---|---|---|
+| Absorbed sunlight, OLR, clear-sky OLR (W/m²) | 235.1, 234.5, 259.1 | 240, 239, 266 |
+| Surface longwave down, surface sunlight (W/m²) | 342.1, 165.5 | 342, 161 |
+| Trades 15°S/N (m/s) | −4.6 / −2.8 | −3.8 / −2.9 |
+| Surface westerlies, S and N peaks (m/s) | 3.9 at 45°S, 1.6 at 35°N | 6.4 at 55°S, 1.6 at 45°N |
+| 305–380 K jet, S and N (m/s) | 22.8 at 35°S, 17.1 at 35°N | 24.9 at 55°S, 16.2 at 45°N |
+| Above 380 K peaks S/N; 5°S–5°N (m/s) | 35.7 / 22.2; −11.0 | 26.5 / 9.9; −4.9 |
+
+**Open, for V2-6c and V2-6d:**
+- the southern jet's position and the warm Southern Ocean;
+- ICE;
+- light extratropical upper layers (380–500 K at 34 hPa against about 70);
+- rain at 3.5 mm/day (about 2.7 observed);
+- warm Canadian boreal land with little snow;
+- save/load not bit-exact.

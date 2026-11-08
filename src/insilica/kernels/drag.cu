@@ -174,3 +174,77 @@ extern "C" __global__ void oro_edge(int N, int E, int L, const real* mu, const i
   }
   diss[e] += d;
 }
+
+// Gravity waves not tied to the ground (V2-6b, decision #128): Alexander & Dunkerton (1999) as GFDL's cg_drag (MiMA; Cohen
+// et al. 2013): a spectrum of eastward and westward waves, phase speeds c from -cmax to cmax by dc, one horizontal wavelength,
+// launched at p_src with flux B0(c) = sign(c - u_src) Bw exp(-ln 2 (x / cw)^2), x = c away from the tropics (centred on the
+// ground) and c - u_src within trop_lat of the equator, scaled so the absolute fluxes add up to Bt (Pa). A wave that would be
+// reflected (|c - u_src| k at least N k / sqrt(k^2 + 1 / (4 H^2))) is not launched. Going up, a layer takes a wave where its
+// wind reaches the phase speed ((c - u_src)(c - u) <= 0), or where the wave breaks, B0 / (c - u)^3 >= (rho / rho_src) k / (2 N)
+// at the layer's top; the top layer takes the rest. The layer the waves leave takes the opposite of what they carry (each
+// column's momentum exact; Shepherd & Shaw 2004). Zonal: the force is eastward. Out: F (as oro_cell's; its north part 0).
+extern "C" __global__ void gw_cell(int N, int E, int L, const real* mu, const real* theta, const real* u, const int* cellEdge,
+                                  const real* op, const real* lat, const real* par, real* F) {
+  LOOP1(i, N)
+  for (int k = 0; k < L; k++) { F[(size_t)(2 * k) * N + i] = 0; F[(size_t)(2 * k + 1) * N + i] = 0; }
+  const real grav = par[0], p0 = par[1], kappa = par[2], rd = par[3], bt = par[4], cw = par[5], kw = par[6], trop = par[7],
+             psrc = par[8], cmax = par[9], dc = par[10];
+  const real LN2 = (real)0.69314718055994531;
+  real U[LMAX], pt[LMAX], pb[LMAX], T[LMAX], nn[LMAX], p = 0;
+  for (int k = 0; k < L; k++) {
+    real a = 0;
+    for (int m = 0; m < 6; m++) {
+      const int e = cellEdge[i * 6 + m];
+      if (e < 0) break;
+      a += op[(size_t)(i * 6 + m) * 2] * u[(size_t)k * E + e];
+    }
+    U[k] = a;
+    pt[k] = p; p += grav * mu[(size_t)k * N + i]; pb[k] = p;
+    T[k] = theta[(size_t)k * N + i] * pow((real)0.5 * (pt[k] + pb[k]) / p0, kappa);
+  }
+  for (int k = 0; k < L; k++) {                                // the stability across each layer's edges
+    real s = 0;
+    int c = 0;
+    for (int j = k; j <= k + 1; j++) {
+      if (j < 1 || j > L - 1) continue;
+      const real th0 = theta[(size_t)(j - 1) * N + i], th1 = theta[(size_t)j * N + i];
+      const real pm0 = (real)0.5 * (pt[j - 1] + pb[j - 1]), pm1 = (real)0.5 * (pt[j] + pb[j]);
+      const real dz = fmax(rd * (real)0.5 * (T[j - 1] + T[j]) / grav * log(pm1 / fmax(pm0, (real)1)), (real)1);
+      s += grav * (th0 - th1) / ((real)0.5 * (th0 + th1) * dz);
+      c++;
+    }
+    nn[k] = sqrt(fmax(s / c, (real)1e-6));
+  }
+  int ks = -1;
+  for (int k = 0; k < L; k++) if (pt[k] < psrc && psrc <= pb[k]) { ks = k; break; }
+  if (ks <= 0) return;                                         // (the source must lie under the top layer)
+  const real us = U[ks], rhos = psrc / (rd * T[ks]), Hs = rd * T[ks] / grav;
+  const real wc = nn[ks] * kw / sqrt(kw * kw + (real)0.25 / (Hs * Hs));
+  const bool tropics = fabs(lat[i]) < trop;
+  const int nc = (int)round(2 * cmax / dc) + 1;
+  real bsum = 0;
+  for (int n = 0; n < nc; n++) {
+    const real c = -cmax + n * dc, x = (tropics ? c - us : c) / cw;
+    if (c != us) bsum += exp(-LN2 * x * x);
+  }
+  if (bsum <= 0) return;
+  const real amp = bt / bsum;
+  real dep[LMAX];
+  for (int k = 0; k < L; k++) dep[k] = 0;
+  for (int n = 0; n < nc; n++) {
+    const real c = -cmax + n * dc, cs = c - us;
+    if (cs == 0 || fabs(cs) * kw >= wc) continue;             // (no wave, or reflected)
+    const real x = (tropics ? cs : c) / cw;
+    const real b0 = (cs > 0 ? 1 : -1) * exp(-LN2 * x * x);     // m^2/s^2, before scaling
+    int kd = 0;
+    for (int k = ks; k >= 1; k--) {
+      const real cu = c - U[k];
+      if (cs * cu <= 0) { kd = k; break; }                     // the wind reaches c in this layer
+      const real rho = fmax(pt[k], (real)1) / (rd * T[k]);     // at the layer's top
+      if (b0 / (cu * cu * cu) >= (real)0.5 * (rho / rhos) * kw / nn[k]) { kd = k; break; }
+    }
+    dep[kd] += amp * b0;
+    dep[ks] -= amp * b0;                                       // the source's reaction
+  }
+  for (int k = 0; k < L; k++) F[(size_t)(2 * k) * N + i] = dep[k];
+}

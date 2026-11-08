@@ -208,19 +208,26 @@ def conserve_air(record):
     drift = (j.energy() - e0) / e0
     # the four-layer earth's columns (V2-6b): the mixed layer, deep plumes taking in the cloud layer's air, their downdrafts, the land
     e = World(4, 'earth4')
-    e4 = e4w = oro = 0.0
+    e4 = e4w = 0.0
     lede, ge = cp.asarray(e.grid.le * e.grid.de), e.grid
-    ke = lambda h, u: float(cp.sum(lede * cp.sum(0.5 * (0.5 * (h[:, ge.eI] + h[:, ge.eJ])) * u * u, axis=0)))
-    ap, gross = e.oro.apply, [0.0]
+    he = lambda h: 0.5 * (h[:, ge.eI] + h[:, ge.eJ])
+    ke = lambda h, u: float(cp.sum(lede * cp.sum(0.5 * he(h) * u * u, axis=0)))
+    mom = lambda h, u: cp.sum(he(h) * u, axis=0)                 # each edge's column momentum per area
+    drag = {n: dict(energy=0.0, gross=0.0, momentum=0.0) for n in ('oro', 'gw')}
 
-    def apply(h, th, u, dt, diss):                       # the mountains' drag (#127): kinetic energy removed = heat booked
-        nonlocal oro
-        k0, d0 = ke(h, u), float(cp.sum(lede * diss))
-        ap(h, th, u, dt, diss)
-        removed, booked = k0 - ke(h, u), float(cp.sum(lede * diss)) - d0
-        gross[0] += abs(removed)
-        oro = max(oro, abs(removed - booked) / k0)
-    e.oro.apply = apply
+    def ledger(name, ap):
+        """The drags (#127, #128): kinetic energy removed = heat booked; the waves (#128) keep each column's momentum."""
+        def apply(h, th, u, dt, diss):
+            d = drag[name]
+            k0, d0, m0 = ke(h, u), float(cp.sum(lede * diss)), mom(h, u)
+            ap(h, th, u, dt, diss)
+            removed, booked = k0 - ke(h, u), float(cp.sum(lede * diss)) - d0
+            d['gross'] += abs(removed)
+            d['energy'] = max(d['energy'], abs(removed - booked) / k0)
+            dm = mom(h, u) - m0
+            d['momentum'] = max(d['momentum'], float(cp.sum(lede * cp.abs(dm)) / cp.sum(lede * cp.sum(he(h) * cp.abs(u), axis=0))))
+        return apply
+    e.oro.apply, e.gw.apply = ledger('oro', e.oro.apply), ledger('gw', e.gw.apply)
     for _ in range(48):
         W0, E0 = e.water(), e.energy()
         e.step(1, graph=False)                            # (the drag's ledger reads the host every step)
@@ -228,13 +235,15 @@ def conserve_air(record):
         e4 = max(e4, abs(float(cp.sum(A * p.stored)) - float(cp.sum(A * (p.sw_abs - p.olr))) * e.dt) / abs(E0))
         e4w = max(e4w, abs(e.water() - W0 - float(cp.sum(A * (p.evap - p.rain))) * e.dt) / e.water())
     ok = (worst <= 1e-13 and water <= 1e-13 and mass <= 1e-13 and tracer <= 1e-13 and vapor <= 1e-13 and abs(drift) < 1e-4 and e4 <= 1e-13
-          and e4w <= 1e-13 and oro <= 1e-13 and gross[0] > 0)
+          and e4w <= 1e-13 and all(d['energy'] <= 1e-13 and d['gross'] > 0 for d in drag.values()) and drag['gw']['momentum'] <= 1e-13)
     record('CONSERVE air', f'moist column ledgers, 48 steps: energy worst {fmt(worst)} of the energy stored ({fmt(per_step)} of one step of sunlight), '
            f'water {fmt(water)}; moist aqua 10 d (3 layers; dynamics, radiation, crossings ~{crossed:.2f} kg/m² per step, convection, rain): '
            f'air mass {fmt(mass)}, tracer {fmt(tracer)}, vapor against evaporation − rain {fmt(vapor)}; adiabatic air (two layers), '
            f'15 d: energy drift {fmt(drift)}; four-layer earth, 48 steps (mixed layer, plumes with downdrafts and cloud-layer entrainment): '
-           f'column energy {fmt(e4)} of the energy stored, water {fmt(e4w)}; mountain drag (#127): kinetic energy removed against heat booked '
-           f'{fmt(oro)} of the kinetic energy ({gross[0] / 48:.2e} J removed a step)', '≤ 1e-13; ≤ 1e-13; drift < 1e-4', ok)
+           f'column energy {fmt(e4)} of the energy stored, water {fmt(e4w)}; kinetic energy removed against heat booked: mountain drag (#127) '
+           f'{fmt(drag["oro"]["energy"])}, waves (#128) {fmt(drag["gw"]["energy"])} of the kinetic energy ({drag["oro"]["gross"] / 48:.2e}, '
+           f'{drag["gw"]["gross"] / 48:.2e} J a step); the waves\' column momentum {fmt(drag["gw"]["momentum"])} of the gross',
+           '≤ 1e-13; ≤ 1e-13; drift < 1e-4', ok)
     return ok
 
 

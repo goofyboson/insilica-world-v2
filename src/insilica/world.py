@@ -153,6 +153,13 @@ class World:
             if self.sea is None or spec.get('sso') is None:
                 raise ValueError('the mountain drag (oro) needs the coupled ocean and the preset sub-grid orography (sso)')
             self.oro = OroDrag(self.dg, self.L, spec['sso'](self.grid), self.physics.p, self.dt)
+        # the gravity waves not tied to the ground (#128): Alexander & Dunkerton (1999)
+        self.gw = None
+        if self.air and self.physics.p['gw'] > 0:
+            from .orodrag import WaveDrag
+            if self.sea is None:
+                raise ValueError('the wave drag (gw) books its heat with the wind stress: it needs the coupled ocean')
+            self.gw = WaveDrag(self.dg, self.L, self.physics.p, self.dt)
         if self.air:
             self.core.update_gfast(self.h, self.theta)
         # fast sub-steps per step: from the fastest column, with 20% room
@@ -209,6 +216,8 @@ class World:
             self.sea.couple(self.h, self.u, self.surface_drag, self.dt, cd=self.physics.cd if self.air else None)
             if self.oro is not None:
                 self.oro.apply(self.h, self.theta, self.u, self.dt, self.sea.diss)
+            if self.gw is not None:
+                self.gw.apply(self.h, self.theta, self.u, self.dt, self.sea.diss)
             if rec:
                 rec.post_couple()
             self.core.k['vmix_heat'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.sea.diss, g.cellEdge, g.le, g.de,

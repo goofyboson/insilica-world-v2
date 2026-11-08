@@ -388,6 +388,56 @@ def earth_sso(g):
     return _SSO[g.N]
 
 
+# Land cover (V2-6b, #132): Noah's values (WRF's VEGPARM.TBL, MODIFIED_IGBP_MODIS_NOAH; mean of its seasonal minimum and maximum) for
+# tools/make_earth_cover.COVER's classes; CLM's plant types as Noah's classes: needleleaf evergreen (1), broadleaf evergreen (2),
+# needleleaf deciduous (3), broadleaf deciduous (4), shrub (closed shrubland, 6), tundra (CLM's boreal shrub and arctic grass:
+# mixed tundra, 19), grass (10), crop (12); bare ground is Noah's barren (16) for roughness and snow, its albedo the soil's own.
+# Per class: snow-free albedo, roughness z0 (m), minimum stomatal resistance RS (s/m), RGL (W/m²), deep snow's albedo MAXALB.
+COVER = dict(alb=[0.38, 0.12, 0.12, 0.145, 0.165, 0.275, 0.175, 0.21, 0.20],
+             z0=[0.01, 0.50, 0.50, 0.50, 0.50, 0.03, 0.15, 0.11, 0.10],
+             rs=[0.0, 125.0, 150.0, 150.0, 100.0, 300.0, 150.0, 40.0, 40.0],
+             rgl=[0.0, 30.0, 30.0, 30.0, 30.0, 100.0, 100.0, 100.0, 100.0],
+             maxalb=[0.75, 0.52, 0.35, 0.54, 0.58, 0.60, 0.60, 0.70, 0.66])
+_COVER = {}
+
+
+def earth_cover(g):
+    """Each land cell's surface from its land cover (V2-6b, #132; tools/make_earth_cover.py, NCAR's CLM data from MODIS), each 1-degree
+    cell going to its nearest grid cell as in earth_land, by land area. Returns (8, N): roughness z0 (m, the cover-weighted mean of
+    log z0); the bare soil's albedo dry and wet (broadband, CLM's soil colours); the bare share; the plants' snow-free albedo (over
+    the plants' share); the share of deep snow's brightening the cover shows, v = (MAXALB - alb) / (MAXALB_bare - alb) by class
+    (1 bare: snow covers it; under trees the snow shows only between them); the plants' minimum stomatal resistance (s/m, their
+    conductances added by share) and rs_sun = RGL / 0.55 (W/m², Noah's F1 with LAI 2, as #118). Cells with no land data take the
+    land's mean."""
+    if g.N not in _COVER:
+        d = np.load(Path(__file__).parent / 'data' / 'earth_cover_1deg.npz')
+        lat, lon = np.radians(np.arange(180) - 89.5), np.radians(np.arange(360) - 179.5)
+        la, lo = np.meshgrid(lat, lon, indexing='ij')
+        xyz = np.stack([np.cos(la) * np.cos(lo), np.cos(la) * np.sin(lo), np.sin(la)], axis=-1).reshape(-1, 3)
+        near = np.concatenate([np.argmax(xyz[i:i + 2000] @ g.pos.T, axis=1) for i in range(0, len(xyz), 2000)])
+        w = d['land'].astype(float).ravel()                              # land area per 1-degree cell
+        A = np.bincount(near, w, g.N)
+        sh = np.stack([np.bincount(near, w * s.astype(float).ravel(), g.N) for s in d['share']])
+        dry, sat = (np.bincount(near, w * d[k].astype(float).ravel(), g.N) for k in ('dry', 'sat'))
+        tot = w.sum()
+        has = A > 0
+        sh = np.where(has, sh / np.maximum(A, 1e-30), (sh.sum(1) / tot)[:, None])
+        dry = np.where(has, dry / np.maximum(A, 1e-30), dry.sum() / tot)
+        sat = np.where(has, sat / np.maximum(A, 1e-30), sat.sum() / tot)
+        c = {k: np.asarray(v)[:, None] for k, v in COVER.items()}
+        fb, veg = sh[0], np.maximum(1 - sh[0], 1e-12)
+        z0 = np.exp(np.sum(sh * np.log(c['z0']), 0))
+        alb_veg = np.where(sh[0] < 1, np.sum(sh[1:] * c['alb'][1:], 0) / veg, COVER['alb'][7])
+        v = c['maxalb'] - c['alb']
+        v = v / (COVER['maxalb'][0] - c['alb'])
+        snow = np.sum(sh * v, 0) / np.sum(sh, 0)
+        gs = np.sum(sh[1:] / c['rs'][1:], 0)
+        rs = np.where(gs > 0, veg / np.maximum(gs, 1e-30), COVER['rs'][7])
+        rs_sun = np.where(sh[0] < 1, np.sum(sh[1:] * c['rgl'][1:], 0) / veg, COVER['rgl'][7]) / 0.55
+        _COVER[g.N] = np.stack([z0, dry, sat, fb, alb_veg, snow, rs, rs_sun])
+    return _COVER[g.N]
+
+
 def earth(g, rise=5.0e-3):
     """The start over Earth's terrain with the air bent over it: the top layer as the aquaplanet's and the rest of each column's
     air shared between the middle and bottom layers as at sea level, so both thin over high ground; the bottom layer's theta rises
@@ -463,9 +513,10 @@ def earth5(g, top=5000.0):
 
 # V2-6b (#129): earth4 with its stratosphere in two layers, split at 500 K, so the waves can leave momentum in its lower part and its
 # upper part apart; the layers above the 380 K edge (edge_k 2) are the stratosphere's: isothermal in the radiation, their vapor even.
-PRESETS['earth5'] = dict(PRESETS['earth4'], build=earth5, stress=[0.0] * 5,
+# Land cover (#132): each land cell's roughness, snow-free albedo, snow under trees and stomata from its cover (earth_cover).
+PRESETS['earth5'] = dict(PRESETS['earth4'], build=earth5, stress=[0.0] * 5, cover=earth_cover,
                          air=dict(PRESETS['earth4']['air'], physics=dict(PRESETS['earth4']['air']['physics'], theta_stars=[500.0, 380.0, 305.0, 200.0],
-                                                                         edge_k=2.0)))
+                                                                         edge_k=2.0, cover=1.0)))
 
 PRESETS['rce'] = dict(build=aqua_dry, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True, physics=AIR3), dynamics=False)
 

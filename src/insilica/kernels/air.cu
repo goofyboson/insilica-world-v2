@@ -640,12 +640,15 @@ __device__ __forceinline__ real tau_p(real p, real ps, const Par& P) {
 // Albedos by surface (decision #87): snow (the part of the land's ice that fell as snow, snow kg/m^2, melting first) from alb_snow
 // when cold to alb_snow_melt at freezing air, over alb_ramp K, covering snow / snow_cover of the ice; the rest is bare glacier ice,
 // alb_glacier. Sea ice goes from alb_ice to alb_ice_melt in the same way.
+// Land cover (V2-6b, #132; lc, 8 x N from cases.earth_cover, else NULL): the snow-free land is its bare share's soil (its own dry and
+// wet albedo) and its plants' albedo; the land's ice shows v of its brightening (snow between the trees); the surface resistance is
+// the bare share's none and the plants' own minimum and light response, in parallel; the roughness is the cover's (surface_layer).
 extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode, const real* t, const real* insol, const real* pos,
                                       const real* uabs, real* mu_in, real* theta, real* qv, real* Ts, real* ice, real dt,
                                       real* wx, real* olr, real* sw_abs, real* stored, real* rain, real* evap, real* conv,
                                       real* tsurf, real* rainp, real* dgo, real* cap, real* qocean,
                                       real* qsw, const real* land, const real* soilcap, real* soil, real* pond, real* snow, real* cloudw, real* cloudo, const real* elev, real* flash,
-                                      const real* radf, const real* swf, real* swalb, const real* ch) {
+                                      const real* radf, const real* swf, real* swalb, const real* ch, const real* lc) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= N) return;
 #ifdef NL
@@ -750,14 +753,18 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   real wet = isl ? soil[i] : (real)0;
   real pw = isl ? pond[i] : (real)0;
   const real pcov = isl && pw > 0 ? fmin((real)1, pw / P.pond_cover) : (real)0;
-  const real alb0 = isl ? pcov * P.alb + (1 - pcov) * (P.alb_dry + (P.alb_wet - P.alb_dry) * wet / soilcap[i]) : P.alb;
+  const real alb0 = !isl ? P.alb
+                  : lc ? pcov * P.alb + (1 - pcov) * (lc[3 * N + i] * (lc[N + i] + (lc[2 * N + i] - lc[N + i]) * wet / soilcap[i])
+                                                     + (1 - lc[3 * N + i]) * lc[4 * N + i])
+                       : pcov * P.alb + (1 - pcov) * (P.alb_dry + (P.alb_wet - P.alb_dry) * wet / soilcap[i]);
   const real warm = fmax((real)0, fmin((real)1, (Tsa - P.Tf + P.alb_ramp) / P.alb_ramp));
   real alb_i = P.alb_ice + (P.alb_ice_melt - P.alb_ice) * warm;
   if (isl) {
     const real fs = fmin((real)1, snow[i] / P.snow_cover);
     alb_i = fs * (P.alb_snow + (P.alb_snow_melt - P.alb_snow) * warm) + (1 - fs) * P.alb_glacier;
   }
-  const real alb = fice * alb_i + (1 - fice) * alb0;
+  const real fsee = isl && lc ? fice * lc[5 * N + i] : fice;    // (#132: the ice the cover lets show)
+  const real alb = fsee * alb_i + (1 - fsee) * alb0;
   if (swalb) swalb[i] = alb;                                     // for the next radiation step (k-tables)
   // the k-tables' shortwave (sw_column at the last radiation step): each layer's and the surface's share of the sunlight
   const real toAir = swf ? [&]() { real s = 0; for (int k = 0; k < L; k++) s += swf[(size_t)k * N + i]; return s * I; }()
@@ -844,13 +851,15 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   // f = the sunlight reaching the ground / rs_sun; land_rs by day, rs_max at night
   real rfac = 1;
   if (isl && P.land_rs > 0 && kex > 0) {
-    real rs = P.land_rs;
+    const real r0 = lc ? lc[6 * N + i] : P.land_rs, rsun = lc ? lc[7 * N + i] : P.rs_sun;
+    real rs = r0;
     if (P.rs_max > 0) {
-      const real f = swS / fmax(1 - alb, (real)0.05) / P.rs_sun;
-      rs = P.land_rs * (1 + f) / (P.land_rs / P.rs_max + f);
+      const real f = swS / fmax(1 - alb, (real)0.05) / rsun;
+      rs = r0 * (1 + f) / (r0 / P.rs_max + f);
     }
     const real ra = ps / (287.0 * Tsa) / kex;
     rfac = ra / (ra + rs);
+    if (lc) rfac = lc[3 * N + i] + (1 - lc[3 * N + i]) * rfac;      // (#132: the bare share has none)
   }
   const real qfac = !isl && P.q_sea > 0 ? P.q_sea : (real)1;     // q_sea (#118): salt lowers the sea's saturation (Raoult, 2% at 35 psu)
   const real ts = Ts[i];
@@ -1417,7 +1426,8 @@ extern "C" __global__ void cell_speed(int N, const real* u, const int* cellEdge,
 // the wind adds in quadrature the gusts of the free convection, 1.2 w* (Beljaars 1995), w* from the buoyancy flux through
 // the layer's depth, and bulk_gust (m/s) of the mesoscale. Out: cd, ch = rho C_D U, rho C_H U (kg/m^2/s) per cell.
 extern "C" __global__ void surface_layer(int N, int L, const real* par, const real* uabs, const real* mu_in, const real* theta,
-                                         const real* qv, const real* Ts, const real* ice, const real* land, real* cd, real* ch) {
+                                         const real* qv, const real* Ts, const real* ice, const real* land, real* cd, real* ch,
+                                         const real* lc) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= N) return;
   const Par P = unpack(par);
@@ -1439,7 +1449,7 @@ extern "C" __global__ void surface_layer(int N, int L, const real* par, const re
   for (int it = 0; it < 4; it++) {
     const real us = fmax(sqrt(Cd) * U, (real)1e-3);
     real z0, zh;
-    if (isl) { z0 = P.z0_land; zh = (real)0.1 * P.z0_land; }
+    if (isl) { z0 = lc ? lc[i] : P.z0_land; zh = (real)0.1 * z0; }        // (#132: the cover's)
     else {
       const real zs = (real)0.011 * us * us / P.grav + (real)0.11 * nu / us, zsh = (real)0.40 * nu / us;
       z0 = (1 - fice) * zs + fice * (real)1e-3; zh = (1 - fice) * zsh + fice * (real)1e-4;

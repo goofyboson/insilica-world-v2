@@ -128,6 +128,10 @@ class World:
             self.mouth = self.routing.mouth
             self.STATE = self.STATE + ('soil', 'pond', 'snow', 'mouth')
             self.cap = self.land * p['c_land'] + (1 - self.land) * p['c_slab']   # (the ocean's own when coupled)
+            if p['cover'] > 0:                                   # land cover (V2-6b, #132)
+                if spec.get('cover') is None:
+                    raise ValueError('land cover (cover) needs the preset cover map (cover)')
+                self.physics.cover = cp.asarray(np.asarray(spec['cover'](self.grid), dtype=float))
         # The ocean under the air (V2-3): its mixed layer's temperature is the air's surface temperature
         self.sea = None
         if spec.get('ocean') is not None:

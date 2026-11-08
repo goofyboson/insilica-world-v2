@@ -146,6 +146,29 @@ def _earth_equilibrium():
     spinup.spin_up(w, *EARTH_CYCLES)
     return w.step(year)
 EARTH_BUDGET = dict(sun=240.0, olr=239.0, olrc=266.0, lwdn=342.0, sws=161.0)   # Wild et al. 2013, CERES EBAF (W/m²)
+# WINDS (SPEC #126): NCEP-NCAR Reanalysis 1, monthly long-term means 1991-2020 (NOAA PSL), annual zonal means in 10°
+# bands centred on −85 … 85, cos-weighted; layers by θ from the reanalysis's temperature, mass-weighted: 0 above 380 K
+# (to the 10 hPa top), 1 at 305–380 K; the mixed layer against the 10 m wind. (value m/s, band centre °)
+WINDS_OBS = dict(trades=(-3.8, -2.9),                     # 10 m at 15°S, 15°N
+                 west=((6.4, -55), (1.6, 45)),            # 10 m peak at 35–65°, S and N
+                 jet=((24.9, -55), (16.2, 45)),           # 305–380 K peak at 25–65°
+                 strat=(26.5, 9.9),                       # above 380 K, peak at 25–85°
+                 strat_eq=-4.9)                           # above 380 K, 5°S–5°N
+
+
+def _winds(w, usum, hsum, S):
+    """Annual zonal means by layer in the observed bands, from the year's summed edge winds and layer masses."""
+    from insilica.grid.trisk import cell_winds
+    g = w.grid
+    lat = np.degrees(g.lat)
+    band = np.clip(((lat + 90) // 10).astype(int), 0, 17)
+    wsum = np.bincount(band, weights=g.areaCell, minlength=18)
+    zm = lambda f: np.bincount(band, weights=f * g.areaCell, minlength=18) / wsum
+    east = np.stack([-np.sin(g.lon), np.cos(g.lon), np.zeros(g.N)], 1)
+    u, h = usum.get() / S, hsum.get() / S
+    U = np.array([zm(np.sum(cell_winds(g, u[k]) * east, 1)) for k in range(w.L)])
+    H = np.array([zm(h[k]) for k in range(w.L)])
+    return U, H
 
 
 @pytest.mark.xdist_group('grid4')
@@ -158,8 +181,10 @@ def test_earth_budget(record):
     acc = {k: cp.zeros(()) for k in EARTH_BUDGET}
     day = int(round(86400 / w.dt))
     S = 365 * 4                                  # four samples a day over the measured year
+    usum, hsum = cp.zeros_like(w.u), cp.zeros_like(w.h)
     for _ in range(S):
         w.step(day // 4)
+        usum += w.u; hsum += w.h
         p, co = w.physics, w.physics.cloudo
         f = p.sw.swf
         acc['sun'] += a @ p.sw_abs
@@ -174,4 +199,34 @@ def test_earth_budget(record):
     record('EARTH', f'earth4, n = 4, at equilibrium ({EARTH_SPIN_YEARS} coupled years, {EARTH_CYCLES[0]} × (1 coupled + {EARTH_CYCLES[1]} ocean-only), 1 coupled; the next year): ' + '; '.join(f'{names[k]} {m[k]:.1f} against {EARTH_BUDGET[k]:.0f} ({err[k] * 100:+.1f}%)' for k in m)
            + f'; net {m["sun"] - m["olr"]:+.1f}',
            'each within 5%', ok)
-    assert ok
+
+    # WINDS (V2-6b, SPEC #126): the same year's zonal-mean east wind against the reanalysis
+    U, H = _winds(w, usum, hsum, S)
+    cen = np.arange(-85, 86, 10)
+    b = lambda c: int((c + 85) // 10)
+    def peak(k, lo, hi, south):
+        s = [b(c) for c in (range(-hi, -lo + 1, 10) if south else range(lo, hi + 1, 10))]
+        i = max(s, key=lambda j: U[k, j])
+        return U[k, i], cen[i]
+    o, bl = WINDS_OBS, w.L - 1
+    tr = (U[bl, b(-15)], U[bl, b(15)])
+    we = (peak(bl, 35, 65, True), peak(bl, 35, 65, False))
+    je = (peak(1, 25, 65, True), peak(1, 25, 65, False))
+    st = (peak(0, 25, 85, True)[0], peak(0, 25, 85, False)[0])
+    seq = 0.5 * (U[0, b(-5)] + U[0, b(5)])
+    checks = dict(trades=all(abs(m - x) <= 1.5 for m, x in zip(tr, o['trades'])),
+                  west=all(abs(m[0] - x[0]) <= 3 and abs(m[1] - x[1]) <= 10 for m, x in zip(we, o['west'])),
+                  jet=all(abs(m[0] / x[0] - 1) <= 0.3 and abs(m[1] - x[1]) <= 10 for m, x in zip(je, o['jet'])),
+                  strat=all(abs(m - x) <= 15 for m, x in zip(st, o['strat'])) and abs(seq - o['strat_eq']) <= 7)
+    okw = all(checks.values())
+    hpa = H.mean(1) * 9.80665 / 100
+    pl = lambda p: f'{p[0]:.1f} at {abs(p[1])}°{"S" if p[1] < 0 else "N"}'
+    record('WINDS', f'the same year, annual zonal means (m/s; observed NCEP 1991–2020 in brackets): trades 15°S/N {tr[0]:.1f}/{tr[1]:.1f} '
+           f'({o["trades"][0]}/{o["trades"][1]}); surface westerlies S {pl(we[0])} ({pl(o["west"][0])}), N {pl(we[1])} ({pl(o["west"][1])}); '
+           f'jet 305–380 K S {pl(je[0])} ({pl(o["jet"][0])}), N {pl(je[1])} ({pl(o["jet"][1])}); above 380 K peak S/N {st[0]:.1f}/{st[1]:.1f} '
+           f'({o["strat"][0]}/{o["strat"][1]}), 5°S–5°N {seq:.1f} ({o["strat_eq"]}); unlimited: 305–380 K at 5°S/N {U[1, b(-5)]:.1f}/{U[1, b(5)]:.1f} (−2.7/−3.4), '
+           f'cloud layer peak S/N {peak(2, 25, 65, True)[0]:.1f}/{peak(2, 25, 65, False)[0]:.1f} (15.3/8.8), layer masses ' + '/'.join(f'{x:.0f}' for x in hpa)
+           + ' hPa (top layer 126); failing: ' + (', '.join(k for k, v in checks.items() if not v) or 'none'),
+           'trades ±1.5 m/s; surface westerly peaks ±3 m/s, jet peaks ±30%, each within 10° of observed; above 380 K peaks ±15 m/s, 5°S–5°N ±7 m/s', okw,
+           title='WINDS earth4\'s zonal winds against the reanalysis (V2-6b, SPEC #126)')
+    assert ok and okw

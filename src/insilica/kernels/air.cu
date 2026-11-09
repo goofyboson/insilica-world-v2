@@ -45,6 +45,7 @@ struct Par {
   real bl_room;                                            // (set per column: the mixed layer's room up to its cloud base, #124)
   int Lm1;                                         // the column's bottom layer
   int edge_k;                                      // the layer under the 380 K edge: the layers above it are the stratosphere (#129)
+  real ent_ifs;                                   // the cloud layer's entrainment and detrainment as the IFS's (V2-6c, #139)
   real ent_det;                                   // the cloud layer's entrainment comes with as much detrainment (V2-6c, #138)
   real root_q;                                    // plumes root in the mixed layer's vapor plus the thermals' excess (V2-6c, #137)
   real revap, revap_rhs, revap_rhl, revap_area;   // rain and snow evaporation by Kessler's form as Tiedtke's (V2-6c, #136)
@@ -60,7 +61,7 @@ __device__ Par unpack(const real* a) {
   P.kappa = a[15]; P.p0 = a[16]; P.tilt = a[17]; P.year_s = a[18]; P.day_s = a[19]; P.tau_lin = a[20]; P.theta_star2 = a[21];
   P.moist = a[22]; P.Lv = a[23]; P.Lf = a[24]; P.Tf = a[25]; P.k_evap = a[26]; P.tau_conv = a[27]; P.alb_ice = a[28];
   P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32]; P.sat_layer = a[33]; P.sw_tau = a[34];
-  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; P.plume_ent = a[78]; P.l_ice = a[79]; P.storm_area = a[80]; P.graupel_v = a[81]; P.ice_small = a[82]; P.q_shape = a[83]; P.edge_heat = a[84]; P.freeze_dry = a[85]; P.edge_vap = a[86]; P.conv_revap = a[87]; P.plume_root = a[88]; P.bl_q = a[89]; P.sfc = a[90]; P.z0_land = a[91]; P.downdraft = a[92]; P.ent_cloud = a[93]; P.c_deep = a[94]; P.rs_max = a[95]; P.rs_sun = a[96]; P.q_sea = a[97]; P.bl_reach = a[98]; P.dry_edge = a[99]; P.bl_lcl = a[100]; P.edge_k = (int)a[101]; P.ice_air = a[102]; P.revap = a[103]; P.revap_rhs = a[104]; P.revap_rhl = a[105]; P.revap_area = a[106]; P.root_q = a[107]; P.ent_det = a[108]; P.bl_room = (real)1e30; for (int j = 0; j < LMAX; j++) P.ths[j] = a[109 + j];
+  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; P.plume_ent = a[78]; P.l_ice = a[79]; P.storm_area = a[80]; P.graupel_v = a[81]; P.ice_small = a[82]; P.q_shape = a[83]; P.edge_heat = a[84]; P.freeze_dry = a[85]; P.edge_vap = a[86]; P.conv_revap = a[87]; P.plume_root = a[88]; P.bl_q = a[89]; P.sfc = a[90]; P.z0_land = a[91]; P.downdraft = a[92]; P.ent_cloud = a[93]; P.c_deep = a[94]; P.rs_max = a[95]; P.rs_sun = a[96]; P.q_sea = a[97]; P.bl_reach = a[98]; P.dry_edge = a[99]; P.bl_lcl = a[100]; P.edge_k = (int)a[101]; P.ice_air = a[102]; P.revap = a[103]; P.revap_rhs = a[104]; P.revap_rhl = a[105]; P.revap_area = a[106]; P.root_q = a[107]; P.ent_det = a[108]; P.ent_ifs = a[109]; P.bl_room = (real)1e30; for (int j = 0; j < LMAX; j++) P.ths[j] = a[110 + j];
   return P;
 }
 
@@ -474,6 +475,8 @@ __device__ void plume_ascent(int bot, const real* mu, const real* th, real th0, 
   A = 0; kd = -1; thd = tp; qd = qp;
   real cape = 0, q0c = -1, q40 = -1, p0c = 0, p40 = 0;  // lightning (#104): the parcel's buoyant energy, its vapor and pressure at 0 C and -40 C
   real qa[LMAX];                                 // what it has given each layer so far by mixing, per kg of plume
+  // (ent_ifs: the environment's saturation at cloud base, the mixed layer's top)
+  const real qsb = P.ent_ifs > 0 ? (real)qsat_a((fast)(th[bot] * FPOW(pi_ / P.p0, P.kappa)), (fast)pi_, P.ice_air) : (real)1;
   for (int k = 0; k <= bot; k++) { qa[k] = 0; if (qx) qx[k] = 0; }
   for (int k = bot - 1; k >= 0; k--) {
     const real a = tstar(k, L, P), b = k > 0 ? tstar(k - 1, L, P) : (real)0, s = k > 0 ? edge_shape(a, b, th[k]) : (real)0;
@@ -488,13 +491,29 @@ __device__ void plume_ascent(int bot, const real* mu, const real* th, real th0, 
       // ent_cloud (V2-6b): through the layer above the bottom layer, the cloud layer, the updraft takes in its surroundings, its mass
       // growing as exp(ent_cloud z) (Tiedtke 1989's deep entrainment, 1e-4 per m), the air taken in mixed through it
       if (G && q && P.ent_cloud > 0 && k == bot - 1 && k > 0) {
-        const real dz = (real)287.0 * te * ex / P.grav * (P.grav * mu[k] / M) / pl, g_ = expm1(P.ent_cloud * dz), fe = g_ / (1 + g_);
+        const real dz = (real)287.0 * te * ex / P.grav * (P.grav * mu[k] / M) / pl;
+        if (P.ent_ifs > 0) {
+          // ent_ifs (#139): the IFS's (Bechtold et al. 2008, 2014; Bechtold, ECMWF lecture notes eq. 3.19-3.20) entrainment 1.75e-3 /m (1.3 - RH)
+          // (q_s(T) / q_s at cloud base)^3 and mixing detrainment 0.75e-4 /m: strong in dry air near cloud base, so a diluted plume stops low and
+          // leaves its air there. The detrainment is an equal-mass exchange (its vapor to the layer, as plume_ent's); the rest of the entrainment
+          // grows the plume, the air taken in rising with it
+          const real qse = (real)qsat_a((fast)(te * ex), (fast)pl, P.ice_air), rh = fmin((real)1, fmax((real)0, q[k] / qse));
+          const real fs = fmin((real)1, qse / qsb);    // (at most 1, as above cloud base in the tropics: over an inversion the layer is warmer than cloud base)
+          const real eps_ = (real)1.75e-3 * ((real)1.3 - rh) * fs * fs * fs, del_ = fmin(eps_, (real)0.75e-4);
+          const real fe_ = -expm1(-eps_ * dz), fd_ = -expm1(-del_ * dz);
+          qa[k] += Mp * fd_ * (qp - q[k]);
+          tp += fe_ * (te - tp);
+          qp += fe_ * (q[k] - qp);
+          Mp *= exp((eps_ - del_) * dz);
+        } else {
+        const real g_ = expm1(P.ent_cloud * dz), fe = g_ / (1 + g_);
         // ent_det (#138): Tiedtke's turbulent entrainment comes with as much detrainment (delta = epsilon): the plume keeps its mass and gives the
         // layer the air it sheds, saturated and warm, an equal mass each way as plume_ent's mixing (its vapor in qa, its heat to the receiving layer)
         if (P.ent_det > 0) qa[k] += Mp * fe * (qp - q[k]);
         tp += fe * (te - tp);
         qp += fe * (q[k] - qp);
         if (!(P.ent_det > 0)) Mp *= 1 + g_;
+        }
       }
       if (q && P.plume_ent > 0) {
         qa[k] += Mp * f * (qp - q[k]);

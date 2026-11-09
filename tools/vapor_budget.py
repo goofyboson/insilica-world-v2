@@ -11,24 +11,25 @@ import numpy as np
 from insilica.world import World
 
 STAGES = ['surface evaporation', 'clouds, large-scale rain', 'crossing', 'plume mixing', 'plume lifts base air',
-          'lifts entrained, detrains', 'downdraft', 'conv. rain evaporation']   # (the stage between snapshots 6 and 7 is the downdraft)
+          'lifts entrained, detrains', 'downdraft', 'shallow plume', 'conv. rain evaporation']
 
 
 def main(path, days=10.0):
     w = World.load(path); g = w.grid; p = w.physics; L = w.L
     p.k['air_column'] = w.dg.kernel('air_column', 'air.cu', (f'-DNL={L}', '-DVAPDIAG'))
     base = 5 * L - 2
-    p.dgo = cp.zeros((base + 20 * L, g.N))
+    p.dgo = cp.zeros((base + 20 * L + 4, g.N))   # (and three rows of the shallow plume)
     lat = np.degrees(g.lat); A = g.areaCell; land = w.land.get() > 0.5
     masks = {'sea 10S-10N': ~land & (np.abs(lat) < 10), 'sea 10-30': ~land & (np.abs(lat) >= 10) & (np.abs(lat) < 30),
+             'sea 30-60': ~land & (np.abs(lat) >= 30) & (np.abs(lat) < 60), 'land 30-60': land & (np.abs(lat) >= 30) & (np.abs(lat) < 60),
              'global': np.ones(g.N, bool)}
-    snaps = [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6), (6, 8), (8, 9)]   # (7 is set with 6: nothing between them)
+    snaps = [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6), (6, 7), (7, 8), (8, 9)]
     n = int(round(days * 86400 / w.dt))
     acc = np.zeros((2, len(snaps) + 1, L, g.N)); prev = None
     for _ in range(n):
         w.step(1)
         d = p.dgo.get()
-        x = np.stack([d[base:base + 10 * L].reshape(10, L, g.N), d[base + 10 * L:].reshape(10, L, g.N)])
+        x = np.stack([d[base:base + 10 * L].reshape(10, L, g.N), d[base + 10 * L:base + 20 * L].reshape(10, L, g.N)])
         for j, (a, b) in enumerate(snaps):
             acc[:, j] += x[:, b] - x[:, a]
         if prev is not None:

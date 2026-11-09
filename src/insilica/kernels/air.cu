@@ -482,17 +482,21 @@ __device__ void plume_ascent(int bot, const real* mu, const real* th, real th0, 
   for (int k = bot - 1; k >= 0; k--) {
     const real a = tstar(k, L, P), b = k > 0 ? tstar(k - 1, L, P) : (real)0, s = k > 0 ? edge_shape(a, b, th[k]) : (real)0;
     const real es = k > 0 ? ES(s) : (real)0;
-    const real f = q && P.plume_ent > 0 ? OMEXP(P.plume_ent * P.grav * mu[k] / M) : (real)0;   // the mixing per sub-level
+    // (#141: with ent_ifs the cloud layer's ascent in sub-levels of ~25 hPa, as the IFS's levels near cloud base: in three, a shallow plume
+    // could only stop half a sub-level, ~90 hPa, up, and the entrainment's exponent over one sub-level reached ~2.5)
+    const int Mk = P.ent_ifs > 0 && k == bot - 1 && k > 0 ? min(48, max(M, (int)ceil(P.grav * mu[k] / (real)2500))) : M;
+    const real f = q && P.plume_ent > 0 ? OMEXP(P.plume_ent * P.grav * mu[k] / Mk) : (real)0;   // the mixing per sub-level
     bool last = false;
-    for (int j = 0; j < M; j++) {
-      const real x = (j + (real)0.5) / M, pl = pt - x * P.grav * mu[k];
+    for (int j = 0; j < Mk; j++) {
+      const real x = (j + (real)0.5) / Mk, pl = pt - x * P.grav * mu[k];
       const real ex = lift(pl);
       const real te = k == 0 ? th[0] : a + (b - a) * SPREAD(x, s, es);   // the top layer has no upper edge: its mean
       // it mixes with the air it rises through, an equal mass going each way (decision #103): dry surroundings cool and dry it, so it stops sooner
       // ent_cloud (V2-6b): through the layer above the bottom layer, the cloud layer, the updraft takes in its surroundings, its mass
       // growing as exp(ent_cloud z) (Tiedtke 1989's deep entrainment, 1e-4 per m), the air taken in mixed through it
       if (G && q && P.ent_cloud > 0 && k == bot - 1 && k > 0) {
-        const real dz = (real)287.0 * te * ex / P.grav * (P.grav * mu[k] / M) / pl;
+        real dz = (real)287.0 * te * ex / P.grav * (P.grav * mu[k] / Mk) / pl;
+        if (P.ent_ifs > 0 && j == 0) dz *= (real)0.5;   // (#141: from cloud base the plume is followed to the first sub-level's middle, half of it)
         if (P.ent_ifs > 0) {
           // ent_ifs (#139): the IFS's (Bechtold et al. 2008, 2014; Bechtold, ECMWF lecture notes eq. 3.19-3.20) entrainment 1.75e-3 /m (1.3 - RH)
           // (q_s(T) / q_s at cloud base)^3 and mixing detrainment 0.75e-4 /m: strong in dry air near cloud base, so a diluted plume stops low and
@@ -521,11 +525,11 @@ __device__ void plume_ascent(int bot, const real* mu, const real* th, real th0, 
         tp += f * (te - tp);
         qp += f * (q[k] - qp);
       }
-      sum += mu[k] / M * (tp - te);
+      sum += mu[k] / Mk * (tp - te);
       last = tp > te;
       if (lt) {
         const real Tp = tp * ex;
-        if (tp > te) cape += 287.0 * (tp - te) * ex * P.grav * mu[k] / M / pl;
+        if (tp > te) cape += 287.0 * (tp - te) * ex * P.grav * mu[k] / Mk / pl;
         if (q0c < 0 && Tp < P.Tf) { q0c = qp; p0c = pl; }
         if (q40 < 0 && Tp < P.Tf - 40) { q40 = qp; p40 = pl; }
       }

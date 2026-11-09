@@ -45,6 +45,7 @@ struct Par {
   real bl_room;                                            // (set per column: the mixed layer's room up to its cloud base, #124)
   int Lm1;                                         // the column's bottom layer
   int edge_k;                                      // the layer under the 380 K edge: the layers above it are the stratosphere (#129)
+  real revap, revap_rhs, revap_rhl, revap_area;   // rain and snow evaporation by Kessler's form as Tiedtke's (V2-6c, #136)
   real ice_air;                                    // ice in the air (V2-6c, #134): ice saturation below freezing, snow, freezing heat aloft
   real ths[LMAX];                                  // the theta* of the interfaces above the lowest one, from the top (decision #101)
 };
@@ -57,7 +58,7 @@ __device__ Par unpack(const real* a) {
   P.kappa = a[15]; P.p0 = a[16]; P.tilt = a[17]; P.year_s = a[18]; P.day_s = a[19]; P.tau_lin = a[20]; P.theta_star2 = a[21];
   P.moist = a[22]; P.Lv = a[23]; P.Lf = a[24]; P.Tf = a[25]; P.k_evap = a[26]; P.tau_conv = a[27]; P.alb_ice = a[28];
   P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32]; P.sat_layer = a[33]; P.sw_tau = a[34];
-  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; P.plume_ent = a[78]; P.l_ice = a[79]; P.storm_area = a[80]; P.graupel_v = a[81]; P.ice_small = a[82]; P.q_shape = a[83]; P.edge_heat = a[84]; P.freeze_dry = a[85]; P.edge_vap = a[86]; P.conv_revap = a[87]; P.plume_root = a[88]; P.bl_q = a[89]; P.sfc = a[90]; P.z0_land = a[91]; P.downdraft = a[92]; P.ent_cloud = a[93]; P.c_deep = a[94]; P.rs_max = a[95]; P.rs_sun = a[96]; P.q_sea = a[97]; P.bl_reach = a[98]; P.dry_edge = a[99]; P.bl_lcl = a[100]; P.edge_k = (int)a[101]; P.ice_air = a[102]; P.bl_room = (real)1e30; for (int j = 0; j < LMAX; j++) P.ths[j] = a[103 + j];
+  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; P.plume_ent = a[78]; P.l_ice = a[79]; P.storm_area = a[80]; P.graupel_v = a[81]; P.ice_small = a[82]; P.q_shape = a[83]; P.edge_heat = a[84]; P.freeze_dry = a[85]; P.edge_vap = a[86]; P.conv_revap = a[87]; P.plume_root = a[88]; P.bl_q = a[89]; P.sfc = a[90]; P.z0_land = a[91]; P.downdraft = a[92]; P.ent_cloud = a[93]; P.c_deep = a[94]; P.rs_max = a[95]; P.rs_sun = a[96]; P.q_sea = a[97]; P.bl_reach = a[98]; P.dry_edge = a[99]; P.bl_lcl = a[100]; P.edge_k = (int)a[101]; P.ice_air = a[102]; P.revap = a[103]; P.revap_rhs = a[104]; P.revap_rhl = a[105]; P.revap_area = a[106]; P.bl_room = (real)1e30; for (int j = 0; j < LMAX; j++) P.ths[j] = a[107 + j];
   return P;
 }
 
@@ -1048,6 +1049,8 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
     // freezes in its layer, giving it Lf; falling snow melts in a layer whose lower edge is above freezing, taking Lf from it, and
     // sublimates in clear air with Lv + Lf; what is left reaches the ground as snow (S)
     real Fr = 0, Fs = 0;                         // the falling water, and the snow in it (kg/m^2/s)
+    real fa = 0, psf = 0;                        // (revap: the rain's area, the largest cover it fell from; the surface pressure)
+    for (int k = 0; k < L; k++) psf += P.grav * mu[k];
     for (int k = 0; k < L; k++) {
       const real dl = cloud_adjust(k, mu, th, q, cl, pib, dt, P, gx);
       dth[k] += P.Lv * dl / pib[k];
@@ -1082,9 +1085,19 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
         }
       }
       real ev = 0;
-      if (Fr > 0 && qs > q[k]) {
-        ev = P.k_revap * (1 - f) * (1 - q[k] / qs) * sqrt(Fr) * mu[k];
-        ev = fmin(ev, fmin(Fr, (qs - q[k]) * mu[k] / dt / (1 + P.Lv / pib[k] * dqs)));
+      if (loss > 0) fa = fmax(fa, f);
+      // revap (#136): Kessler's (1969) form as the IFS's (Tiedtke 1993; Bechtold, ECMWF lecture notes, eq. 3.26), per kg of air
+      // a alpha1 (RH_c q_s - q) [sqrt(p / p_s) / alpha2 F / a]^alpha3, alpha1 5.44e-4 /s, alpha2 5.09e-3, alpha3 0.577, F the falling
+      // water (kg/m^2/s) on its area a (the largest cover it fell from, at least revap_area), evaporating in the part of a clear of this
+      // layer's cloud, up to RH_c (revap_rhs over the sea, revap_rhl over land)
+      const real rc_ = P.revap > 0 ? (isl ? P.revap_rhl : P.revap_rhs) : (real)1;
+      if (Fr > 0 && rc_ * qs > q[k]) {
+        if (P.revap > 0) {
+          const real a_ = fmax(fa, P.revap_area), ac = fmax((real)0, a_ - f);
+          ev = ac * (real)5.44e-4 * (rc_ * qs - q[k]) * pow(sqrt(pm / psf) / (real)5.09e-3 * Fr / a_, (real)0.577) * mu[k];
+        } else
+          ev = P.k_revap * (1 - f) * (1 - q[k] / qs) * sqrt(Fr) * mu[k];
+        ev = fmin(ev, fmin(Fr, (rc_ * qs - q[k]) * mu[k] / dt / (1 + P.Lv / pib[k] * dqs)));
         const real es = Fr > 0 ? ev * Fs / Fr : (real)0;          // (the snow's share sublimates)
         const real Le = P.Lv * ev + P.Lf * es;
         Fr -= ev;
@@ -1237,7 +1250,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   // heat; its condensate rains. Removing bottom air lowers the first interface, where the plume condenses less, so the
   // mass that would remove the buoyancy there is d / (-d(theta_p)/dp) / g; a share 1 - exp(-dt/tau_conv) of it moves per
   // step (a Betts-Miller-style relaxation; the one convective constant). ----
-  real mc = 0;
+  real mc = 0, Scg = 0;                          // (Scg: the plumes' snow that reaches the ground)
   if (flash) flash[i] = 0;
   if (moist && P.theta_star > 0) {
     real pi_ = 0;
@@ -1349,6 +1362,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
             }
           }
           S += Sc;
+          Scg = Sc;
         } else mc = 0;
       }
     } else {
@@ -1387,13 +1401,25 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   // the plumes' rain evaporates as it falls below their base through the bottom layer's clear air (#112), as the clouds' rain does
   // above (the same Kessler-type rate), but it falls on a share conv_revap of the cell (Tiedtke 1989's 0.05), so its local flux is
   // that much higher and it evaporates as sqrt(conv_revap Fc) per cell area
-  if (cloudy && P.conv_revap > 0 && !(P.downdraft > 0) && Rc > 0 && L > 1) {   // (the downdraft evaporates it instead)
+  // revap (#136): with the downdraft too (Tiedtke 1989 has both), at the IFS's rate (above) on the convection's area revap_area
+  if (cloudy && (P.revap > 0 ? Rc - Scg > 0 : P.conv_revap > 0 && !(P.downdraft > 0) && Rc > 0) && L > 1) {   // (else the downdraft evaporates it instead)
     real qs, dqs;
     layer_cap(bot, mu, th[bot], P, qs, dqs);
-    if (qs > q[bot]) {
-      const real Fc = Rc / dt;
-      real ev = P.k_revap * (1 - q[bot] / qs) * sqrt(P.conv_revap * Fc) * mu[bot];
-      ev = fmin(ev, fmin(Fc, (qs - q[bot]) * mu[bot] / dt / (1 + P.Lv / pib[bot] * dqs)));
+    const real rc_ = P.revap > 0 ? (isl ? P.revap_rhl : P.revap_rhs) : (real)1;
+    if (rc_ * qs > q[bot]) {
+      real ev;
+      if (P.revap > 0) {
+        const real Fc = (Rc - Scg) / dt;
+        real pt_ = 0;
+        for (int k = 0; k < bot; k++) pt_ += P.grav * mu[k];
+        const real pm = pt_ + (real)0.5 * P.grav * mu[bot], psf = pt_ + P.grav * mu[bot];
+        ev = P.revap_area * (real)5.44e-4 * (rc_ * qs - q[bot]) * pow(sqrt(pm / psf) / (real)5.09e-3 * Fc / P.revap_area, (real)0.577) * mu[bot];
+        ev = fmin(ev, fmin(Fc, (rc_ * qs - q[bot]) * mu[bot] / dt / (1 + P.Lv / pib[bot] * dqs)));
+      } else {
+        const real Fc = Rc / dt;
+        ev = P.k_revap * (1 - q[bot] / qs) * sqrt(P.conv_revap * Fc) * mu[bot];
+        ev = fmin(ev, fmin(Fc, (qs - q[bot]) * mu[bot] / dt / (1 + P.Lv / pib[bot] * dqs)));
+      }
       q[bot] += ev * dt / mu[bot];
       th[bot] -= P.Lv * ev * dt / (mu[bot] * pib[bot]);
       dgl[bot] -= P.Lv * ev;

@@ -711,6 +711,15 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   if (P.bl_mix > 0 && L > 2) P.theta_star = fmin(fmax(ts_base, th[L - 1]), th[L - 2] - 1);
   real cl[LMAX], fc[LMAX], cwp[LMAX], eps0[LMAX], liq[LMAX];
   for (int k = 0; k < L; k++) { cl[k] = cloudy ? cloudw[(size_t)k * N + i] : (real)0; fc[k] = 0; }
+#ifdef VAPDIAG
+  // (diagnostics, compiled only with -DVAPDIAG: each layer's vapor and cloud water, kg/m^2, at the column's stages, into dgo after its rows)
+  #define SNAP(n_) if (dgo) for (int k_ = 0; k_ < L; k_++) { dgo[(size_t)(5 * L - 2 + (n_) * L + k_) * N + i] = mu[k_] * q[k_];                                                        dgo[(size_t)(15 * L - 2 + (n_) * L + k_) * N + i] = mu[k_] * cl[k_]; }
+  #define SNAPS(a_, b_) for (int n2_ = a_; n2_ <= b_; n2_++) SNAP(n2_)
+#else
+  #define SNAP(n_)
+  #define SNAPS(a_, b_)
+#endif
+  SNAP(0)
   real m_ice = moist ? ice[i] : (real)0;
   // the surface water's heat capacity (J/m^2/K): the ocean's mixed layer when coupled (cap), else the slab
   // Land's by its soil water when c_wet is set (decision #90): wet soil stores and conducts heat better. The ground's heat relative to T_REF stays as the water changes.
@@ -1007,6 +1016,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   evap[i] = E;
   tsurf[i] = tsk;
 
+  SNAP(1)
   // ---- heating as potential temperature ----
   real dth[LMAX];
   for (int k = 0; k < L; k++) { dth[k] = Q[k] * dt / (mu[k] * pib[k]); th[k] += dth[k]; }
@@ -1122,6 +1132,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
       Rk[k == bot ? 1 : 0] += mu[k] * dq;
     }
 
+  SNAP(2)
   // ---- dry crossing of the interfaces ----
   real wxo[LMAX];
   if (P.bl_mix > 0 && L > 2) P.theta_star = fmin(fmax(ts_base, th[bot]), th[bot - 1] - 1);
@@ -1244,6 +1255,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
     }
   }
 
+  SNAPS(3, 7)
   // ---- moist convection (decisions #46, #49): a plume of bottom-layer air lifted to the interface above it, condensing
   // on the way, compared with the air there, which is at theta*. Buoyant (theta_p > theta*), it rises; it keeps rising
   // through each further interface it is buoyant at and detrains into the layer above the last one, with its latent
@@ -1311,7 +1323,9 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
           // residual into the receiving layer, so its latent energy is not counted again there; V2-6b)
           const real Ec = column_energy(L, mu, pib, th, q, P);
           for (int k = 0; k < bot; k++) q[k] = fmax((real)0, q[k] + mc * qx[k] / mu[k]);
+          SNAPS(4, 7)
           move_mass(L, P, mu, th, q, pib, bot, kd, mc, th0, thp, q0, qarr, cloudy ? cl : (real*)0);
+          SNAPS(5, 7)
           if (me > 0) move_mass(L, P, mu, th, q, pib, bot - 1, kd, me, the, thp, qe, qarr, cloudy ? cl : (real*)0);
           th[kd] += (Ec - column_energy(L, mu, pib, th, q, P)) / (mu[kd] * pib[kd]);
           // ice_air (#134): the frozen share of its rain leaves as snow, its freezing heat to the layer it rose into (where its heat goes);
@@ -1342,6 +1356,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
           // downdraft (V2-6b): air of the cloud layer above the bottom layer, saturated by evaporating the plume's rain, sinks into the
           // bottom layer, evaporating more as it warms on the way down: a share `downdraft` of the plume's base mass (Tiedtke 1989's 0.3),
           // as much as the rain allows
+          SNAPS(6, 7)
           if (P.downdraft > 0 && bot >= 2 && Rc - Sc > 0) {      // (it evaporates rain, not snow)
             const int s_ = bot - 1;
             real pt_ = 0;
@@ -1398,6 +1413,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
     }
     }
   }
+  SNAP(8)
   // the plumes' rain evaporates as it falls below their base through the bottom layer's clear air (#112), as the clouds' rain does
   // above (the same Kessler-type rate), but it falls on a share conv_revap of the cell (Tiedtke 1989's 0.05), so its local flux is
   // that much higher and it evaporates as sqrt(conv_revap Fc) per cell area
@@ -1427,6 +1443,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
       Rc -= ev * dt;
     }
   }
+  SNAP(9)
   if (conv) conv[i] = mc;
   for (int j = 0; j + 1 < L; j++) wx[(size_t)j * N + i] = wxo[j];
   rain[i] = R / dt;

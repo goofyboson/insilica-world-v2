@@ -12,7 +12,7 @@ A planet simulator with two moving ocean layers and three moving air layers, run
 
 ## Current status
 
-**V2-6c in progress (2026-11-08):** ice in the air with its freezing heat aloft, snow, melting and sublimation (SPEC #134); RAIN against GPCP (new): global 3.48 against 2.69 mm/day (+29%), the excess in the tropics, traced to the surface wind counting grid-scale divergent flow (×1.29 at the equator); EARTH passes (net +1.1).
+**V2-6c in progress (2026-11-09):** ice in the air with its freezing heat aloft, snow, melting and sublimation (SPEC #134); RAIN against GPCP (new); the surface's wind from the reconstructed cell wind (#135). RAIN fails: global 3.41 against 2.69 mm/day (+27%), the excess in the tropics; global latent heat 97.8 W/m², with the air absorbing ~10 W/m² too little sunlight. EARTH and CONSERVE pass.
 
 **V2-6b Boundary layer and winds closed 2026-11-08 (44/46 with PERF; ICE and WINDS' jet position known failures to V2-6d). Next: V2-6c moist physics.** `earth5`: five air layers (stratosphere split at 500 K, upper and lower troposphere, a mixed boundary layer), surface exchange by stability, mountain and gravity-wave drag, land cover. EARTH passes, every term within 3% (net +0.6 W/m²); WINDS within on trades, surface westerlies, the northern jet and the stratosphere; the southern jet sits at 35°S (55°S observed), held there by a warm Southern Ocean and weak eddies (SPEC #131). PERF air n = 6 23.5 ms per model hour. docs/v2-6b-boundary-layer.md.
 

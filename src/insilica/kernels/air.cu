@@ -1494,6 +1494,22 @@ extern "C" __global__ void cell_speed(int N, const real* u, const int* cellEdge,
   out[i] = sqrt(2 * ke / areaCell[i]);
 }
 
+// Wind speed at cells from Perot's reconstruction of the cell's wind from its edges' normal winds (V2-6c, #135; op: N x 6 x 2
+// east and north coefficients per edge slot, orodrag.operators): the resolved wind, without the grid-scale converging and
+// diverging flow that the edges' kinetic energy also counts.
+extern "C" __global__ void cell_speed_perot(int N, const real* u, const int* cellEdge, const real* op, real* out) {
+  const int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= N) return;
+  real ue = 0, un = 0;
+  for (int m = 0; m < 6; m++) {
+    const int e = cellEdge[i * 6 + m];
+    if (e < 0) break;
+    ue += op[(i * 6 + m) * 2] * u[e];
+    un += op[(i * 6 + m) * 2 + 1] * u[e];
+  }
+  out[i] = sqrt(ue * ue + un * un);
+}
+
 // The surface layer (V2-6b, decision #114): the exchange of momentum, heat and vapor between the ground or sea and the
 // bottom layer's air, rho C U per unit difference, from Monin-Obukhov's log law and stability as the bulk form of
 // Louis (1979; Louis, Tiedtke & Geleyn 1981). The bottom layer is mixed, its wind and theta even above its surface layer,

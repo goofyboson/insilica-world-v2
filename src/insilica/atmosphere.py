@@ -36,7 +36,7 @@ DEFAULTS = dict(S0=1361.0, asw=0.2, tau0=0.9, mu_ref=P0 / GRAV, eps_s=0.95, h_se
                 moist=0.0, Lv=2.5e6, Lf=3.34e5, Tf=273.15, k_evap=4.0e-3, tau_conv=7200.0, alb_ice=0.7, rho_ice=917.0,
                 ice_cover=0.05, k_ice=2.2, Rv=461.5, sat_layer=1.0, sw_tau=2.0, alb_dry=0.30, alb_wet=0.18, soil_beta=0.75,
                 c_land=2.0e6, soil_base=150.0, soil_per_m=0.5, k_inf=5.0 / 3600.0, pond_cover=50.0, alb_snow=0.8,
-                alb_ice_melt=0.50, alb_snow_melt=0.55, alb_glacier=0.35, snow_cover=30.0, alb_ramp=10.0, land_exch=1.0, plume_deep=0.0, lw_w0=0.0, c_dry=1.3e6, c_wet=0.0, sat_prof=0.0, land_rs=0.0, sat_base=0.0, bl_bot=0.0, cloud=0.0, rh_crit=0.8, re_liq=10e-6, re_ice=30e-6, cloud_g=0.85, k_lw_liq=130.0, k_lw_ice=65.0, c_auto=1e-3, q_auto=0.3e-3, v_ice=0.5, l_det=0.5e-3, tau_erode=1e5, k_revap=1e-5, mu_cloud=500.0, theta_rise=0.0, bl_mix=0.0, mu_night=250.0, bl_ent=0.2, bl_cap=0.0, bulk_c=0.0, bulk_gust=1.0, bulk_z=0.0, bulk_w=0.0, plume_ent=0.0, l_ice=0.1e-3, storm_area=1.0e8, graupel_v=5.0, ice_small=0.1, q_shape=0.0, edge_heat=0.0, freeze_dry=0.0, edge_vap=0.0, conv_revap=0.0, plume_root=0.0, bl_q=0.0, sfc=0.0, z0_land=0.1, downdraft=0.0, ent_cloud=0.0, c_deep=0.0, rs_max=0.0, rs_sun=180.0, q_sea=0.0, bl_reach=0.0, dry_edge=0.0, bl_lcl=0.0, edge_k=1.0, cover=0.0, ice_air=0.0,
+                alb_ice_melt=0.50, alb_snow_melt=0.55, alb_glacier=0.35, snow_cover=30.0, alb_ramp=10.0, land_exch=1.0, plume_deep=0.0, lw_w0=0.0, c_dry=1.3e6, c_wet=0.0, sat_prof=0.0, land_rs=0.0, sat_base=0.0, bl_bot=0.0, cloud=0.0, rh_crit=0.8, re_liq=10e-6, re_ice=30e-6, cloud_g=0.85, k_lw_liq=130.0, k_lw_ice=65.0, c_auto=1e-3, q_auto=0.3e-3, v_ice=0.5, l_det=0.5e-3, tau_erode=1e5, k_revap=1e-5, mu_cloud=500.0, theta_rise=0.0, bl_mix=0.0, mu_night=250.0, bl_ent=0.2, bl_cap=0.0, bulk_c=0.0, bulk_gust=1.0, bulk_z=0.0, bulk_w=0.0, plume_ent=0.0, l_ice=0.1e-3, storm_area=1.0e8, graupel_v=5.0, ice_small=0.1, q_shape=0.0, edge_heat=0.0, freeze_dry=0.0, edge_vap=0.0, conv_revap=0.0, plume_root=0.0, bl_q=0.0, sfc=0.0, z0_land=0.1, downdraft=0.0, ent_cloud=0.0, c_deep=0.0, rs_max=0.0, rs_sun=180.0, q_sea=0.0, bl_reach=0.0, dry_edge=0.0, bl_lcl=0.0, edge_k=1.0, cover=0.0, ice_air=0.0, sfc_wind=0.0,
                 oro=0.0, oro_g=0.3, oro_cd=1.0, oro_hnc=0.5, oro_ric=0.25,
                 gw=0.0, gw_bt=0.004, gw_cw=40.0, gw_lambda=3.0e5, gw_psrc=31500.0, gw_cmax=99.6, gw_dc=1.2)
 PAR_ORDER = ('S0', 'asw', 'tau0', 'mu_ref', 'eps_s', 'h_sens', 'u0', 'alb', 'c_slab', 'mu_bl', 'theta_star', 'floor_', 'sigma',
@@ -77,7 +77,12 @@ class AirPhysics:
         z = lambda *s: cp.zeros(s)
         self.uabs, self.wx, self.olr, self.sw_abs, self.stored = z(N), z(max(layers - 1, 1), N), z(N), z(N), z(N)
         # compiled for this many layers: the column's arrays then fit in registers, not local memory (V2-5)
-        self.k = {n: dg.kernel(n, 'air.cu', (f'-DNL={layers}',)) for n in ('air_column', 'advance_time', 'cell_speed', 'hs_column', 'surface_layer')}
+        self.k = {n: dg.kernel(n, 'air.cu', (f'-DNL={layers}',)) for n in ('air_column', 'advance_time', 'cell_speed', 'cell_speed_perot', 'hs_column', 'surface_layer')}
+        # the surface's wind (#135): 0 the bottom layer's edges' kinetic energy, 1 Perot's reconstructed cell wind
+        self.perot = None
+        if self.p['sfc_wind'] > 0:
+            from .orodrag import operators
+            self.perot = cp.asarray(operators(dg.host)[0].reshape(-1), dtype=dg.dtype)
         self.hs = cp.asarray([1.0 / (40 * DAY_S), 1.0 / (4 * DAY_S)])
         self.lat = cp.asarray(np.arcsin(np.clip(dg.host.pos[:, 2], -1, 1)))
         self.qnet = z(N)
@@ -98,6 +103,14 @@ class AirPhysics:
             self.sw = Shortwave(dg, layers, self.par, self.lw, **({'inhom': self.p['cloud_inhom']} if 'cloud_inhom' in self.p else {}))
             self.swalb = cp.full(N, self.p['alb'])
 
+    def _speed(self, u):
+        """The surface's wind speed at cells from the bottom layer's edge winds, into self.uabs."""
+        g, i32 = self.dg, np.int32
+        if self.perot is not None:
+            self.k['cell_speed_perot'](*grid_dims(g.N), (i32(g.N), u[self.L - 1], g.cellEdge, self.perot, self.uabs))
+        else:
+            self.k['cell_speed'](*grid_dims(g.N), (i32(g.N), u[self.L - 1], g.cellEdge, g.le, g.de, g.areaCell, self.uabs))
+
     def radiate(self, mu, theta, Ts, t, interval, q=None, cw=None):
         """The k-tables' longwave and shortwave from the present state (the sun over the coming interval, s), saved for the
         column steps until the next call."""
@@ -110,7 +123,7 @@ class AirPhysics:
         """The surface layer's exchange coefficients from this step's bottom wind, theta and surface (V2-6b, #114): self.cd,
         self.ch = rho C_D U, rho C_H U (kg/m²/s), the drag's for the wind stress and the heat's and vapor's for the column."""
         g, k, i32 = self.dg, self.k, np.int32
-        k['cell_speed'](*grid_dims(g.N), (i32(g.N), u[self.L - 1], g.cellEdge, g.le, g.de, g.areaCell, self.uabs))
+        self._speed(u)
         k['surface_layer'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.par, self.uabs, mu, theta, q if q is not None else NULL, Ts,
                                              ice if ice is not None else NULL, land if land is not None else NULL, self.cd, self.ch,
                                              self.cover if self.cover is not None else NULL))
@@ -127,7 +140,7 @@ class AirPhysics:
                                              self.stored))
             k['advance_time']((1,), (1,), (t, R(dt)))
             return
-        k['cell_speed'](*grid_dims(g.N), (i32(g.N), u[self.L - 1], g.cellEdge, g.le, g.de, g.areaCell, self.uabs))
+        self._speed(u)
         k['air_column'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.par, i32(self.mode), t, self.insol, self.pos, self.uabs,
                                           mu, theta, q if q is not None else self._none, Ts, ice if ice is not None else self._none, R(dt),
                                           self.wx, self.olr, self.sw_abs, self.stored, self.rain, self.evap, self.conv,

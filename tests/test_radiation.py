@@ -155,6 +155,8 @@ WINDS_OBS = dict(trades=(-3.8, -2.9),                     # 10 m at 15°S, 15°N
                  strat=(26.5, 9.9),                       # above 380 K, peak at 25–85°
                  strat_eq=-4.9)                           # above 380 K, 5°S–5°N
 # (reported, #129: 380–500 K and above 500 K, at 5°S/N and their peaks at 25–85°, S and N)
+# RAIN (V2-6c, SPEC #134): GPCP v2.3 1991–2020 annual mean (tools/gpcp_rain.py): global, 10° bands from 90°S, the 5°-band maximum's latitude
+RAIN_OBS = dict(glob=2.69, bands=(0.36, 0.74, 1.9, 3.07, 2.91, 2.62, 2.01, 2.48, 3.91, 5.18, 2.72, 1.82, 2.5, 2.63, 2.42, 1.8, 0.92, 0.53), peak=7.5)
 WINDS_SPLIT = dict(low=((-1.6, -0.6), (26.7, -55), (14.3, 45)), high=((-8.6, -8.1), (26.7, -65), (8.3, 65)))
 
 
@@ -184,9 +186,11 @@ def test_earth_budget(record):
     day = int(round(86400 / w.dt))
     S = 365 * 4                                  # four samples a day over the measured year
     usum, hsum = cp.zeros_like(w.u), cp.zeros_like(w.h)
+    rsum, ssum = cp.zeros(w.grid.N), cp.zeros(w.grid.N)
     for _ in range(S):
         w.step(day // 4)
         usum += w.u; hsum += w.h
+        rsum += w.physics.rain; ssum += w.physics.rainp[3]
         p, co = w.physics, w.physics.cloudo
         f = p.sw.swf
         acc['sun'] += a @ p.sw_abs
@@ -240,4 +244,21 @@ def test_earth_budget(record):
            + ' hPa (above 380 K 126, above 500 K 51); failing: ' + (', '.join(k for k, v in checks.items() if not v) or 'none'),
            'trades ±1.5 m/s; surface westerly peaks ±3 m/s, jet peaks ±30%, each within 10° of observed; above 380 K peaks ±15 m/s, 5°S–5°N ±7 m/s', okw,
            title='WINDS earth5\'s zonal winds against the reanalysis (V2-6b, SPEC #126; earth5 since #129)')
-    assert ok and okw
+    # RAIN (V2-6c, #134): the same year's rain (and snow) against GPCP
+    g, mm = w.grid, 86400.0 / S
+    lat = np.degrees(g.lat)
+    r, sn = rsum.get() * mm, ssum.get() * mm
+    zmb = lambda x, width: np.bincount(np.clip(((lat + 90) // width).astype(int), 0, 180 // width - 1), weights=x * g.areaCell, minlength=180 // width)         / np.bincount(np.clip(((lat + 90) // width).astype(int), 0, 180 // width - 1), weights=g.areaCell, minlength=180 // width)
+    glob = float(np.average(r, weights=g.areaCell))
+    z10, z5 = zmb(r, 10), zmb(r, 5)
+    pk = -90 + 5 * int(np.argmax(z5)) + 2.5
+    ro = RAIN_OBS
+    mid = range(4, 14)                                   # 50°S–50°N
+    rb = {i: z10[i] / ro['bands'][i] - 1 for i in mid}
+    okr = abs(glob / ro['glob'] - 1) <= 0.15 and abs(pk - ro['peak']) <= 10 and all(abs(x) <= 0.30 for x in rb.values())
+    record('RAIN', f'the same year (rain and snow, mm/day; GPCP 1991–2020 in brackets): global {glob:.2f} ({ro["glob"]}, {100 * (glob / ro["glob"] - 1):+.0f}%); '
+           f'5° maximum at {pk:+.1f}° ({ro["peak"]:+.1f}°); 10° bands 45°S–45°N ' + ', '.join(f'{z10[i]:.2f} ({ro["bands"][i]}, {100 * rb[i]:+.0f}%)' for i in mid)
+           + f'; snow {float(np.average(sn, weights=g.areaCell)):.3f} globally, {float(np.average(sn, weights=g.areaCell * (np.abs(lat) > 50))):.2f} poleward of 50°',
+           'global within 15%; maximum within 10° of latitude; each 10° band 50°S–50°N within 30%', okr,
+           title="RAIN earth5's rain against GPCP (V2-6c, SPEC #134)")
+    assert ok and okw and okr

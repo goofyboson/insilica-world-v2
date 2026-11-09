@@ -514,9 +514,10 @@ def earth5(g, top=5000.0):
 # V2-6b (#129): earth4 with its stratosphere in two layers, split at 500 K, so the waves can leave momentum in its lower part and its
 # upper part apart; the layers above the 380 K edge (edge_k 2) are the stratosphere's: isothermal in the radiation, their vapor even.
 # Land cover (#132): each land cell's roughness, snow-free albedo, snow under trees and stomata from its cover (earth_cover).
+# Ice in the air (V2-6c, #134): ice saturation below freezing, snow and its freezing heat aloft, melting below, sublimation.
 PRESETS['earth5'] = dict(PRESETS['earth4'], build=earth5, stress=[0.0] * 5, cover=earth_cover,
                          air=dict(PRESETS['earth4']['air'], physics=dict(PRESETS['earth4']['air']['physics'], theta_stars=[500.0, 380.0, 305.0, 200.0],
-                                                                         edge_k=2.0, cover=1.0)))
+                                                                         edge_k=2.0, cover=1.0, ice_air=1.0)))
 
 PRESETS['rce'] = dict(build=aqua_dry, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True, physics=AIR3), dynamics=False)
 

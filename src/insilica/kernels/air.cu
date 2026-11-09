@@ -742,7 +742,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   for (int k = 0; k < L; k++) { cl[k] = cloudy ? cloudw[(size_t)k * N + i] : (real)0; fc[k] = 0; }
 #ifdef VAPDIAG
   // (diagnostics, compiled only with -DVAPDIAG: each layer's vapor and cloud water, kg/m^2, at the column's stages, into dgo after its rows)
-  #define SNAP(n_) if (dgo) for (int k_ = 0; k_ < L; k_++) { dgo[(size_t)(5 * L - 2 + (n_) * L + k_) * N + i] = mu[k_] * q[k_];                                                        dgo[(size_t)(15 * L - 2 + (n_) * L + k_) * N + i] = mu[k_] * cl[k_]; }
+  #define SNAP(n_) if (dgo) for (int k_ = 0; k_ < L; k_++) { dgo[(size_t)(5 * L - 2 + (n_) * L + k_) * N + i] = mu[k_] * q[k_];                                                        dgo[(size_t)(15 * L - 2 + (n_) * L + k_) * N + i] = mu[k_] * cl[k_]; dgo[(size_t)(25 * L + 2 + (n_) * L + k_) * N + i] = mu[k_]; }
   #define SNAPS(a_, b_) for (int n2_ = a_; n2_ <= b_; n2_++) SNAP(n2_)
 #else
   #define SNAP(n_)

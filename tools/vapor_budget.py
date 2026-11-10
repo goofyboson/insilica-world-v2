@@ -18,7 +18,7 @@ def main(path, days=10.0):
     w = World.load(path); g = w.grid; p = w.physics; L = w.L
     p.k['air_column'] = w.dg.kernel('air_column', 'air.cu', (f'-DNL={L}', '-DVAPDIAG'))
     base = 5 * L - 2
-    p.dgo = cp.zeros((base + 30 * L + 4, g.N))   # (the shallow plume's four rows, then each layer's mass at the ten points)
+    p.dgo = cp.zeros((base + 30 * L + 16, g.N))   # (the shallow plume's four rows, then each layer's mass at the ten points)
     lat = np.degrees(g.lat); A = g.areaCell; land = w.land.get() > 0.5
     masks = {'sea 10S-10N': ~land & (np.abs(lat) < 10), 'sea 10-30': ~land & (np.abs(lat) >= 10) & (np.abs(lat) < 30),
              'sea 30-60': ~land & (np.abs(lat) >= 30) & (np.abs(lat) < 60), 'land 30-60': land & (np.abs(lat) >= 30) & (np.abs(lat) < 60),

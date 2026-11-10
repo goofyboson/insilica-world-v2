@@ -140,7 +140,7 @@ EARTH_CYCLES = (5, 20)                           # (1 coupled year + 20 ocean-on
 
 def _earth_equilibrium():
     from insilica import spinup
-    w = World(4, 'earth5')                     # the five-layer earth: its boundary layer a layer of its own (#125), its stratosphere two (#129)
+    w = World(4, 'earth6')                     # the six-layer earth: its boundary layer a layer of its own (#125), its stratosphere two (#129), a cumulus layer (#142)
     year = int(round(365 * 86400 / w.dt))
     w.step(EARTH_SPIN_YEARS * year)
     spinup.spin_up(w, *EARTH_CYCLES)
@@ -177,9 +177,9 @@ def _winds(w, usum, hsum, S):
 
 @pytest.mark.xdist_group('grid4')
 def test_earth_budget(record):
-    """EARTH earth5's global energy budget with the k-tables, all-sky and clear-sky, against measured (V2-6a, SPEC #109, #112; earth4 since #125, earth5 since #129)"""
+    """EARTH earth6's global energy budget with the k-tables, all-sky and clear-sky, against measured (V2-6a, SPEC #109, #112; earth4 since #125, earth5 since #129, earth6 since #142)"""
     from insilica import runcache
-    w = runcache.spun_up(f'earth5-n4-eq{EARTH_SPIN_YEARS}x{EARTH_CYCLES[0]}x{EARTH_CYCLES[1]}', _earth_equilibrium, 0)[0]
+    w = runcache.spun_up(f'earth6-n4-eq{EARTH_SPIN_YEARS}x{EARTH_CYCLES[0]}x{EARTH_CYCLES[1]}', _earth_equilibrium, 0)[0]
     L, RW = w.L, w.L + 1
     a = cp.asarray(w.grid.areaCell / w.grid.areaCell.sum())
     acc = {k: cp.zeros(()) for k in EARTH_BUDGET}
@@ -202,7 +202,7 @@ def test_earth_budget(record):
     err = {k: m[k] / EARTH_BUDGET[k] - 1 for k in m}
     names = dict(sun='absorbed sunlight', olr='OLR', olrc='clear-sky OLR', lwdn='surface longwave down', sws='surface sunlight')
     ok = all(abs(e) <= 0.05 for e in err.values())
-    record('EARTH', f'earth5, n = 4, at equilibrium ({EARTH_SPIN_YEARS} coupled years, {EARTH_CYCLES[0]} × (1 coupled + {EARTH_CYCLES[1]} ocean-only), 1 coupled; the next year): ' + '; '.join(f'{names[k]} {m[k]:.1f} against {EARTH_BUDGET[k]:.0f} ({err[k] * 100:+.1f}%)' for k in m)
+    record('EARTH', f'earth6, n = 4, at equilibrium ({EARTH_SPIN_YEARS} coupled years, {EARTH_CYCLES[0]} × (1 coupled + {EARTH_CYCLES[1]} ocean-only), 1 coupled; the next year): ' + '; '.join(f'{names[k]} {m[k]:.1f} against {EARTH_BUDGET[k]:.0f} ({err[k] * 100:+.1f}%)' for k in m)
            + f'; net {m["sun"] - m["olr"]:+.1f}',
            'each within 5%', ok)
 
@@ -243,7 +243,7 @@ def test_earth_budget(record):
            f'cloud layer peak S/N {peak(S0 + 1, 25, 65, True)[0]:.1f}/{peak(S0 + 1, 25, 65, False)[0]:.1f} (15.3/8.8), layer masses ' + '/'.join(f'{x:.0f}' for x in hpa)
            + ' hPa (above 380 K 126, above 500 K 51); failing: ' + (', '.join(k for k, v in checks.items() if not v) or 'none'),
            'trades ±1.5 m/s; surface westerly peaks ±3 m/s, jet peaks ±30%, each within 10° of observed; above 380 K peaks ±15 m/s, 5°S–5°N ±7 m/s', okw,
-           title='WINDS earth5\'s zonal winds against the reanalysis (V2-6b, SPEC #126; earth5 since #129)')
+           title='WINDS earth6\'s zonal winds against the reanalysis (V2-6b, SPEC #126; earth5 since #129, earth6 since #142)')
     # RAIN (V2-6c, #134): the same year's rain (and snow) against GPCP
     g, mm = w.grid, 86400.0 / S
     lat = np.degrees(g.lat)
@@ -260,5 +260,5 @@ def test_earth_budget(record):
            f'5° maximum at {pk:+.1f}° ({ro["peak"]:+.1f}°); 10° bands 45°S–45°N ' + ', '.join(f'{z10[i]:.2f} ({ro["bands"][i]}, {100 * rb[i]:+.0f}%)' for i in mid)
            + f'; snow {float(np.average(sn, weights=g.areaCell)):.3f} globally, {float(np.average(sn, weights=g.areaCell * (np.abs(lat) > 50))):.2f} poleward of 50°',
            'global within 15%; maximum within 10° of latitude; each 10° band 50°S–50°N within 30%', okr,
-           title="RAIN earth5's rain against GPCP (V2-6c, SPEC #134)")
+           title="RAIN earth6's rain against GPCP (V2-6c, SPEC #134; earth6 since #142)")
     assert ok and okw and okr

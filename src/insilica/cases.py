@@ -519,6 +519,31 @@ PRESETS['earth5'] = dict(PRESETS['earth4'], build=earth5, stress=[0.0] * 5, cove
                          air=dict(PRESETS['earth4']['air'], physics=dict(PRESETS['earth4']['air']['physics'], theta_stars=[500.0, 380.0, 305.0, 200.0],
                                                                          edge_k=2.0, cover=1.0, ice_air=1.0, sfc_wind=1.0, revap=1.0, root_q=1.0, ent_det=1.0, ent_ifs=1.0, shallow=0.03)))
 
+
+def earth6(g, cu=1.0e4):
+    """The six-layer start (V2-6c, #142): earth5's with its cloud layer split, its lowest cu (Pa, at most 40% of it) the cumulus layer, its
+    theta 2 K above the mixed layer's (half its cu_dth span) and below the cloud layer's, its vapor 75% of saturation."""
+    h5, b, u5, x = earth5(g)
+    th5, q5 = x['theta'], x['q']
+    hc = np.minimum(np.full(g.N, cu / GRAV), 0.4 * h5[3])
+    h = np.concatenate([h5[:3], (h5[3] - hc)[None], hc[None], h5[4:]])
+    tc = np.minimum(th5[4] + 2.0, th5[3] - 1.0)
+    ps = h.sum(0) * GRAV
+    pm = ps - h[5] * GRAV - 0.5 * hc * GRAV
+    T = tc * (pm / P0) ** KAPPA
+    qs = 0.622 * 611.0 * np.exp(17.27 * (T - 273.15) / (T - 35.85)) / pm
+    th = np.concatenate([th5[:4], tc[None], th5[4:]])
+    q = np.concatenate([q5[:4], (0.75 * qs)[None], q5[4:]])
+    return h, b, np.concatenate([u5[:4], u5[3:4], u5[4:]]), dict(x, theta=th, q=q)
+
+
+# V2-6c (#142): earth5 with its cloud layer split: a cumulus layer above the mixed layer, its top following the mixed layer's theta plus
+# cu_dth (4 K: BOMEX's cumulus layer), where the shallow plume leaves its air and the mixed layer takes air back in; the downdrafts start in
+# the lower theta_e of the cumulus and cloud layers (Tiedtke's level of free sinking). theta* 204 is a placeholder: the interface follows the mixed layer.
+PRESETS['earth6'] = dict(PRESETS['earth5'], build=earth6, stress=[0.0] * 6,
+                         air=dict(PRESETS['earth5']['air'], physics=dict(PRESETS['earth5']['air']['physics'], theta_stars=[500.0, 380.0, 305.0, 204.0, 200.0],
+                                                                         cu_dth=4.0)))
+
 PRESETS['rce'] = dict(build=aqua_dry, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True, physics=AIR3), dynamics=False)
 
 

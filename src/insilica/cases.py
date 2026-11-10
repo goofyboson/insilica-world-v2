@@ -544,9 +544,10 @@ def earth6(g, cu=1.0e4):
 # cloud base, not a fixed 4 K above it: its span follows the moist adiabat (about 12 K in the tropics, 6-7 K in cold air).
 # #145: the plumes' buoyancy in virtual theta (buoy_v); alone it drained the mixed layer (31-55 hPa over the sea) and warmed the planet.
 # #146: the air the plumes take out of the mixed layer replaced by the cumulus layer's sinking between the clouds, up to cloud base (cu_sub).
+# #148: bare soil evaporates from its drying top, as (wet / full)^2 (bare_fx, Noah's direct soil evaporation), the plants from the whole root zone.
 PRESETS['earth6'] = dict(PRESETS['earth5'], build=earth6, stress=[0.0] * 6,
                          air=dict(PRESETS['earth5']['air'], physics=dict(PRESETS['earth5']['air']['physics'], theta_stars=[500.0, 380.0, 305.0, 204.0, 200.0],
-                                                                         cu_dth=4.0, cu_dp=2.0e4, buoy_v=1.0, cu_sub=1.0)))
+                                                                         cu_dth=4.0, cu_dp=2.0e4, buoy_v=1.0, cu_sub=1.0, bare_fx=2.0)))
 
 PRESETS['rce'] = dict(build=aqua_dry, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True, physics=AIR3), dynamics=False)
 

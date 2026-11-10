@@ -457,8 +457,9 @@ __device__ void edge_density(real a, real b, real m, real& fa, real& fb) {
 // interface. kd, thd, qd: the layer it detrains into and its theta and vapor there.
 // ice_air (#134): what it condenses below freezing freezes by the liquid-share rule, its Lf warming the plume (the extra buoyancy of
 // the ice phase); FZ: that frozen condensate up to detrainment, per kg leaving the bottom layer.
-__device__ void plume_ascent(int bot, const real* mu, const real* th, real th0, real q0, real pi_, const Par& P, real& A, int& kd, real& thd, real& qd, const real* q = 0, real* qx = 0, real* lt = 0, real* G = 0, real* FZ = 0, bool shal = false, real* ptop = 0) {
+__device__ void plume_ascent(int bot, const real* mu, const real* th, real th0, real q0, real pi_, const Par& P, real& A, int& kd, real& thd, real& qd, const real* q = 0, real* qx = 0, real* lt = 0, real* G = 0, real* FZ = 0, bool shal = false, real* ptop = 0, real* Gl = 0) {
   const int L = bot + 1, M = bot > 2 ? 3 : 8;
+  real gk[LMAX], dzc = 0;                        // (cu_dth, #143: the growth taken in from each layer; the half sub-level left at a layer's top)
   real Mp = 1;                                   // the plume's mass per kg leaving the bottom layer (ent_cloud)
   real tp, qp, fz = 0;
   // (ice_air: the condensate of a lift to pressure p_ freezes by its liquid share, warming the plume by Lf)
@@ -479,13 +480,15 @@ __device__ void plume_ascent(int bot, const real* mu, const real* th, real th0, 
   real qa[LMAX];                                 // what it has given each layer so far by mixing, per kg of plume
   // (ent_ifs: the environment's saturation at cloud base, the mixed layer's top)
   const real qsb = P.ent_ifs > 0 ? (real)qsat_a((fast)(th[bot] * FPOW(pi_ / P.p0, P.kappa)), (fast)pi_, P.ice_air) : (real)1;
-  for (int k = 0; k <= bot; k++) { qa[k] = 0; if (qx) qx[k] = 0; }
+  for (int k = 0; k <= bot; k++) { qa[k] = 0; gk[k] = 0; if (qx) qx[k] = 0; if (Gl) Gl[k] = 0; }
   for (int k = bot - 1; k >= 0; k--) {
     const real a = tstar(k, L, P), b = k > 0 ? tstar(k - 1, L, P) : (real)0, s = k > 0 ? edge_shape(a, b, th[k]) : (real)0;
     const real es = k > 0 ? ES(s) : (real)0;
     // (#141: with ent_ifs the cloud layer's ascent in sub-levels of ~25 hPa, as the IFS's levels near cloud base: in three, a shallow plume
     // could only stop half a sub-level, ~90 hPa, up, and the entrainment's exponent over one sub-level reached ~2.5)
-    const int Mk = P.ent_ifs > 0 && k == bot - 1 && k > 0 ? min(48, max(M, (int)ceil(P.grav * mu[k] / (real)2500))) : M;
+    // (cu_dth, #143: and through the cloud layer above the cumulus layer, the IFS's entrainment there too)
+    const bool ek = k > 0 && (k == bot - 1 || (P.cu_dth > 0 && P.ent_ifs > 0 && k == bot - 2));
+    const int Mk = P.ent_ifs > 0 && ek ? min(48, max(M, (int)ceil(P.grav * mu[k] / (real)2500))) : M;
     const real f = q && P.plume_ent > 0 ? OMEXP(P.plume_ent * P.grav * mu[k] / Mk) : (real)0;   // the mixing per sub-level
     bool last = false;
     for (int j = 0; j < Mk; j++) {
@@ -495,9 +498,11 @@ __device__ void plume_ascent(int bot, const real* mu, const real* th, real th0, 
       // it mixes with the air it rises through, an equal mass going each way (decision #103): dry surroundings cool and dry it, so it stops sooner
       // ent_cloud (V2-6b): through the layer above the bottom layer, the cloud layer, the updraft takes in its surroundings, its mass
       // growing as exp(ent_cloud z) (Tiedtke 1989's deep entrainment, 1e-4 per m), the air taken in mixed through it
-      if (G && q && P.ent_cloud > 0 && k == bot - 1 && k > 0) {
+      if (G && q && P.ent_cloud > 0 && ek) {
         real dz = (real)287.0 * te * ex / P.grav * (P.grav * mu[k] / Mk) / pl;
         if (P.ent_ifs > 0 && j == 0) dz *= (real)0.5;   // (#141: from cloud base the plume is followed to the first sub-level's middle, half of it)
+        if (P.cu_dth > 0 && j == 0) dz += dzc;          // (#143: and from the middle of the layer below's last sub-level, the rest of that)
+        if (P.cu_dth > 0 && j == Mk - 1) dzc = (real)0.5 * (real)287.0 * te * ex / P.grav * (P.grav * mu[k] / Mk) / pl;
         if (P.ent_ifs > 0) {
           // ent_ifs (#139): the IFS's (Bechtold et al. 2008, 2014; Bechtold, ECMWF lecture notes eq. 3.19-3.20) entrainment 1.75e-3 /m (1.3 - RH)
           // (q_s(T) / q_s at cloud base)^3 and mixing detrainment 0.75e-4 /m: strong in dry air near cloud base, so a diluted plume stops low and
@@ -510,6 +515,7 @@ __device__ void plume_ascent(int bot, const real* mu, const real* th, real th0, 
           qa[k] += Mp * fd_ * (qp - q[k]);
           tp += fe_ * (te - tp);
           qp += fe_ * (q[k] - qp);
+          gk[k] += Mp * expm1((eps_ - del_) * dz);
           Mp *= exp((eps_ - del_) * dz);
         } else {
         const real g_ = expm1(P.ent_cloud * dz), fe = g_ / (1 + g_);
@@ -534,9 +540,9 @@ __device__ void plume_ascent(int bot, const real* mu, const real* th, real th0, 
         if (q0c < 0 && Tp < P.Tf) { q0c = qp; p0c = pl; }
         if (q40 < 0 && Tp < P.Tf - 40) { q40 = qp; p40 = pl; }
       }
-      if (last) { if (ptop) *ptop = pl; A = sum; kd = k; thd = tp; qd = qp; if (G) *G = Mp; if (FZ) *FZ = fz; if (qx) for (int m = 0; m <= bot; m++) qx[m] = qa[m]; }
+      if (last) { if (ptop) *ptop = pl; A = sum; kd = k; thd = tp; qd = qp; if (G) *G = Mp; if (FZ) *FZ = fz; if (qx) for (int m = 0; m <= bot; m++) qx[m] = qa[m]; if (Gl) for (int m = 0; m <= bot; m++) Gl[m] = gk[m]; }
     }
-    if (!last || k == 0 || shal) break;         // (the shallow plume stops in the cloud layer)
+    if (!last || k == 0 || (shal && !(P.cu_dth > 0 && k == bot - 1))) break;   // (the shallow plume stops in the cloud layer; with cu_dth, #143, in the cumulus layer or the cloud layer above it)
     pt -= P.grav * mu[k];
     lift(pt);
     if (!(tp > b)) break;                       // not through the interface above
@@ -548,6 +554,43 @@ __device__ void plume_ascent(int bot, const real* mu, const real* th, real th0, 
     lt[2] = q0c >= 0 ? p40 : (real)0;
     lt[3] = cape;
   }
+}
+
+// cu_dth (#143): a plume of base mass m (kg/m^2) from the bottom layer (theta th0, vapor q0) detraining into layer kd at (thp, qc), having
+// taken in Gl[k] per kg from each layer k on its way and given qx[k] by mixing. The air taken in below kd rises with it; kd's own leaves at the
+// layer's vapor and comes back at the plume's (as the shallow plume's, #140). m is first cut to what the layers hold: their air above the floor
+// and half their vapor. Its condensate per kg (cond; det of it left as cloud, at most ldet per kg of plume) is returned for the rain, and G,
+// its mass at kd per kg; the column's energy is kept, the residual into kd.
+__device__ void plume_out(int L, const Par& P, real* mu, real* th, real* q, real* pib, real* cl, int kd, real& m, real th0, real q0,
+                          real thp, real qc, const real* Gl, const real* qx, real* wxo, real ldet, real& cond, real& det, real& G) {
+  const int bot = L - 1;
+  m = fmin(m, mu[bot] - P.floor_);
+  for (int k = 0; k < bot; k++) {
+    if (Gl[k] > 0) m = fmin(m, fmax((real)0, mu[k] - P.floor_) / Gl[k]);
+    const real take = Gl[k] * q[k] - qx[k];
+    if (take > 0) m = fmin(m, (real)0.5 * mu[k] * q[k] / take);
+  }
+  G = 1; cond = 0; det = 0;
+  if (!(m > 0)) { m = 0; return; }
+  real qin = 0, xs = 0;
+  for (int k = 0; k < bot; k++) { G += Gl[k]; qin += Gl[k] * q[k]; xs += qx[k]; }
+  const real cond_ = q0 + qin - G * qc - xs;
+  cond = fmax((real)0, cond_);
+  det = cl ? fmin(cond, ldet * G) : (real)0;
+  const real qarr = qc + (cond_ - cond) / G;
+  real tk[LMAX], qk[LMAX];
+  for (int k = 0; k < bot; k++) { tk[k] = th[k]; qk[k] = q[k]; }
+  const real Ec = column_energy(L, mu, pib, th, q, P);
+  for (int k = 0; k < bot; k++) q[k] = fmax((real)0, q[k] + m * qx[k] / mu[k]);
+  move_mass(L, P, mu, th, q, pib, bot, kd, m, th0, thp, q0, qarr, cl);
+  for (int j = kd; j < bot; j++) wxo[j] += m;
+  for (int k = kd + 1; k < bot; k++)
+    if (Gl[k] > 0) {
+      move_mass(L, P, mu, th, q, pib, k, kd, m * Gl[k], tk[k], thp, qk[k], qarr, cl);
+      for (int j = kd; j < k; j++) wxo[j] += m * Gl[k];
+    }
+  if (Gl[kd] > 0) q[kd] = fmax((real)0, q[kd] + m * Gl[kd] * (qarr - qk[kd]) / mu[kd]);
+  th[kd] += (Ec - column_energy(L, mu, pib, th, q, P)) / (mu[kd] * pib[kd]);
 }
 
 // Lightning from one storm's physics (decision #104): Deierling et al. (2008), a storm's flash rate is 9.0e-15 f_p f_np per minute, f_p the falling graupel's
@@ -1336,8 +1379,8 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
       // m (theta at detrainment - theta*) per mass m moved, so that mass removes the buoyancy; it relaxes over tau_conv
       real A, G = 1, FZ = 0; int kd;
       real qx[LMAX], xs = 0;
-      real lt[4];
-      plume_ascent(bot, mu, th, th0, q0, pi_, P, A, kd, thp, qc, q, qx, lt, &G, &FZ);
+      real lt[4], Gl[LMAX];
+      plume_ascent(bot, mu, th, th0, q0, pi_, P, A, kd, thp, qc, q, qx, lt, &G, &FZ, false, 0, Gl);
       for (int k = 0; k <= bot; k++) xs += qx[k];
       if (kd >= 0 && A > 0) {
         const real rise = thp - tstar(bot - 1, L, P);
@@ -1355,17 +1398,26 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
             mc = fmin(mc, rho * f_ * ws * dt);
           }
         }
+        real cond_cu = 0, det_cu = 0, G_cu = 1;
+        const bool cu = P.cu_dth > 0;
+        if (mc > 0 && cu) {
+          // (#143: through the cumulus and cloud layers, what it took in from each, the layer it stops in included)
+          SNAPS(4, 7)
+          plume_out(L, P, mu, th, q, pib, cloudy ? cl : (real*)0, kd, mc, th0, q0, thp, qc, Gl, qx, wxo, P.l_det, cond_cu, det_cu, G_cu);
+          SNAPS(5, 7)
+        }
         if (mc > 0) {
           // what it took in through the cloud layer (ent_cloud) rises with it to kd; a plume stopping in that layer only mixes there
           if (!(kd < bot - 1)) G = 1;
-          const real me = fmin(mc * (G - 1), fmax((real)0, mu[bot - 1] - P.floor_)), qe = bot >= 1 ? q[bot - 1] : (real)0, the = bot >= 1 ? th[bot - 1] : (real)0;
-          G = 1 + me / mc;
+          const real me = cu ? mc * (G_cu - 1) : fmin(mc * (G - 1), fmax((real)0, mu[bot - 1] - P.floor_)), qe = bot >= 1 ? q[bot - 1] : (real)0, the = bot >= 1 ? th[bot - 1] : (real)0;
+          G = cu ? G_cu : 1 + me / mc;
           // the plume keeps l_det of its condensate and leaves it as cloud; the rest rains inside it (per kg leaving the bottom layer)
-          const real cond_ = q0 + (G - 1) * qe - G * qc - xs;
-          const real cond = fmax((real)0, cond_), det = cloudy ? fmin(cond, P.l_det * G) : (real)0;
+          const real cond_ = cu ? cond_cu : q0 + (G - 1) * qe - G * qc - xs;
+          const real cond = cu ? cond_cu : fmax((real)0, cond_), det = cu ? det_cu : cloudy ? fmin(cond, P.l_det * G) : (real)0;
           if (flash) flash[i] = storm_flashes(mc / dt, lt, P);
           R += mc * (cond - det);
           Rc = mc * (cond - det);
+          if (!cu) {
           // (what the mixing took or gave in vapor, and any surplus were it to give more than it condensed; its heat falls to the receiving layer in move_mass)
           const real qarr = qc + (cond_ - cond) / G;
           // (the vapor its mixing gave each layer was part of what it lifted: the column's energy is kept from before it is shared out, the
@@ -1377,6 +1429,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
           SNAPS(5, 7)
           if (me > 0) move_mass(L, P, mu, th, q, pib, bot - 1, kd, me, the, thp, qe, qarr, cloudy ? cl : (real*)0);
           th[kd] += (Ec - column_energy(L, mu, pib, th, q, P)) / (mu[kd] * pib[kd]);
+          }
           // ice_air (#134): the frozen share of its rain leaves as snow, its freezing heat to the layer it rose into (where its heat goes);
           // falling, it melts in the first layer below whose lower edge is above freezing
           real Sc = 0;
@@ -1391,8 +1444,10 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
                 Sc = 0;
               }
           }
-          for (int j = kd; j < bot; j++) wxo[j] += mc;
-          for (int j = kd; j < bot - 1; j++) wxo[j] += me;
+          if (!cu) {
+            for (int j = kd; j < bot; j++) wxo[j] += mc;
+            for (int j = kd; j < bot - 1; j++) wxo[j] += me;
+          }
           cin[kd] += mc + me;
           if (cloudy) {
             cl[kd] += mc * det / mu[kd];
@@ -1485,13 +1540,47 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
       const real ths0 = th[bot];
       real qs0 = edge_q(bot, false, mu, th, q, 0, P);
       qs0 += fmin(ex_r, fmax((real)0, qss_r - qs0));
-      real As, Gs = 1, FZs = 0, thps, qcs, qxs[LMAX], xss = 0, pts = pis; int kds;
-      plume_ascent(bot, mu, th, ths0, qs0, pis, P, As, kds, thps, qcs, q, qxs, 0, &Gs, &FZs, true, &pts);
+      real As, Gs = 1, FZs = 0, thps, qcs, qxs[LMAX], xss = 0, pts = pis, Gls[LMAX]; int kds;
+      plume_ascent(bot, mu, th, ths0, qs0, pis, P, As, kds, thps, qcs, q, qxs, 0, &Gs, &FZs, true, &pts, Gls);
       for (int k = 0; k <= bot; k++) xss += qxs[k];
 #ifdef VAPDIAG
-      if (dgo) { dgo[(size_t)(25 * L - 2) * N + i] = kds == bot - 1 && As > 0; dgo[(size_t)(25 * L - 1) * N + i] = Gs; dgo[(size_t)(25 * L) * N + i] = 0; dgo[(size_t)(25 * L + 1) * N + i] = (pis - pts) / 100; }
+      if (dgo) { dgo[(size_t)(25 * L - 2) * N + i] = (kds == bot - 1 || (P.cu_dth > 0 && kds == bot - 2)) && As > 0; dgo[(size_t)(25 * L - 1) * N + i] = Gs; dgo[(size_t)(25 * L) * N + i] = 0; dgo[(size_t)(25 * L + 1) * N + i] = (pis - pts) / 100; }
 #endif
-      if (kds == bot - 1 && As > 0) {
+      if (P.cu_dth > 0) {
+        // (#143: through the cumulus layer and into the cloud layer above it, stopping in either; what it took in from each, as the deep plume's)
+        if ((kds == bot - 1 || kds == bot - 2) && As > 0) {
+          real ms = P.shallow * rho_r * ws_r * dt, cond, det, Gx;
+          if (qs0 > 0) ms = fmin(ms, mu[bot] * q[bot] / qs0);
+          plume_out(L, P, mu, th, q, pib, cloudy ? cl : (real*)0, kds, ms, ths0, qs0, thps, qcs, Gls, qxs, wxo, P.l_det, cond, det, Gx);
+          if (ms > 0) {
+            const real rs = ms * (cond - det);
+            R += rs;
+            Rc += rs;
+            real Ss = 0;
+            if (icy && cond > det) {
+              Ss = rs * fmin((real)1, FZs / cond);
+              th[kds] += P.Lf * Ss / (mu[kds] * pib[kds]);
+              dgl[kds] += P.Lf * Ss / dt;
+              for (int j = kds + 1; j <= bot && Ss > 0; j++)
+                if (base_T(j, mu, th, P) > P.Tf) {
+                  th[j] -= P.Lf * Ss / (mu[j] * pib[j]);
+                  dgl[j] -= P.Lf * Ss / dt;
+                  Ss = 0;
+                }
+              S += Ss; Scg += Ss;
+            }
+            cin[kds] += ms * Gx;
+            if (cloudy) {
+              cl[kds] += ms * det / mu[kds];
+              cloud_adjust(kds, mu, th, q, cl, pib, dt, P);
+            }
+            mc += ms;
+#ifdef VAPDIAG
+            if (dgo) dgo[(size_t)(25 * L) * N + i] = ms;
+#endif
+          }
+        }
+      } else if (kds == bot - 1 && As > 0) {
         // its air taken in from the cloud layer, Gs - 1 per kg leaving the mixed layer, leaves it with the layer's vapor and comes back
         // with the plume's: at most the layer's air above its floor, and what it and the mixing take at most the layer's vapor
         const int ks = bot - 1;

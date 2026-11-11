@@ -565,8 +565,9 @@ def earth7(g, lo=318.0, hi=350.0):
 # V2-6c (#153): earth6 with its 305-380 K layer split at 330 K. In the tropics that layer was the whole free troposphere above ~800 hPa
 # (~700 hPa thick): one theta profile shape and one vapor amount held it ~15 K too cold in theta and at a third of its water (6.6 kg/m2
 # against ~20), so the air absorbed too little sunlight (70 W/m2 against 79) and the surface evaporated the rest.
+# V2-6c (#154): ice clouds with their own sunlight optics (Ebert & Curry 1992), not the drops'
 PRESETS['earth7'] = dict(PRESETS['earth6'], build=earth7, stress=[0.0] * 7,
-                         air=dict(PRESETS['earth6']['air'], physics=dict(PRESETS['earth6']['air']['physics'], theta_stars=[500.0, 380.0, 330.0, 305.0, 204.0, 200.0])))
+                         air=dict(PRESETS['earth6']['air'], physics=dict(PRESETS['earth6']['air']['physics'], theta_stars=[500.0, 380.0, 330.0, 305.0, 204.0, 200.0], ice_sw=1.0)))
 
 PRESETS['rce'] = dict(build=aqua_dry, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True, physics=AIR3), dynamics=False)
 

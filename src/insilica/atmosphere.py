@@ -92,7 +92,7 @@ class AirPhysics:
         self.cd, self.ch = (z(N), z(N)) if self.sfc else (None, None)
         self.dgo = None                     # optional diagnostics array (rows x N; air_column), set by a caller
         self.cover = None                   # land cover per cell (8 x N, cases.earth_cover; #132), set by World
-        self.cloudo = z(3 * layers + 3, N)  # per layer cover, total cover, cloud effect on sunlight and longwave at the top (W/m²), per layer in-cloud longwave and shortwave optical depths (k-tables)
+        self.cloudo = z(4 * layers + 3, N)  # per layer cover, total cover, cloud effect on sunlight and longwave at the top (W/m²), per layer in-cloud longwave and shortwave optical depths (k-tables), and the liquid's share of the latter (#154)
         self.flash = z(N)                  # lightning, flashes/s/m² (#104)
         self.rainp = z(4, N)               # rain by source: condensation above the bottom layer, in it, convection; and the snow in all of it (#134)
         self._none = z(1)                                     # q and ice for a dry column (never read)
@@ -100,7 +100,8 @@ class AirPhysics:
         if longwave == 'ktables':                     # (with the k-tables' shortwave)
             from .radiation import Longwave, Shortwave
             self.lw = Longwave(dg, layers, self.par, **{k: self.p[k] for k in ('co2', 'n2o', 'ch4', 'tmode') if k in self.p})
-            self.sw = Shortwave(dg, layers, self.par, self.lw, **({'inhom': self.p['cloud_inhom']} if 'cloud_inhom' in self.p else {}))
+            self.sw = Shortwave(dg, layers, self.par, self.lw, **({'inhom': self.p['cloud_inhom']} if 'cloud_inhom' in self.p else {}),
+                                ice_re=self.p['re_ice'] if self.p.get('ice_sw', 0) > 0 else None)
             self.swalb = cp.full(N, self.p['alb'])
 
     def _speed(self, u):

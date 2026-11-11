@@ -1078,6 +1078,10 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
       for (int k = 0; k < L; k++) {                              // in-cloud longwave and shortwave optical depths, for the next radiation step
         cloudo[(size_t)(L + 3 + k) * N + i] = fc[k] > (real)1e-6 ? (liq[k] * P.k_lw_liq + (1 - liq[k]) * P.k_lw_ice) * cwp[k] : (real)0;
         cloudo[(size_t)(2 * L + 3 + k) * N + i] = (real)1.5 * cwp[k] * (liq[k] / (1000 * P.re_liq) + (1 - liq[k]) / (P.rho_ice * P.re_ice));
+        {                                                        // (#154: the liquid's share of that depth, for ice_sw)
+          const real tl_ = liq[k] / (1000 * P.re_liq), ti_ = (1 - liq[k]) / (P.rho_ice * P.re_ice);
+          cloudo[(size_t)(3 * L + 3 + k) * N + i] = tl_ + ti_ > 0 ? tl_ / (tl_ + ti_) : (real)1;
+        }
       }
     }
     #undef RF
@@ -2196,14 +2200,14 @@ __device__ void sw_layer(fast tau, fast ssa, fast g, fast mu0, fast& Rd, fast& T
 extern "C" __global__ void sw_column(int N, int L_in, const real* par, int NG, const float* lk, int NP, int NT, real yscale,
                                      const float* sun, const float* ray, const float* hzf, const float* cssa,
                                      real tau550, real hssa, real hg, real inhom, const float* sub, int mode, const real* t, real interval,
-                                     const real* pos, const real* alb, const real* cloudo, real* swf) {
+                                     const real* pos, const real* alb, const float* cssa_i, const float* g_i, const real* cloudo, real* swf) {
   const int i = blockIdx.x, g = threadIdx.x;
 #ifdef NL
   const int L = NL;
 #else
   const int L = L_in;
 #endif
-  __shared__ fast su[NSMAX][7], sfh[NSMAX], sfp[NSMAX], sft[NSMAX], sr[NSMAX], sh[NSMAX], stc[NSMAX], sfc[NSMAX];
+  __shared__ fast su[NSMAX][7], sfh[NSMAX], sfp[NSMAX], sft[NSMAX], sr[NSMAX], sh[NSMAX], stc[NSMAX], sfc[NSMAX], sli[NSMAX];
   __shared__ int sip[NSMAX], sit[NSMAX];
   __shared__ fast smu;
   __shared__ float red[3 * LMAX + 2][144];
@@ -2220,6 +2224,7 @@ extern "C" __global__ void sw_column(int N, int L_in, const real* par, int NG, c
     const bool cs = R_(10) > 0 && cloudo;                    // the layer's cloud sub-level (lw_setup's)
     sfc[s] = cs ? (fast)cloudo[(size_t)k * N + i] : (fast)0;
     stc[s] = cs ? (fast)(inhom * cloudo[(size_t)(2 * L + 3 + k) * N + i]) : (fast)0;   // uneven within the cell (#111)
+    sli[s] = cs && cssa_i ? (fast)cloudo[(size_t)(3 * L + 3 + k) * N + i] : (fast)1;     // (ice_sw, #154: the liquid's share of its depth)
     #undef R_
   }
   if (g == 0) {                                   // the sun: the mean of its cosine over the interval's daylight
@@ -2259,8 +2264,16 @@ extern "C" __global__ void sw_column(int N, int L_in, const real* par, int NG, c
       sw_layer(tt, ssa, ga, mu0, cRd[s], cTd[s], cRs[s], cTs[s], cTdd[s]);
       const fast f = sfc[s];
       if (f > 0 && stc[s] > 0) {                  // the cloudy part: the cloud's scattering added
-        const fast tc = stc[s], cw = cssa[g], sc2 = sc + cw * tc, t2 = tt + tc;
-        const fast g2 = (ga * sc + (fast)P.cloud_g * cw * tc) / sc2;
+        const fast tc = stc[s], t2 = tt + tc;
+        fast cw = cssa[g], cg = (fast)P.cloud_g;
+        if (cssa_i) {
+          // ice_sw (#154): drops and ice crystals by their shares of the depth, the asymmetry weighted by what each scatters
+          const fast sl = sli[s], wl = sl * cssa[g], wi = (1 - sl) * cssa_i[g];
+          cw = wl + wi;
+          cg = cw > 0 ? (wl * (fast)P.cloud_g + wi * g_i[g]) / cw : cg;
+        }
+        const fast sc2 = sc + cw * tc;
+        const fast g2 = (ga * sc + cg * cw * tc) / sc2;
         fast r1, t1, r2, t3, d1;
         sw_layer(t2, fmin(sc2 / t2, (fast)(1 - 1e-6)), g2, mu0, r1, t1, r2, t3, d1);
         Rd[s] = (1 - f) * cRd[s] + f * r1; Td[s] = (1 - f) * cTd[s] + f * t1;

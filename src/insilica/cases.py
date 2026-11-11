@@ -549,6 +549,25 @@ PRESETS['earth6'] = dict(PRESETS['earth5'], build=earth6, stress=[0.0] * 6,
                          air=dict(PRESETS['earth5']['air'], physics=dict(PRESETS['earth5']['air']['physics'], theta_stars=[500.0, 380.0, 305.0, 204.0, 200.0],
                                                                          cu_dth=4.0, cu_dp=2.0e4, buoy_v=1.0, cu_sub=1.0, bare_fx=2.0)))
 
+
+def earth7(g, lo=318.0, hi=350.0):
+    """The seven-layer start (V2-6c, #153): earth6's with its 305-380 K layer split at 330 K, the lower part's theta lo and the upper
+    part's hi, their masses so that the two keep the layer's mean theta (each at least a tenth of it), their vapor the layer's."""
+    h6, b, u6, x = earth6(g)
+    th6, q6 = x['theta'], x['q']
+    f = np.clip((hi - th6[2]) / (hi - lo), 0.1, 0.9)
+    h = np.concatenate([h6[:2], ((1 - f) * h6[2])[None], (f * h6[2])[None], h6[3:]])
+    th = np.concatenate([th6[:2], np.full((1, g.N), hi), np.full((1, g.N), lo), th6[3:]])
+    q = np.concatenate([q6[:3], q6[2:]])
+    return h, b, np.concatenate([u6[:3], u6[2:]]), dict(x, theta=th, q=q)
+
+
+# V2-6c (#153): earth6 with its 305-380 K layer split at 330 K. In the tropics that layer was the whole free troposphere above ~800 hPa
+# (~700 hPa thick): one theta profile shape and one vapor amount held it ~15 K too cold in theta and at a third of its water (6.6 kg/m2
+# against ~20), so the air absorbed too little sunlight (70 W/m2 against 79) and the surface evaporated the rest.
+PRESETS['earth7'] = dict(PRESETS['earth6'], build=earth7, stress=[0.0] * 7,
+                         air=dict(PRESETS['earth6']['air'], physics=dict(PRESETS['earth6']['air']['physics'], theta_stars=[500.0, 380.0, 330.0, 305.0, 204.0, 200.0])))
+
 PRESETS['rce'] = dict(build=aqua_dry, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True, physics=AIR3), dynamics=False)
 
 

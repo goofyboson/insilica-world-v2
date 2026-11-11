@@ -206,8 +206,8 @@ def conserve_air(record):
     e0 = j.energy()
     j.step(int(15 * 86400 / j.dt))
     drift = (j.energy() - e0) / e0
-    # the six-layer earth's columns (V2-6b; earth6 since #142): the mixed layer, deep plumes taking in the cloud layer's air, their downdrafts, the land
-    e = World(4, 'earth6')
+    # the seven-layer earth's columns (V2-6b; earth6 since #142, earth7 since #153): the mixed layer, deep plumes taking in the cloud layer's air, their downdrafts, the land
+    e = World(4, 'earth7')
     e4 = e4w = 0.0
     lede, ge = cp.asarray(e.grid.le * e.grid.de), e.grid
     he = lambda h: 0.5 * (h[:, ge.eI] + h[:, ge.eJ])

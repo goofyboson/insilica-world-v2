@@ -36,13 +36,13 @@ DEFAULTS = dict(S0=1361.0, asw=0.2, tau0=0.9, mu_ref=P0 / GRAV, eps_s=0.95, h_se
                 moist=0.0, Lv=2.5e6, Lf=3.34e5, Tf=273.15, k_evap=4.0e-3, tau_conv=7200.0, alb_ice=0.7, rho_ice=917.0,
                 ice_cover=0.05, k_ice=2.2, Rv=461.5, sat_layer=1.0, sw_tau=2.0, alb_dry=0.30, alb_wet=0.18, soil_beta=0.75,
                 c_land=2.0e6, soil_base=150.0, soil_per_m=0.5, k_inf=5.0 / 3600.0, pond_cover=50.0, alb_snow=0.8,
-                alb_ice_melt=0.50, alb_snow_melt=0.55, alb_glacier=0.35, snow_cover=30.0, alb_ramp=10.0, land_exch=1.0, plume_deep=0.0, lw_w0=0.0, c_dry=1.3e6, c_wet=0.0, sat_prof=0.0, land_rs=0.0, sat_base=0.0, bl_bot=0.0, cloud=0.0, rh_crit=0.8, re_liq=10e-6, re_ice=30e-6, cloud_g=0.85, k_lw_liq=130.0, k_lw_ice=65.0, c_auto=1e-3, q_auto=0.3e-3, v_ice=0.5, l_det=0.5e-3, tau_erode=1e5, k_revap=1e-5, mu_cloud=500.0, theta_rise=0.0, bl_mix=0.0, mu_night=250.0, bl_ent=0.2, bl_cap=0.0, bulk_c=0.0, bulk_gust=1.0, bulk_z=0.0, bulk_w=0.0, plume_ent=0.0, l_ice=0.1e-3, storm_area=1.0e8, graupel_v=5.0, ice_small=0.1, q_shape=0.0, edge_heat=0.0, freeze_dry=0.0, edge_vap=0.0, conv_revap=0.0, plume_root=0.0, bl_q=0.0, sfc=0.0, z0_land=0.1, downdraft=0.0, ent_cloud=0.0, c_deep=0.0, rs_max=0.0, rs_sun=180.0, q_sea=0.0, bl_reach=0.0, dry_edge=0.0, bl_lcl=0.0, edge_k=1.0, cover=0.0,
+                alb_ice_melt=0.50, alb_snow_melt=0.55, alb_glacier=0.35, snow_cover=30.0, alb_ramp=10.0, land_exch=1.0, plume_deep=0.0, lw_w0=0.0, c_dry=1.3e6, c_wet=0.0, sat_prof=0.0, land_rs=0.0, sat_base=0.0, bl_bot=0.0, cloud=0.0, rh_crit=0.8, re_liq=10e-6, re_ice=30e-6, cloud_g=0.85, k_lw_liq=130.0, k_lw_ice=65.0, c_auto=1e-3, q_auto=0.3e-3, v_ice=0.5, l_det=0.5e-3, tau_erode=1e5, k_revap=1e-5, mu_cloud=500.0, theta_rise=0.0, bl_mix=0.0, mu_night=250.0, bl_ent=0.2, bl_cap=0.0, bulk_c=0.0, bulk_gust=1.0, bulk_z=0.0, bulk_w=0.0, plume_ent=0.0, l_ice=0.1e-3, storm_area=1.0e8, graupel_v=5.0, ice_small=0.1, q_shape=0.0, edge_heat=0.0, freeze_dry=0.0, edge_vap=0.0, conv_revap=0.0, plume_root=0.0, bl_q=0.0, sfc=0.0, z0_land=0.1, downdraft=0.0, ent_cloud=0.0, c_deep=0.0, rs_max=0.0, rs_sun=180.0, q_sea=0.0, bl_reach=0.0, dry_edge=0.0, bl_lcl=0.0, edge_k=1.0, cover=0.0, ice_air=0.0, sfc_wind=0.0, revap=0.0, revap_rhs=0.9, revap_rhl=0.7, revap_area=0.05, root_q=0.0, ent_det=0.0, ent_ifs=0.0, shallow=0.0, cu_dth=0.0, cu_dp=0.0, buoy_v=0.0, cu_sub=0.0, bare_fx=0.0, det_all=0.0, cl_float=0.0, ml_clear=0.0, cu_cloud=0.0,
                 oro=0.0, oro_g=0.3, oro_cd=1.0, oro_hnc=0.5, oro_ric=0.25,
                 gw=0.0, gw_bt=0.004, gw_cw=40.0, gw_lambda=3.0e5, gw_psrc=31500.0, gw_cmax=99.6, gw_dc=1.2)
 PAR_ORDER = ('S0', 'asw', 'tau0', 'mu_ref', 'eps_s', 'h_sens', 'u0', 'alb', 'c_slab', 'mu_bl', 'theta_star', 'floor_', 'sigma',
              'grav', 'cp', 'kappa', 'p0', 'tilt', 'year_s', 'day_s', 'tau_lin', 'theta_star2',
              'moist', 'Lv', 'Lf', 'Tf', 'k_evap', 'tau_conv', 'alb_ice', 'rho_ice', 'ice_cover', 'k_ice', 'Rv', 'sat_layer', 'sw_tau',
-             'alb_dry', 'alb_wet', 'soil_beta', 'k_inf', 'pond_cover', 'alb_snow', 'alb_ice_melt', 'alb_snow_melt', 'alb_glacier', 'snow_cover', 'alb_ramp', 'land_exch', 'plume_deep', 'lw_w0', 'c_dry', 'c_wet', 'sat_prof', 'land_rs', 'sat_base', 'bl_bot', 'cloud', 'rh_crit', 're_liq', 're_ice', 'cloud_g', 'k_lw_liq', 'k_lw_ice', 'c_auto', 'q_auto', 'v_ice', 'l_det', 'tau_erode', 'k_revap', 'mu_cloud', 'theta_rise', 'bl_mix', 'mu_night', 'bl_ent', 'bl_cap', 'bulk_c', 'bulk_gust', 'bulk_z', 'bulk_w', 'plume_ent', 'l_ice', 'storm_area', 'graupel_v', 'ice_small', 'q_shape', 'edge_heat', 'freeze_dry', 'edge_vap', 'conv_revap', 'plume_root', 'bl_q', 'sfc', 'z0_land', 'downdraft', 'ent_cloud', 'c_deep', 'rs_max', 'rs_sun', 'q_sea', 'bl_reach', 'dry_edge', 'bl_lcl', 'edge_k')
+             'alb_dry', 'alb_wet', 'soil_beta', 'k_inf', 'pond_cover', 'alb_snow', 'alb_ice_melt', 'alb_snow_melt', 'alb_glacier', 'snow_cover', 'alb_ramp', 'land_exch', 'plume_deep', 'lw_w0', 'c_dry', 'c_wet', 'sat_prof', 'land_rs', 'sat_base', 'bl_bot', 'cloud', 'rh_crit', 're_liq', 're_ice', 'cloud_g', 'k_lw_liq', 'k_lw_ice', 'c_auto', 'q_auto', 'v_ice', 'l_det', 'tau_erode', 'k_revap', 'mu_cloud', 'theta_rise', 'bl_mix', 'mu_night', 'bl_ent', 'bl_cap', 'bulk_c', 'bulk_gust', 'bulk_z', 'bulk_w', 'plume_ent', 'l_ice', 'storm_area', 'graupel_v', 'ice_small', 'q_shape', 'edge_heat', 'freeze_dry', 'edge_vap', 'conv_revap', 'plume_root', 'bl_q', 'sfc', 'z0_land', 'downdraft', 'ent_cloud', 'c_deep', 'rs_max', 'rs_sun', 'q_sea', 'bl_reach', 'dry_edge', 'bl_lcl', 'edge_k', 'ice_air', 'revap', 'revap_rhs', 'revap_rhl', 'revap_area', 'root_q', 'ent_det', 'ent_ifs', 'shallow', 'cu_dth', 'cu_dp', 'buoy_v', 'cu_sub', 'bare_fx', 'det_all', 'cl_float', 'ml_clear', 'cu_cloud')
 
 
 def annual_mean_insolation(lat, S0=1361.0, tilt=TILT, days=365):
@@ -77,7 +77,12 @@ class AirPhysics:
         z = lambda *s: cp.zeros(s)
         self.uabs, self.wx, self.olr, self.sw_abs, self.stored = z(N), z(max(layers - 1, 1), N), z(N), z(N), z(N)
         # compiled for this many layers: the column's arrays then fit in registers, not local memory (V2-5)
-        self.k = {n: dg.kernel(n, 'air.cu', (f'-DNL={layers}',)) for n in ('air_column', 'advance_time', 'cell_speed', 'hs_column', 'surface_layer')}
+        self.k = {n: dg.kernel(n, 'air.cu', (f'-DNL={layers}',)) for n in ('air_column', 'advance_time', 'cell_speed', 'cell_speed_perot', 'hs_column', 'surface_layer')}
+        # the surface's wind (#135): 0 the bottom layer's edges' kinetic energy, 1 Perot's reconstructed cell wind
+        self.perot = None
+        if self.p['sfc_wind'] > 0:
+            from .orodrag import operators
+            self.perot = cp.asarray(operators(dg.host)[0].reshape(-1), dtype=dg.dtype)
         self.hs = cp.asarray([1.0 / (40 * DAY_S), 1.0 / (4 * DAY_S)])
         self.lat = cp.asarray(np.arcsin(np.clip(dg.host.pos[:, 2], -1, 1)))
         self.qnet = z(N)
@@ -87,16 +92,25 @@ class AirPhysics:
         self.cd, self.ch = (z(N), z(N)) if self.sfc else (None, None)
         self.dgo = None                     # optional diagnostics array (rows x N; air_column), set by a caller
         self.cover = None                   # land cover per cell (8 x N, cases.earth_cover; #132), set by World
-        self.cloudo = z(3 * layers + 3, N)  # per layer cover, total cover, cloud effect on sunlight and longwave at the top (W/m²), per layer in-cloud longwave and shortwave optical depths (k-tables)
+        self.cloudo = z(4 * layers + 3, N)  # per layer cover, total cover, cloud effect on sunlight and longwave at the top (W/m²), per layer in-cloud longwave and shortwave optical depths (k-tables), and the liquid's share of the latter (#154)
         self.flash = z(N)                  # lightning, flashes/s/m² (#104)
-        self.rainp = z(3, N)               # rain by source: condensation above the bottom layer, in it, convection
+        self.rainp = z(4, N)               # rain by source: condensation above the bottom layer, in it, convection; and the snow in all of it (#134)
         self._none = z(1)                                     # q and ice for a dry column (never read)
         self.lw = self.sw = None
         if longwave == 'ktables':                     # (with the k-tables' shortwave)
             from .radiation import Longwave, Shortwave
             self.lw = Longwave(dg, layers, self.par, **{k: self.p[k] for k in ('co2', 'n2o', 'ch4', 'tmode') if k in self.p})
-            self.sw = Shortwave(dg, layers, self.par, self.lw, **({'inhom': self.p['cloud_inhom']} if 'cloud_inhom' in self.p else {}))
+            self.sw = Shortwave(dg, layers, self.par, self.lw, **({'inhom': self.p['cloud_inhom']} if 'cloud_inhom' in self.p else {}),
+                                ice_re=self.p['re_ice'] if self.p.get('ice_sw', 0) > 0 else None)
             self.swalb = cp.full(N, self.p['alb'])
+
+    def _speed(self, u):
+        """The surface's wind speed at cells from the bottom layer's edge winds, into self.uabs."""
+        g, i32 = self.dg, np.int32
+        if self.perot is not None:
+            self.k['cell_speed_perot'](*grid_dims(g.N), (i32(g.N), u[self.L - 1], g.cellEdge, self.perot, self.uabs))
+        else:
+            self.k['cell_speed'](*grid_dims(g.N), (i32(g.N), u[self.L - 1], g.cellEdge, g.le, g.de, g.areaCell, self.uabs))
 
     def radiate(self, mu, theta, Ts, t, interval, q=None, cw=None):
         """The k-tables' longwave and shortwave from the present state (the sun over the coming interval, s), saved for the
@@ -110,7 +124,7 @@ class AirPhysics:
         """The surface layer's exchange coefficients from this step's bottom wind, theta and surface (V2-6b, #114): self.cd,
         self.ch = rho C_D U, rho C_H U (kg/m²/s), the drag's for the wind stress and the heat's and vapor's for the column."""
         g, k, i32 = self.dg, self.k, np.int32
-        k['cell_speed'](*grid_dims(g.N), (i32(g.N), u[self.L - 1], g.cellEdge, g.le, g.de, g.areaCell, self.uabs))
+        self._speed(u)
         k['surface_layer'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.par, self.uabs, mu, theta, q if q is not None else NULL, Ts,
                                              ice if ice is not None else NULL, land if land is not None else NULL, self.cd, self.ch,
                                              self.cover if self.cover is not None else NULL))
@@ -127,7 +141,7 @@ class AirPhysics:
                                              self.stored))
             k['advance_time']((1,), (1,), (t, R(dt)))
             return
-        k['cell_speed'](*grid_dims(g.N), (i32(g.N), u[self.L - 1], g.cellEdge, g.le, g.de, g.areaCell, self.uabs))
+        self._speed(u)
         k['air_column'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.par, i32(self.mode), t, self.insol, self.pos, self.uabs,
                                           mu, theta, q if q is not None else self._none, Ts, ice if ice is not None else self._none, R(dt),
                                           self.wx, self.olr, self.sw_abs, self.stored, self.rain, self.evap, self.conv,

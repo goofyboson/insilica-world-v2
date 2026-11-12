@@ -514,9 +514,61 @@ def earth5(g, top=5000.0):
 # V2-6b (#129): earth4 with its stratosphere in two layers, split at 500 K, so the waves can leave momentum in its lower part and its
 # upper part apart; the layers above the 380 K edge (edge_k 2) are the stratosphere's: isothermal in the radiation, their vapor even.
 # Land cover (#132): each land cell's roughness, snow-free albedo, snow under trees and stomata from its cover (earth_cover).
+# Ice in the air (V2-6c, #134): ice saturation below freezing, snow and its freezing heat aloft, melting below, sublimation.
 PRESETS['earth5'] = dict(PRESETS['earth4'], build=earth5, stress=[0.0] * 5, cover=earth_cover,
                          air=dict(PRESETS['earth4']['air'], physics=dict(PRESETS['earth4']['air']['physics'], theta_stars=[500.0, 380.0, 305.0, 200.0],
-                                                                         edge_k=2.0, cover=1.0)))
+                                                                         edge_k=2.0, cover=1.0, ice_air=1.0, sfc_wind=1.0, revap=1.0, root_q=1.0, ent_det=1.0, ent_ifs=1.0, shallow=0.03)))
+
+
+def earth6(g, cu=1.0e4):
+    """The six-layer start (V2-6c, #142): earth5's with its cloud layer split, its lowest cu (Pa, at most 40% of it) the cumulus layer, its
+    theta 2 K above the mixed layer's (half its cu_dth span) and below the cloud layer's, its vapor 75% of saturation."""
+    h5, b, u5, x = earth5(g)
+    th5, q5 = x['theta'], x['q']
+    hc = np.minimum(np.full(g.N, cu / GRAV), 0.4 * h5[3])
+    h = np.concatenate([h5[:3], (h5[3] - hc)[None], hc[None], h5[4:]])
+    tc = np.minimum(th5[4] + 2.0, th5[3] - 1.0)
+    ps = h.sum(0) * GRAV
+    pm = ps - h[5] * GRAV - 0.5 * hc * GRAV
+    T = tc * (pm / P0) ** KAPPA
+    qs = 0.622 * 611.0 * np.exp(17.27 * (T - 273.15) / (T - 35.85)) / pm
+    th = np.concatenate([th5[:4], tc[None], th5[4:]])
+    q = np.concatenate([q5[:4], (0.75 * qs)[None], q5[4:]])
+    return h, b, np.concatenate([u5[:4], u5[3:4], u5[4:]]), dict(x, theta=th, q=q)
+
+
+# V2-6c (#142): earth5 with its cloud layer split: a cumulus layer above the mixed layer, its top following the mixed layer's theta plus
+# cu_dth (4 K: BOMEX's cumulus layer), where the shallow plume leaves its air and the mixed layer takes air back in; the downdrafts start in
+# the lower theta_e of the cumulus and cloud layers (Tiedtke's level of free sinking). theta* 204 is a placeholder: the interface follows the mixed layer.
+# #144: the cumulus layer's top is where the mixed layer's air gets lifted saturated cu_dp (200 hPa, the IFS's shallow-cloud depth) above its
+# cloud base, not a fixed 4 K above it: its span follows the moist adiabat (about 12 K in the tropics, 6-7 K in cold air).
+# #145: the plumes' buoyancy in virtual theta (buoy_v); alone it drained the mixed layer (31-55 hPa over the sea) and warmed the planet.
+# #146: the air the plumes take out of the mixed layer replaced by the cumulus layer's sinking between the clouds, up to cloud base (cu_sub).
+# #148: bare soil evaporates from its drying top, as (wet / full)^2 (bare_fx, Noah's direct soil evaporation), the plants from the whole root zone.
+PRESETS['earth6'] = dict(PRESETS['earth5'], build=earth6, stress=[0.0] * 6,
+                         air=dict(PRESETS['earth5']['air'], physics=dict(PRESETS['earth5']['air']['physics'], theta_stars=[500.0, 380.0, 305.0, 204.0, 200.0],
+                                                                         cu_dth=4.0, cu_dp=2.0e4, buoy_v=1.0, cu_sub=1.0, bare_fx=2.0)))
+
+
+def earth7(g, lo=318.0, hi=350.0):
+    """The seven-layer start (V2-6c, #153): earth6's with its 305-380 K layer split at 330 K, the lower part's theta lo and the upper
+    part's hi, their masses so that the two keep the layer's mean theta (each at least a tenth of it), their vapor the layer's."""
+    h6, b, u6, x = earth6(g)
+    th6, q6 = x['theta'], x['q']
+    f = np.clip((hi - th6[2]) / (hi - lo), 0.1, 0.9)
+    h = np.concatenate([h6[:2], ((1 - f) * h6[2])[None], (f * h6[2])[None], h6[3:]])
+    th = np.concatenate([th6[:2], np.full((1, g.N), hi), np.full((1, g.N), lo), th6[3:]])
+    q = np.concatenate([q6[:3], q6[2:]])
+    return h, b, np.concatenate([u6[:3], u6[2:]]), dict(x, theta=th, q=q)
+
+
+# V2-6c (#153): earth6 with its 305-380 K layer split at 330 K. In the tropics that layer was the whole free troposphere above ~800 hPa
+# (~700 hPa thick): one theta profile shape and one vapor amount held it ~15 K too cold in theta and at a third of its water (6.6 kg/m2
+# against ~20), so the air absorbed too little sunlight (70 W/m2 against 79) and the surface evaporated the rest.
+# V2-6c (#154): ice clouds with their own sunlight optics (Ebert & Curry 1992), not the drops'
+# V2-6c (#155): the deep plume's IFS entrainment and detrainment through every tropospheric layer it crosses
+PRESETS['earth7'] = dict(PRESETS['earth6'], build=earth7, stress=[0.0] * 7,
+                         air=dict(PRESETS['earth6']['air'], physics=dict(PRESETS['earth6']['air']['physics'], theta_stars=[500.0, 380.0, 330.0, 305.0, 204.0, 200.0], ice_sw=1.0, det_all=1.0, ml_clear=1.0, cu_cloud=2.0)))
 
 PRESETS['rce'] = dict(build=aqua_dry, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True, physics=AIR3), dynamics=False)
 

@@ -140,7 +140,7 @@ EARTH_CYCLES = (5, 20)                           # (1 coupled year + 20 ocean-on
 
 def _earth_equilibrium():
     from insilica import spinup
-    w = World(4, 'earth5')                     # the five-layer earth: its boundary layer a layer of its own (#125), its stratosphere two (#129)
+    w = World(4, 'earth7')                     # the seven-layer earth: its boundary layer a layer of its own (#125), its stratosphere two (#129), a cumulus layer (#142), the free troposphere split at 330 K (#153)
     year = int(round(365 * 86400 / w.dt))
     w.step(EARTH_SPIN_YEARS * year)
     spinup.spin_up(w, *EARTH_CYCLES)
@@ -155,6 +155,8 @@ WINDS_OBS = dict(trades=(-3.8, -2.9),                     # 10 m at 15°S, 15°N
                  strat=(26.5, 9.9),                       # above 380 K, peak at 25–85°
                  strat_eq=-4.9)                           # above 380 K, 5°S–5°N
 # (reported, #129: 380–500 K and above 500 K, at 5°S/N and their peaks at 25–85°, S and N)
+# RAIN (V2-6c, SPEC #134): GPCP v2.3 1991–2020 annual mean (tools/gpcp_rain.py): global, 10° bands from 90°S, the 5°-band maximum's latitude
+RAIN_OBS = dict(glob=2.69, bands=(0.36, 0.74, 1.9, 3.07, 2.91, 2.62, 2.01, 2.48, 3.91, 5.18, 2.72, 1.82, 2.5, 2.63, 2.42, 1.8, 0.92, 0.53), peak=7.5)
 WINDS_SPLIT = dict(low=((-1.6, -0.6), (26.7, -55), (14.3, 45)), high=((-8.6, -8.1), (26.7, -65), (8.3, 65)))
 
 
@@ -175,18 +177,20 @@ def _winds(w, usum, hsum, S):
 
 @pytest.mark.xdist_group('grid4')
 def test_earth_budget(record):
-    """EARTH earth5's global energy budget with the k-tables, all-sky and clear-sky, against measured (V2-6a, SPEC #109, #112; earth4 since #125, earth5 since #129)"""
+    """EARTH earth7's global energy budget with the k-tables, all-sky and clear-sky, against measured (V2-6a, SPEC #109, #112; earth4 since #125, earth5 since #129, earth6 since #142, earth7 since #153)"""
     from insilica import runcache
-    w = runcache.spun_up(f'earth5-n4-eq{EARTH_SPIN_YEARS}x{EARTH_CYCLES[0]}x{EARTH_CYCLES[1]}', _earth_equilibrium, 0)[0]
+    w = runcache.spun_up(f'earth7-n4-eq{EARTH_SPIN_YEARS}x{EARTH_CYCLES[0]}x{EARTH_CYCLES[1]}', _earth_equilibrium, 0)[0]
     L, RW = w.L, w.L + 1
     a = cp.asarray(w.grid.areaCell / w.grid.areaCell.sum())
     acc = {k: cp.zeros(()) for k in EARTH_BUDGET}
     day = int(round(86400 / w.dt))
     S = 365 * 4                                  # four samples a day over the measured year
     usum, hsum = cp.zeros_like(w.u), cp.zeros_like(w.h)
+    rsum, ssum = cp.zeros(w.grid.N), cp.zeros(w.grid.N)
     for _ in range(S):
         w.step(day // 4)
         usum += w.u; hsum += w.h
+        rsum += w.physics.rain; ssum += w.physics.rainp[3]
         p, co = w.physics, w.physics.cloudo
         f = p.sw.swf
         acc['sun'] += a @ p.sw_abs
@@ -198,7 +202,7 @@ def test_earth_budget(record):
     err = {k: m[k] / EARTH_BUDGET[k] - 1 for k in m}
     names = dict(sun='absorbed sunlight', olr='OLR', olrc='clear-sky OLR', lwdn='surface longwave down', sws='surface sunlight')
     ok = all(abs(e) <= 0.05 for e in err.values())
-    record('EARTH', f'earth5, n = 4, at equilibrium ({EARTH_SPIN_YEARS} coupled years, {EARTH_CYCLES[0]} × (1 coupled + {EARTH_CYCLES[1]} ocean-only), 1 coupled; the next year): ' + '; '.join(f'{names[k]} {m[k]:.1f} against {EARTH_BUDGET[k]:.0f} ({err[k] * 100:+.1f}%)' for k in m)
+    record('EARTH', f'earth7, n = 4, at equilibrium ({EARTH_SPIN_YEARS} coupled years, {EARTH_CYCLES[0]} × (1 coupled + {EARTH_CYCLES[1]} ocean-only), 1 coupled; the next year): ' + '; '.join(f'{names[k]} {m[k]:.1f} against {EARTH_BUDGET[k]:.0f} ({err[k] * 100:+.1f}%)' for k in m)
            + f'; net {m["sun"] - m["olr"]:+.1f}',
            'each within 5%', ok)
 
@@ -212,7 +216,12 @@ def test_earth_budget(record):
         s = [b(c) for c in (range(-hi, -lo + 1, 10) if south else range(lo, hi + 1, 10))]
         i = max(s, key=lambda j: U[k, j])
         return U[k, i], cen[i]
-    o, bl, ek = WINDS_OBS, w.L - 1, int(w.physics.p['edge_k'])     # ek: the 305–380 K layer, the stratosphere's layers above it (#129)
+    ek = int(w.physics.p['edge_k'])                                # ek: the 305–380 K layer, the stratosphere's layers above it (#129)
+    if 330.0 in list(w.physics.p['theta_stars']):                  # (#153: its two parts, 330–380 and 305–330 K, as one, mass-weighted)
+        hj = H[ek] + H[ek + 1]
+        U = np.concatenate([U[:ek], ((U[ek] * H[ek] + U[ek + 1] * H[ek + 1]) / hj)[None], U[ek + 2:]])
+        H = np.concatenate([H[:ek], hj[None], H[ek + 2:]])
+    o, bl = WINDS_OBS, U.shape[0] - 1
     U = np.concatenate([(np.sum(U[:ek] * H[:ek], 0) / np.sum(H[:ek], 0))[None], U])      # row 0: the stratosphere, mass-weighted
     S0 = ek + 1                                                                          # (U's row of the 305–380 K layer)
     tr = (U[bl + 1, b(-15)], U[bl + 1, b(15)])
@@ -239,5 +248,22 @@ def test_earth_budget(record):
            f'cloud layer peak S/N {peak(S0 + 1, 25, 65, True)[0]:.1f}/{peak(S0 + 1, 25, 65, False)[0]:.1f} (15.3/8.8), layer masses ' + '/'.join(f'{x:.0f}' for x in hpa)
            + ' hPa (above 380 K 126, above 500 K 51); failing: ' + (', '.join(k for k, v in checks.items() if not v) or 'none'),
            'trades ±1.5 m/s; surface westerly peaks ±3 m/s, jet peaks ±30%, each within 10° of observed; above 380 K peaks ±15 m/s, 5°S–5°N ±7 m/s', okw,
-           title='WINDS earth5\'s zonal winds against the reanalysis (V2-6b, SPEC #126; earth5 since #129)')
-    assert ok and okw
+           title='WINDS earth7\'s zonal winds against the reanalysis (V2-6b, SPEC #126; earth5 since #129, earth6 since #142, earth7 since #153)')
+    # RAIN (V2-6c, #134): the same year's rain (and snow) against GPCP
+    g, mm = w.grid, 86400.0 / S
+    lat = np.degrees(g.lat)
+    r, sn = rsum.get() * mm, ssum.get() * mm
+    zmb = lambda x, width: np.bincount(np.clip(((lat + 90) // width).astype(int), 0, 180 // width - 1), weights=x * g.areaCell, minlength=180 // width)         / np.bincount(np.clip(((lat + 90) // width).astype(int), 0, 180 // width - 1), weights=g.areaCell, minlength=180 // width)
+    glob = float(np.average(r, weights=g.areaCell))
+    z10, z5 = zmb(r, 10), zmb(r, 5)
+    pk = -90 + 5 * int(np.argmax(z5)) + 2.5
+    ro = RAIN_OBS
+    mid = range(4, 14)                                   # 50°S–50°N
+    rb = {i: z10[i] / ro['bands'][i] - 1 for i in mid}
+    okr = abs(glob / ro['glob'] - 1) <= 0.15 and abs(pk - ro['peak']) <= 10 and all(abs(x) <= 0.30 for x in rb.values())
+    record('RAIN', f'the same year (rain and snow, mm/day; GPCP 1991–2020 in brackets): global {glob:.2f} ({ro["glob"]}, {100 * (glob / ro["glob"] - 1):+.0f}%); '
+           f'5° maximum at {pk:+.1f}° ({ro["peak"]:+.1f}°); 10° bands 45°S–45°N ' + ', '.join(f'{z10[i]:.2f} ({ro["bands"][i]}, {100 * rb[i]:+.0f}%)' for i in mid)
+           + f'; snow {float(np.average(sn, weights=g.areaCell)):.3f} globally, {float(np.average(sn, weights=g.areaCell * (np.abs(lat) > 50))):.2f} poleward of 50°',
+           'global within 15%; maximum within 10° of latitude; each 10° band 50°S–50°N within 30%', okr,
+           title="RAIN earth7's rain against GPCP (V2-6c, SPEC #134; earth6 since #142, earth7 since #153)")
+    assert ok and okw and okr

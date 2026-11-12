@@ -50,10 +50,27 @@ CLOUD_SSA = (0.60, 0.75, 0.98, 0.994, 0.9995, 0.9998, 0.99999, 0.99999, 0.99999,
 # clouds are uneven within a cell: a plane-parallel cloud of the mean water path reflects more than the real one; the
 # standard correction scales its optical depth (Cahalan et al. 1994; #111)
 CLOUD_INHOM = 0.7
+# ice_sw (V2-6c, #154): ice clouds' own single-scattering albedo and asymmetry, Ebert & Curry (1992) as RRTMG's (iceflag 1):
+# 1 - ssa = c + d r_e, g = e + f r_e (r_e in um), in five intervals chosen by each band's upper edge as RRTMG does
+# (> 14300, > 7700, > 5300, > 4000, >= 2500 cm-1; below 2500 the last); liquid keeps CLOUD_SSA and cloud_g
+EC92_C = (1.000e-05, 1.100e-04, 1.240e-02, 3.779e-02, 4.666e-01)
+EC92_D = (0.0, 1.405e-05, 6.867e-04, 1.284e-03, 2.050e-05)
+EC92_E = (7.661e-01, 7.730e-01, 7.865e-01, 8.172e-01, 9.595e-01)
+EC92_F = (5.851e-04, 5.665e-04, 7.204e-04, 7.463e-04, 1.076e-04)
+BAND_TOP = (2600, 4000, 5250, 7700, 9350, 12850, 16000, 29000, 38000, 50000)     # cm-1, tools/make_swtables.BANDS
+
+
+def ice_optics(re_um):
+    """Per band (ssa, g) of ice clouds of effective radius re_um (Ebert & Curry 1992)."""
+    out = []
+    for top in BAND_TOP:
+        j = 0 if top > 14300 else 1 if top > 7700 else 2 if top > 5300 else 3 if top > 4000 else 4
+        out.append((1 - EC92_C[j] - EC92_D[j] * re_um, min(EC92_E[j] + EC92_F[j] * re_um, 1 - 1e-6)))
+    return out
 
 
 class Shortwave:
-    def __init__(self, dg, layers, par, lw, inhom=CLOUD_INHOM):
+    def __init__(self, dg, layers, par, lw, inhom=CLOUD_INHOM, ice_re=None):
         t = np.load(SW_DATA)
         self.dg, self.L, self.par, self.lwm, self.inhom = dg, layers, par, lw, inhom
         self.logk = cp.asarray(np.ascontiguousarray(t['logk']))
@@ -61,6 +78,10 @@ class Shortwave:
         f32 = lambda a: cp.asarray(np.asarray(a, np.float32))
         self.sun, self.ray, self.hzf = f32(t['sun'] / t['sun'].sum()), f32(t['ray']), f32(t['haze'])
         self.cssa = f32(np.repeat(CLOUD_SSA, t['ng']))
+        self.cssa_i = self.g_i = None                              # (ice_sw, #154: the ice clouds' own optics; None: the drops')
+        if ice_re is not None:
+            io = ice_optics(ice_re * 1e6)
+            self.cssa_i, self.g_i = f32(np.repeat([x[0] for x in io], t['ng'])), f32(np.repeat([x[1] for x in io], t['ng']))
         self.haze = t['haze_par']                                  # tau550, ssa, g, scale height
         self.yscale = float((10.0) / (t['T'][1] - t['T'][0]))      # lw_setup's temperature positions are in 10 K steps
         self.block = (self.NG + 31) // 32 * 32
@@ -73,4 +94,5 @@ class Shortwave:
         self.k((g.N,), (self.block,), (i32(g.N), i32(self.L), self.par, i32(self.NG), self.logk, i32(self.NP), i32(self.NT),
                                         R(self.yscale), self.sun, self.ray, self.hzf, self.cssa, R(self.haze[0]),
                                         R(self.haze[1]), R(self.haze[2]), R(self.inhom), self.lwm.sub, i32(mode), t, R(interval), pos, alb,
+                                        self.cssa_i if self.cssa_i is not None else NULL, self.g_i if self.g_i is not None else NULL,
                                         cloudo if cloudo is not None else NULL, self.swf))

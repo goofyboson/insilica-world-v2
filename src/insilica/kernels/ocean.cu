@@ -165,6 +165,21 @@ extern "C" __global__ void ocn_column(int N, int L, const real* h, real* T, real
 
 // Convective adjustment before every ocean step (decision #66): heat mixed downward wherever surface cooling made a layer
 // colder than the one below (with T-dependent density, left for the daily mixing, g' went negative between mixings).
+// The currents' buoyancy (V2-6d, #166): sigma_k = g (rho_k - rho_0) / rho_0 = -b(T_k, S_k - S_ref) of each layer, from the
+// column physics' equation of state. A layer lighter than the one above it (between the adjustments; currents carry T)
+// counts as neutral, as dense as that one: a hydrostatic layer cannot overturn, and its interface's waves would grow.
+extern "C" __global__ void ocn_sigma(int N, int L, const real* T, const real* S, real grav, real alpha, real alpha2, real beta,
+                                     real S_ref, real* sig) {
+  LOOP1(i, N)
+  const Eos q = {grav, alpha, alpha2, beta};
+  real prev = -1e30;
+  for (int k = 0; k < L; k++) {
+    const real s = fmax(-buoy(T[(size_t)k * N + i], S[(size_t)k * N + i] - S_ref, q), prev);
+    sig[(size_t)k * N + i] = s;
+    prev = s;
+  }
+}
+
 extern "C" __global__ void ocn_overturn(int N, int L, const real* h, real* T, real* S, real grav, real alpha, real alpha2,
                                         real beta, const real* land) {
   LOOP1(i, N)
@@ -178,14 +193,48 @@ extern "C" __global__ void ocn_overturn(int N, int L, const real* h, real* T, re
 // Salt is conserved up to S_ref times the water the air, the ice and the land store. fw_acc sums fw (kg/m^2) for the mixing.
 // A coast also receives the water waiting at its mouth (kg/m^2; decision #85), which it empties.
 extern "C" __global__ void ocn_fresh(int N, const real* h, real* S, const real* evap, const real* rain, const real* ice,
-                                     real* ice_prev, real S_ref, real rho_w, real dt, real* fw_acc, const real* land, real* mouth) {
+                                     real* ice_prev, real S_ref, real rho_w, real dt, real* fw_acc, const real* land, real* mouth, real fw_local,
+                                     real* hw, real* M, const real* area) {
   LOOP1(i, N)
   if (land && land[i] > (real)0.5) return;
   real fw = (rain[i] - evap[i]) * dt - (ice[i] - ice_prev[i]);
   if (mouth) { fw += mouth[i]; mouth[i] = 0; }
-  S[i] -= S_ref * fw / (rho_w * h[i]);
+  // fw_local (V2-6d, #165): the fresh water comes with its volume: the mixed layer thickens by fw / rho_w (hw, its tracer mass M
+  // with it) at its own temperature, its salt kept (S h unchanged: exact, and never below 0); else the virtual flux at S_ref (#76)
+  if (fw_local > 0) {
+    const real h1 = fmax(h[i] + fw / rho_w, fmin(h[i], (real)10));   // (a sea with no way in evaporating dry: kept at 10 m, its salt still kept)
+    S[i] *= h[i] / h1;
+    hw[i] = h1;
+    M[i] = h1 * area[i];
+  } else S[i] -= S_ref * fw / (rho_w * h[i]);
   ice_prev[i] = ice[i];
   fw_acc[i] += fw;
+}
+
+// Mixing along the layers (V2-6d, #164): the mesoscale eddies a ~480 km cell cannot resolve stir heat and salt along each layer,
+// as every coarse ocean model's along-isopycnal diffusion (Redi 1982; kappa_h ~ 500-2000 m^2/s): across each open edge the
+// flux kappa_h h_e (X_j - X_i) le / de, h_e the thinner side's thickness (a layer squeezed to its floor passes little); exactly
+// conserved (each edge's flux is the same seen from both cells), over the mixing interval dt. Out to Tn, Sn (then copied back).
+extern "C" __global__ void ocn_diffuse(int N, int L, const real* h, const real* T, const real* S, real* Tn, real* Sn, const int* cellEdge,
+                                       const int* eI, const int* eJ, const real* le, const real* de, const real* areaCell,
+                                       const real* wall, real kappa_h, real dt) {
+  LOOP1(i, N)
+  for (int k = 0; k < L; k++) {
+    const size_t a = (size_t)k * N;
+    const real hi = h[a + i], Ti = T[a + i], Si = S[a + i];
+    real fT = 0, fS = 0;
+    for (int m = 0; m < 6; m++) {
+      const int e = cellEdge[i * 6 + m];
+      if (e < 0) break;
+      if (wall && wall[e] == 0) continue;
+      const int j = eI[e] == i ? eJ[e] : eI[e];
+      const real he = fmin(hi, h[a + j]), c = kappa_h * he * le[e] / de[e] * dt;
+      fT += c * (T[a + j] - Ti);
+      fS += c * (S[a + j] - Si);
+    }
+    Tn[a + i] = Ti + fT / (hi * areaCell[i]);
+    Sn[a + i] = Si + fS / (hi * areaCell[i]);
+  }
 }
 
 // Salt with the water the mixing moves between layers (wx as in Layers.exchange, applied before it; upwind, conserved).

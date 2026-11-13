@@ -578,6 +578,12 @@ def earth7(g, lo=318.0, hi=350.0):
 PRESETS['earth7'] = dict(PRESETS['earth6'], build=earth7, stress=[0.0] * 7,
                          air=dict(PRESETS['earth6']['air'], physics=dict(PRESETS['earth6']['air']['physics'], theta_stars=[500.0, 380.0, 330.0, 305.0, 204.0, 200.0], ice_sw=1.0, det_all=1.0, ml_clear=1.0, cu_cloud=2.0)))
 
+# V2-6d (#165, trial): earth7 over a five-layer ocean: the mixed layer (50 m at the start), the upper thermocline (150 m, 20 °C), the
+# lower thermocline (300 m, 12 °C), intermediate water (500 m, 6 °C) and the deep water (0 °C); density steps g' from the observed
+# classes σθ ≈ 22.5 | 25.0 | 26.6 | 27.3 | 27.8; fresh water diluting the local salt and mixing along the layers (#164, #165)
+PRESETS['earth7o5'] = dict(PRESETS['earth7'], ocean=dict(PRESETS['earth7']['ocean'], gprime=(0.024, 0.0153, 0.0067, 0.0048), h_layers=(50.0, 150.0, 300.0, 500.0),
+                                                         T_layers=(293.15, 285.15, 279.15), fw_local=1.0, kappa_h=1000.0))
+
 PRESETS['rce'] = dict(build=aqua_dry, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True, physics=AIR3), dynamics=False)
 
 

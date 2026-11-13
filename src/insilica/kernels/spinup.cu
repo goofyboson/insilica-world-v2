@@ -72,7 +72,8 @@ extern "C" __global__ void play_edge(int E, const real* t, real year, int nslot,
 // Rates are per second (the recording's sums over its seconds or days).
 extern "C" __global__ void play_cell(int N, const real* t, real year, int nslot, const float* Q, const float* Tr, const float* qns,
                                      const float* sun, const float* fw, real lam, real S_ref, real rho_w, real dt, const real* h,
-                                     const real* cap, real* T, real* S, real* qocean, real* qsw, real* fw_acc, const real* land) {
+                                     const real* cap, real* T, real* S, real* qocean, real* qsw, real* fw_acc, const real* land, real fw_local,
+                                     real* hw, real* M, const real* area, real Tf) {
   LOOP1(i, N)
   if (land && land[i] > (real)0.5) return;
   int s0, s1; real w;
@@ -84,7 +85,14 @@ extern "C" __global__ void play_cell(int N, const real* t, real year, int nslot,
   qsw[i] = sw;
   qocean[i] = (1 - w) * qns[a] + w * qns[b] + fb + sw;
   const real f = ((1 - w) * fw[a] + w * fw[b]) * dt;
-  S[i] -= S_ref * f / (rho_w * h[i]);
+  if (fw_local > 0) {                                           // (#165, as ocn_fresh)
+    const real h1 = fmax(h[i] + f / rho_w, fmin(h[i], (real)10));   // (a sea with no way in evaporating dry: kept at 10 m, its salt still kept)
+    S[i] *= h[i] / h1;
+    hw[i] = h1;
+    M[i] = h1 * area[i];
+  } else S[i] -= S_ref * f / (rho_w * h[i]);
+  // (#165) no sea ice is replayed: the surface water stops at freezing, as under the coupled model's ice (Tf > 0)
+  if (Tf > 0 && T[i] < Tf) T[i] = Tf;
   fw_acc[i] += f;
 }
 

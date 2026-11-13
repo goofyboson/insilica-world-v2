@@ -52,6 +52,7 @@ class Layers:
         N, E, NV, L, dt = dg.N, dg.E, dg.NV, layers, dg.dtype
         z = lambda *s: cp.zeros(s, dtype=dt)
         self.b = z(N) if b is None else cp.asarray(b, dtype=dt)
+        self.sig = self.zm = None        # (#166: the ocean's per-cell layer buoyancy, set by its owner, and the layers' mid-heights)
         self.gp = cp.asarray(np.asarray(gprime, dtype=float).reshape(-1) if layers > 1 else np.zeros(1), dtype=dt)
         self.drag = cp.asarray(np.broadcast_to(np.asarray(drag, dtype=float), (layers,)), dtype=dt)
         self.stress = cp.asarray(np.broadcast_to(np.asarray(stress, dtype=float), (layers,)), dtype=dt)
@@ -128,7 +129,8 @@ class Layers:
             k['air_bern'](*c1, (N, E, i32(L), hs, us, theta, self.b, R(self.grav), R(CP_DRY), R(KAPPA), R(P0), self.S,
                                 g.cellEdge, g.le, g.de, g.rA, self.B, self.pibar))
         else:
-            k['lay_bern'](*c1, (N, E, i32(L), hs, us, self.b, self.gp, g.cellEdge, g.le, g.de, g.areaCell, self.B))
+            k['lay_bern'](*c1, (N, E, i32(L), hs, us, self.b, self.gp, g.cellEdge, g.le, g.de, g.areaCell, self.B,
+                                self.sig if self.sig is not None else NULL, self.zm if self.sig is not None else NULL))
         k['swe_vertex'](*grid_dims(g.NV, L), (N, E, NV, hs, us, g.vCell, g.vSlot, g.kite, g.vEdge, g.vEdgeSign, g.de, g.rAV,
                                               self.fV, self.q))
         k['lay_edge_hq'](*grid_dims(g.E, L), (N, E, NV, hs, self.q, g.eI, g.eJ, g.ev1, g.ev2, R(self.shelf), us, self.hedge, self.pk))
@@ -136,7 +138,7 @@ class Layers:
                             self.drag, self.stress, R(self.floor), R(self.nu4), self.L2 if self.nu4 else NULL,
                             theta if self.air else NULL,
                             self.pibar if self.air else NULL, R(c * dt), R(self.thin), R(self.shelf), self.Tp, self.G, self.He,
-                            self.ubs))
+                            self.ubs, self.sig if self.sig is not None else NULL, self.zm if self.sig is not None else NULL))
         n = max(1, math.ceil(c * nfast))
         tau = R(c * dt / n)
         if self.air:

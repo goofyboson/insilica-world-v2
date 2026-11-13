@@ -32,7 +32,7 @@ OCEAN = dict(depth=4000.0, h_mixed=100.0, h_thermo=600.0, T_thermo=293.15, T_dee
              gprime=(0.016, 0.016),
              hmin=10.0, hmax=1000.0, dTmin=0.1, m_kt=0.5, n_kt=0.2, visc4_U=0.5, bottom_stress=2.5e-4,
              interface_stress=5.0e-4, thin=2.0, walls=(), sw_R=0.58, sw_z1=0.35, sw_z2=23.0, land_drag=1.0, bed=None, bed_min=50.0, shelf=50.0, h_layers=None,
-             kappa_d=0.0, dwf=0.0)            # crossing the interior interfaces (V2-6d, #163): mixing (m²/s) and deep-water formation, off
+             kappa_d=0.0, dwf=0.0, kappa_h=0.0, fw_local=0.0, eos_currents=0.0)   # crossing the interior interfaces (V2-6d, #163: mixing m2/s, deep-water formation), mixing along the layers (#164, m2/s), fresh water with its volume (#165); all off
 
 
 def wall_mask(g, walls):
@@ -101,6 +101,8 @@ class Ocean:
             u = np.zeros((L, E))
             # the layers between: evenly from T_thermo to the abyss's T_deep, no warmer than the surface
             Tk = [c['T_thermo'] + (c['T_deep'] - c['T_thermo']) * (k - 1) / (L - 2) for k in range(1, L - 1)] if L > 2 else []
+            if c.get('T_layers'):                              # (#165) each layer's own start, for layers 1 … L−2
+                Tk = list(c['T_layers'])
             T = np.stack([Ts] + [np.clip(Ts, c['T_deep'], t) for t in Tk] + [np.full(N, c['T_deep'])])
             S = np.full((L, N), c['S_ref'])
         else:
@@ -129,7 +131,10 @@ class Ocean:
         self.mix_every = int(round(ratio))
         k = lambda n: dg.kernel(n, 'ocean.cu')
         self.k = {n: k(n) for n in ('couple_stress', 'ocn_column', 'ocn_cap', 'ocn_overturn', 'ocn_pen', 'ocn_fresh', 'ocn_xch_salt',
-                                    'ocn_heat', 'ocn_ground')}
+                                    'ocn_heat', 'ocn_ground', 'ocn_diffuse', 'ocn_sigma')}
+        if c['eos_currents'] > 0:                                # (#166) the currents feel each layer's own density
+            self.core.sig, self.core.zm = z(L, N), z(L, N)
+        self._Tn, self._Sn = z(L, N), z(L, N)                   # (ocn_diffuse's out)
         self.conv = None                                        # the currents' heat convergence, when tracked
         self.k['cell_speed'] = dg.kernel('cell_speed', 'air.cu')
         self.update_cap()
@@ -179,7 +184,8 @@ class Ocean:
         g, c, R = self.dg, self.cfg, self.dg.dtype.type
         if evap is not None:
             self.k['ocn_fresh'](*grid_dims(g.N), (np.int32(g.N), self.h, self.S, evap, rain, ice, self.ice_prev, R(c['S_ref']),
-                                                 R(c['rho']), R(dt), self.fw_acc, self._land(), mouth if mouth is not None else NULL))
+                                                 R(c['rho']), R(dt), self.fw_acc, self._land(), mouth if mouth is not None else NULL, R(c['fw_local']),
+                                                 self.h, self.M, g.areaCell))
         self.k['ocn_pen'](*grid_dims(g.N), (np.int32(g.N), np.int32(self.L), self.h, self.T, self.qocean, self.qsw, R(c['rho'] * c['cw']),
                                            R(c['sw_R']), R(c['sw_z1']), R(c['sw_z2']), R(dt), self.q_acc, self.sun_acc, self._land()))
 
@@ -190,6 +196,8 @@ class Ocean:
         self.k['ocn_overturn'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.T, self.S) + self.eos() + (self._land(),))
         if self.conv is not None:
             self._heat(-1.0)
+        if self.core.sig is not None:
+            self.k['ocn_sigma'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.T, self.S) + self.eos() + (R(c['S_ref']), self.core.sig))
         self.core.step(self.h, self.u, c['dt'], self.nfast, self._Fm)
         self.tr.mass_after(self.M, self._Fm, self._M1)
         self.tr.step_many(self.M, self._M1, self._Fm, [self.T, self.S], order=3)     # (the heat below touches T only)
@@ -204,6 +212,12 @@ class Ocean:
         self.tau_acc *= 1.0 / dt                               # in place: the tick is captured as a CUDA graph
         cp.sqrt(self.tau_acc, out=self.tau_acc)
         self.k['cell_speed'](*grid_dims(g.N), (i32(g.N), self.tau_acc, g.cellEdge, g.le, g.de, g.areaCell, self.taum))
+        if c['kappa_h'] > 0:                                   # mixing along the layers (#164), over the interval
+            self.k['ocn_diffuse'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.T, self.S, self._Tn, self._Sn, g.cellEdge, g.eI, g.eJ,
+                                                    g.le, g.de, g.areaCell, self.core.wall if self.core.wall is not None else NULL,
+                                                    R(c['kappa_h']), R(dt)))
+            cp.copyto(self.T, self._Tn)
+            cp.copyto(self.S, self._Sn)
         self.q_acc /= dt
         self.sun_acc /= dt
         self.fw_acc /= dt

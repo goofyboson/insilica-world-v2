@@ -56,15 +56,26 @@ extern "C" __global__ void lay_ubar(int N, int E, int L, const real* h, const re
 }
 
 // Slow Bernoulli function B_k = M'_k + K_k at cells (the g eta part is the fast mode's).
+// sig (V2-6d, #166; else NULL): each layer's own buoyancy sigma_k = g (rho_k - rho_0) / rho_0 per cell, from its T and S.
+// Hydrostatic pressure in layer k at height z: p / rho_0 = g (eta - z) + P_k + sigma_k (z_k - z), P_k = sum_{m<k} sigma_m h_m
+// at its top z_k. Its layer-mean horizontal force is -grad M_k + zm_k grad sigma_k (Ripa 1993; the ocean's form of the
+// air's -grad M + pibar grad theta), M_k = P_k + sigma_k z_k (the g eta part in the fast mode) and zm_k = z_k - h_k / 2 the
+// layer's mid-height (written here for lay_slow). With sigma constant in each layer it is the fixed-g' form above.
 extern "C" __global__ void lay_bern(int N, int E, int L, const real* h, const real* u, const real* b, const real* gp,
-                                    const int* cellEdge, const real* le, const real* de, const real* areaCell, real* B) {
+                                    const int* cellEdge, const real* le, const real* de, const real* areaCell, real* B,
+                                    const real* sig, real* zm) {
   LOOP1(i, N)
   real z[LMAX];
   real s = b[i];
   for (int k = L - 1; k >= 0; k--) { s += h[(size_t)k * N + i]; z[k] = s; }
-  real Mp = 0;
+  real Mp = 0, P = 0;
   for (int k = 0; k < L; k++) {
-    if (k > 0) Mp += gp[k - 1] * z[k];
+    if (sig) {
+      const real sk = sig[(size_t)k * N + i], hk = h[(size_t)k * N + i];
+      Mp = P + sk * z[k];
+      P += sk * hk;
+      zm[(size_t)k * N + i] = z[k] - (real)0.5 * hk;
+    } else if (k > 0) Mp += gp[k - 1] * z[k];
     const real* ul = u + (size_t)k * E;
     real ke = 0;
     for (int m = 0; m < 6; m++) {
@@ -238,7 +249,8 @@ extern "C" __global__ void lay_slow(int N, int E, int L, const fast* pk, const f
                                     const int* eoeStart, const int* eoe, const int* eI, const int* eJ,
                                     const real* de, const real* drag, const real* stress,
                                     real floor_, real nu4, const real* lap4, const real* theta, const real* pibar,
-                                    real dts, real thin, real shelf, real* Tp, real* G, real* He, real* ubs) {
+                                    real dts, real thin, real shelf, real* Tp, real* G, real* He, real* ubs,
+                                    const real* sig, const real* zm) {
   LOOP1(e, E)
   real T[LMAX], hev[LMAX], sqk[LMAX];
   real H = 0, U = 0, GT = 0;
@@ -277,6 +289,11 @@ extern "C" __global__ void lay_slow(int N, int E, int L, const fast* pk, const f
       const real* tl = theta + (size_t)k * N;
       const real* pl = pibar + (size_t)k * N;
       d = d + DIVBY((real)0.5 * (pl[eI[e]] + pl[eJ[e]]) * (tl[eJ[e]] - tl[eI[e]]), de[e]);
+    }
+    if (sig) {                         // ocean (#166): + zm grad(sigma), the pressure force of the density varying in a layer
+      const real* sl = sig + (size_t)k * N;
+      const real* zl = zm + (size_t)k * N;
+      d = d + sq * DIVBY((real)0.5 * (zl[eI[e]] + zl[eJ[e]]) * (sl[eJ[e]] - sl[eI[e]]), de[e]);
     }
     if (nu4 != 0) d = d - nu4 * lap4[(size_t)k * E + e];
     T[k] = d;

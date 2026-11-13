@@ -106,10 +106,16 @@ __device__ __forceinline__ real kt_energy(real h, real us3, real B, real m_kt, r
 // Entrainment needs a stratified base: below a jump of g alpha_ref dTmin the layers are effectively mixed already (the
 // adjustment did it, by mixing T and S without moving the interface) and entraining would only move thickness; the mixed layer stays at most
 // hmax deep (Earth's deepest winter mixed layers) (decision #68).
+// 3. The interior interfaces (V2-6d, #163), below layers k >= 1: water crosses them, which the fixed density steps (#64) alone never
+//    let it. Deep-water formation (dwf > 0): where convection has made layer k as dense as the layer below it (the adjustment
+//    mixed them into one block), its water above hmin is that layer's water, and joins it. Mixing across the interface
+//    (kappa_d, m^2/s; Munk 1966): the diffusion of density across it, carried in fixed classes as the lower layer's water rising
+//    into the upper one at w = 2 kappa_d / (h_k + h_k+1) (the interface's step over the distance between the layers' middles),
+//    the overturning's return. Both go with the mixed layer's trade in wx (moved with heat, salt and momentum by Layers.exchange).
 extern "C" __global__ void ocn_column(int N, int L, const real* h, real* T, real* S, const real* taum, const real* qns,
                                       const real* qfw, const real* qsun, real grav, real alpha, real alpha2, real beta, real S_ref,
                                       real alpha_ref, real rho_w, real cw, real m_kt, real n_kt, real hmin, real hmax, real dTmin,
-                                      real R, real z1, real z2, real dt, real* wx, const real* land) {
+                                      real R, real z1, real z2, real dt, real* wx, const real* land, real kappa_d, real dwf) {
   LOOP1(i, N)
   if (land && land[i] > (real)0.5) {                            // no water here (decision #84)
     for (int k = 0; k < L - 1; k++) wx[(size_t)k * N + i] = 0;
@@ -144,7 +150,17 @@ extern "C" __global__ void ocn_column(int N, int L, const real* h, real* T, real
   if (dm > up_max) dm = up_max > 0 ? up_max : (real)0;
   if (-dm > dn_max) dm = dn_max > 0 ? -dn_max : (real)0;
   wx[i] = dm;
-  for (int k = 1; k < L - 1; k++) wx[(size_t)k * N + i] = 0;
+  real gave = dm > 0 ? dm : (real)0;                            // (what layer k already gives the layer above)
+  for (int k = 1; k < L - 1; k++) {
+    const real hk = h[(size_t)k * N + i], hb = h[(size_t)(k + 1) * N + i];
+    real v = 0;
+    if (dwf > 0 && buoy(T[(size_t)k * N + i], S[(size_t)k * N + i], q) <= buoy(T[(size_t)(k + 1) * N + i], S[(size_t)(k + 1) * N + i], q))
+      v = -fmax(hk - hmin - gave, (real)0);                    // formed: down into the layer below
+    else if (kappa_d > 0)
+      v = fmin(2 * kappa_d / (hk + hb) * dt, fmax(hb - hmin, (real)0));   // mixed: up from it
+    wx[(size_t)k * N + i] = v;
+    gave = v > 0 ? v : (real)0;
+  }
 }
 
 // Convective adjustment before every ocean step (decision #66): heat mixed downward wherever surface cooling made a layer

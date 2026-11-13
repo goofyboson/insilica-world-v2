@@ -280,7 +280,7 @@ PRESETS['aqua7'] = _aqua_n([420.0, 370.0, 345.0, 330.0, 317.0, 305.0], [0.8e4, 1
 # stress on the ocean (exact, in Ocean.couple), so the air's own bottom stress is off. Air steps must divide the hour.
 # Evaporation recalibrated for the ocean's surface (K_EVAP 4.8e-3 against the slab's 4e-3: 2.0 → ~2.3 mm/day; #80).
 PRESETS['coupled'] = dict(PRESETS['aqua'], stress=[0.0, 0.0, 0.0], ocean=dict(surface_drag=SURFACE_DRAG),
-                          air=dict(AIR, physics=dict(AIR3, moist=1.0, k_evap=4.8e-3)))
+                          air=dict(AIR, physics=dict(AIR3, moist=1.0, k_evap=4.8e-3, firn=2.0)))
 # One ocean basin (decision #79): the coupled world with a thin pole-to-pole wall at 180° that the ocean cannot cross, so
 # that gyres, western boundary currents and an east–west tilt of the equatorial thermocline can form; the air is unchanged.
 PRESETS['basin'] = dict(PRESETS['coupled'], ocean=dict(surface_drag=SURFACE_DRAG, walls=(180.0,)))
@@ -336,6 +336,14 @@ PRESETS['ridge'] = dict(PRESETS['aqua'], build=lambda g: _over_terrain(g, ridge_
 PRESETS['continent'] = dict(PRESETS['coupled'], build=lambda g: _over_terrain(g, continent_height(g)),
                             land=lambda g: continent_height(g) > 0)
 PRESETS['relief'] = dict(PRESETS['coupled'], build=lambda g: _over_terrain(g, relief_height(g)), land=lambda g: relief_height(g) > 0)
+# ICE's polar sheet (#162): relief with its land poleward of 68° raised 2 km, the surface of the sheet the test starts there (as on
+# `earth`, whose terrain is ETOPO1's ice surface: the air does not see the ice's own height, #87)
+def relief_ice_height(g):
+    b = relief_height(g)
+    return b + 2000.0 * ((b > 0) & (np.degrees(g.lat) > 68.0))
+
+
+PRESETS['relief_ice'] = dict(PRESETS['relief'], build=lambda g: _over_terrain(g, relief_ice_height(g)))
 
 
 _EARTH = {}
@@ -465,7 +473,7 @@ def earth_bed(g):
 # V2-6a (#109-#112): the k-tables' radiation, and the moist physics that put its troposphere on the observed profile (owner: option C):
 # the surface air's vapor (q_shape), freeze-drying, edge vapor, plumes rooted at the surface, entraining 0.1 per 100 hPa, their rain evaporating.
 PRESETS['earth'] = dict(PRESETS['coupled'], build=earth, land=lambda g: earth_land(g)[0], ocean=dict(surface_drag=SURFACE_DRAG, bed=earth_bed, land_drag=8.0),
-                        air=dict(AIR, longwave='ktables', physics=dict(AIR3, moist=1.0, k_evap=4.8e-3, plume_deep=1.0, sat_prof=1.0, bl_bot=0.25, cloud=1.0, tau0=1.3, land_exch=2.0,
+                        air=dict(AIR, longwave='ktables', physics=dict(AIR3, moist=1.0, k_evap=4.8e-3, firn=2.0, plume_deep=1.0, sat_prof=1.0, bl_bot=0.25, cloud=1.0, tau0=1.3, land_exch=2.0,
                                                                               q_shape=1.0, freeze_dry=1.0, edge_vap=1.0, plume_root=1.0, plume_ent=1e-5, conv_revap=0.05)))
 def earth4(g, rise=5.0e-3, bl=1.0e4):
     """The four-layer start (V2-6b, #113): earth's three layers with its bottom layer split, its lowest bl (Pa) the mixed

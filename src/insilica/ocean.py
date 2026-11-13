@@ -31,7 +31,8 @@ ALPHA_REF = 2.0e-4                                              # 1/K: dTmin's b
 OCEAN = dict(depth=4000.0, h_mixed=100.0, h_thermo=600.0, T_thermo=293.15, T_deep=273.15, alpha=0.52e-4, alpha2=1.0e-5, beta=7.6e-4, S_ref=35.0, rho=1025.0, cw=3990.0, dt=3600.0, mix_dt=86400.0,
              gprime=(0.016, 0.016),
              hmin=10.0, hmax=1000.0, dTmin=0.1, m_kt=0.5, n_kt=0.2, visc4_U=0.5, bottom_stress=2.5e-4,
-             interface_stress=5.0e-4, thin=2.0, walls=(), sw_R=0.58, sw_z1=0.35, sw_z2=23.0, land_drag=1.0, bed=None, bed_min=50.0, shelf=50.0, h_layers=None)
+             interface_stress=5.0e-4, thin=2.0, walls=(), sw_R=0.58, sw_z1=0.35, sw_z2=23.0, land_drag=1.0, bed=None, bed_min=50.0, shelf=50.0, h_layers=None,
+             kappa_d=0.0, dwf=0.0)            # crossing the interior interfaces (V2-6d, #163): mixing (m²/s) and deep-water formation, off
 
 
 def wall_mask(g, walls):
@@ -209,7 +210,7 @@ class Ocean:
         self.k['ocn_column'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.T, self.S, self.taum, self.q_acc, self.fw_acc,
                                                self.sun_acc) + self.eos() + (R(c['S_ref']), R(ALPHA_REF), R(c['rho']), R(c['cw']),
                                                R(c['m_kt']), R(c['n_kt']), R(c['hmin']), R(c['hmax']), R(c['dTmin']), R(c['sw_R']),
-                                               R(c['sw_z1']), R(c['sw_z2']), R(dt), self.wx, self._land()))
+                                               R(c['sw_z1']), R(c['sw_z2']), R(dt), self.wx, self._land(), R(c['kappa_d']), R(c['dwf'])))
         self.k['ocn_xch_salt'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.wx, self.h, self.S))
         self.core.exchange(self.wx, self.h, self.u, self.M, self.T)
         self.tau_acc.fill(0)

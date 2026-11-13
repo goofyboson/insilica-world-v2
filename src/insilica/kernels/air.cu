@@ -52,6 +52,7 @@ struct Par {
   real det_all;                                   // the deep plume's IFS entrainment and detrainment through every tropospheric layer it crosses (V2-6c, #155)
   real cl_float;                                  // the cloud layer's lower edge floating this far (K) above the cumulus layer's lifted top (V2-6c, #156)
   real ml_clear;                                  // the mixed layer's cloud only where its air is saturated, no subgrid spread (V2-6c, #157)
+  real firn, k_firn, rho_firn, c_ice;   // firn (V2-6d, #160): its depth (m; 0 off), conductivity, density, the ice's heat capacity
   real cu_cloud;                                  // with ml_clear: the thermals' cloud above their condensation level, in the cumulus layer (V2-6c, #158)
   real bare_fx;                                   // bare soil evaporates as (wet / full)^bare_fx, Noah's direct soil evaporation (V2-6c, #148); 0: as the plants'
   real buoy_v;                                    // the plumes' buoyancy in virtual theta, theta (1 + 0.608 q) (V2-6c, #145)
@@ -71,7 +72,7 @@ __device__ Par unpack(const real* a) {
   P.kappa = a[15]; P.p0 = a[16]; P.tilt = a[17]; P.year_s = a[18]; P.day_s = a[19]; P.tau_lin = a[20]; P.theta_star2 = a[21];
   P.moist = a[22]; P.Lv = a[23]; P.Lf = a[24]; P.Tf = a[25]; P.k_evap = a[26]; P.tau_conv = a[27]; P.alb_ice = a[28];
   P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32]; P.sat_layer = a[33]; P.sw_tau = a[34];
-  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; P.plume_ent = a[78]; P.l_ice = a[79]; P.storm_area = a[80]; P.graupel_v = a[81]; P.ice_small = a[82]; P.q_shape = a[83]; P.edge_heat = a[84]; P.freeze_dry = a[85]; P.edge_vap = a[86]; P.conv_revap = a[87]; P.plume_root = a[88]; P.bl_q = a[89]; P.sfc = a[90]; P.z0_land = a[91]; P.downdraft = a[92]; P.ent_cloud = a[93]; P.c_deep = a[94]; P.rs_max = a[95]; P.rs_sun = a[96]; P.q_sea = a[97]; P.bl_reach = a[98]; P.dry_edge = a[99]; P.bl_lcl = a[100]; P.edge_k = (int)a[101]; P.ice_air = a[102]; P.revap = a[103]; P.revap_rhs = a[104]; P.revap_rhl = a[105]; P.revap_area = a[106]; P.root_q = a[107]; P.ent_det = a[108]; P.ent_ifs = a[109]; P.shallow = a[110]; P.cu_dth = a[111]; P.cu_dp = a[112]; P.buoy_v = a[113]; P.cu_sub = a[114]; P.bare_fx = a[115]; P.det_all = a[116]; P.cl_float = a[117]; P.ml_clear = a[118]; P.cu_cloud = a[119]; P.bl_room = (real)1e30; for (int j = 0; j < LMAX; j++) P.ths[j] = a[120 + j];
+  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; P.plume_ent = a[78]; P.l_ice = a[79]; P.storm_area = a[80]; P.graupel_v = a[81]; P.ice_small = a[82]; P.q_shape = a[83]; P.edge_heat = a[84]; P.freeze_dry = a[85]; P.edge_vap = a[86]; P.conv_revap = a[87]; P.plume_root = a[88]; P.bl_q = a[89]; P.sfc = a[90]; P.z0_land = a[91]; P.downdraft = a[92]; P.ent_cloud = a[93]; P.c_deep = a[94]; P.rs_max = a[95]; P.rs_sun = a[96]; P.q_sea = a[97]; P.bl_reach = a[98]; P.dry_edge = a[99]; P.bl_lcl = a[100]; P.edge_k = (int)a[101]; P.ice_air = a[102]; P.revap = a[103]; P.revap_rhs = a[104]; P.revap_rhl = a[105]; P.revap_area = a[106]; P.root_q = a[107]; P.ent_det = a[108]; P.ent_ifs = a[109]; P.shallow = a[110]; P.cu_dth = a[111]; P.cu_dp = a[112]; P.buoy_v = a[113]; P.cu_sub = a[114]; P.bare_fx = a[115]; P.det_all = a[116]; P.cl_float = a[117]; P.ml_clear = a[118]; P.cu_cloud = a[119]; P.firn = a[120]; P.k_firn = a[121]; P.rho_firn = a[122]; P.c_ice = a[123]; P.bl_room = (real)1e30; for (int j = 0; j < LMAX; j++) P.ths[j] = a[124 + j];
   return P;
 }
 
@@ -788,7 +789,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
                                       real* wx, real* olr, real* sw_abs, real* stored, real* rain, real* evap, real* conv,
                                       real* tsurf, real* rainp, real* dgo, real* cap, real* qocean,
                                       real* qsw, const real* land, const real* soilcap, real* soil, real* pond, real* snow, real* cloudw, real* cloudo, const real* elev, real* flash,
-                                      const real* radf, const real* swf, real* swalb, const real* ch, const real* lc) {
+                                      const real* radf, const real* swf, real* swalb, const real* ch, const real* lc, real* firn) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= N) return;
 #ifdef NL
@@ -851,7 +852,11 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
     cap[i] = Cn;
   }
   const real Cw = cap ? cap[i] : P.c_slab;
-  const real E0 = column_energy(L, mu, pib, th, q, P) + Cw * Ts[i] - P.Lf * m_ice;
+  // firn (V2-6d, #160): the top firn_depth of a land ice sheet (at least that much ice) with its own temperature Tfn, between the skin and
+  // the ice below; its heat Cf (Tfn - Tf) (Tfn = Tf wherever there is none)
+  const real Cf = firn && P.firn > 0 ? P.c_ice * P.rho_firn * P.firn : (real)0;
+  real Tfn = Cf > 0 ? firn[i] : P.Tf;
+  const real E0 = column_energy(L, mu, pib, th, q, P) + Cw * Ts[i] - P.Lf * m_ice + Cf * (Tfn - P.Tf);
   for (int k = 0; k < L; k++) T[k] = pib[k] * th[k] / P.cp;
   const int top = 0, bot = L - 1;
   // each layer's cover, in-cloud water path (kg/m^2) and liquid share (all ice below -20 C)
@@ -1046,23 +1051,31 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   const bool bfx = isl && P.bare_fx > 0 && lc && P.land_rs > 0;
   auto soilf = [&](real w_) { const real x_ = fmin((real)1, w_); return fbare * pow(x_, P.bare_fx) + (1 - fbare) * rveg * x_; };
   const real qfac = !isl && P.q_sea > 0 ? P.q_sea : (real)1;     // q_sea (#118): salt lowers the sea's saturation (Raoult, 2% at 35 psu)
-  const real ts = Ts[i];
-  real tsk = ts, melt_top = 0, cond = 0;
   const bool skin = moist && dice > P.ice_cover;
+  // firn (#160) where the land's ice is thick enough; where it ends (melted or flowed away), its heat goes to the ground below
+  const bool fon = Cf > 0 && isl && skin && m_ice >= P.rho_firn * P.firn;
+  if (Cf > 0 && !fon && Tfn != P.Tf) { Ts[i] += Cf * (Tfn - P.Tf) / Cw; Tfn = P.Tf; }
+  const real ts = Ts[i];
+  real tsk = ts, melt_top = 0, cond = 0, condb = 0;
   if (skin) {
-    const real kc = P.k_ice / dice;
-    real x = fmin(ts, P.Tf);
+    // the skin conducts to what lies under it: the ice down to the ground, or the firn's middle
+    const real kc = fon ? 2 * P.k_firn / P.firn : P.k_ice / dice, tb = fon ? Tfn : ts;
+    real x = fmin(tb, P.Tf);
     for (int it = 0; it < 8; it++) {
       const real x3 = x * x * x;
-      const real f = kc * (ts - x) - P.eps_s * P.sigma * x3 * x + swS + ldown - hs * (x - Tsa);
+      const real f = kc * (tb - x) - P.eps_s * P.sigma * x3 * x + swS + ldown - hs * (x - Tsa);
       x -= f / (-kc - 4 * P.eps_s * P.sigma * x3 - hs);
     }
     if (x > P.Tf) x = P.Tf;
     const real x4 = x * x * x * x;
     // what the skin can't pass on at its temperature melts ice from the top (zero when the balance was met)
-    melt_top = kc * (ts - x) - P.eps_s * P.sigma * x4 + swS + ldown - hs * (x - Tsa);
+    melt_top = kc * (tb - x) - P.eps_s * P.sigma * x4 + swS + ldown - hs * (x - Tsa);
     tsk = x;
-    cond = kc * (ts - tsk);                                      // W/m^2 up from the slab into the skin
+    cond = kc * (tb - tsk);                                      // W/m^2 up from the slab (or the firn) into the skin
+    if (fon) {                                                   // and from the ground below through the rest of the ice to the firn's middle
+      const real rest = fmax(dice - P.rho_firn * P.firn / P.rho_ice, (real)0);
+      condb = (ts - Tfn) / (rest / P.k_ice + P.firn / (2 * P.k_firn));
+    }
   }
   // the ground's skin (c_deep, #118): the daily cycle's thin layer (its capacity cap), stepped implicitly, since its capacity is
   // too small for the explicit step: the temperature x with C (x - ts) = dt F(x), F the surface's net gain (sunlight, longwave,
@@ -1179,7 +1192,8 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   // into the skin. Freezing below Tf turns slab heat into ice; ice melts with slab heat above Tf and from the top
   // with the skin's surplus ----
   real qS;
-  if (skin) qS = -cond;
+  if (fon) Tfn += (condb - cond) * dt / Cf;                      // the firn between them
+  if (skin) qS = fon ? -condb : -cond;
   else qS = swS + ldown - P.eps_s * P.sigma * tsk * tsk * tsk * tsk - H - P.Lv * E;   // (tsk: the slab's own, or the ground's skin)
   real Tn = ts + qS * dt / Cw;
   if (qocean) qocean[i] = qS;                                    // W/m^2 into the surface water (before ice)
@@ -1781,7 +1795,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
         // (overnight, in the sun it does not), the rest stays liquid and runs on.
         // The heat goes into the air touching the ground, not into however thin a bottom layer (#87; decision #100)
         const real room = (P.k_ice / dice * (P.Tf - tsk) + hs * fmax((real)0, P.Tf - Tsa) + fmax((real)0, P.eps_s * P.sigma * P.Tf * P.Tf * P.Tf * P.Tf - ldown - swS)) * dt / P.Lf
-                         + (sn > 0 ? (real)10.0 / 3600 * dt : (real)0);   // and into snow: meltwater soaks into firn, cold from the winter, at up to 10 mm/h (a stand-in until the firn has a temperature)
+                         + (sn > 0 && !fon ? (real)10.0 / 3600 * dt : (real)0);   // and into snow (without firn, #160): meltwater soaks into firn, cold from the winter, at up to 10 mm/h (a stand-in until the firn has a temperature)
         const real mp = fmin(pw > 0 ? pw : (real)0, room), m = R + mp;
         m_ice += m;
         sn = (sn > 0 ? sn : (real)0) + R;
@@ -1790,6 +1804,13 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
       } else {
         pw += R;
         for (int k = 0; k <= bot; k++) th[k] -= P.Lf * S * (wbl[k] / mb) / (mu[k] * pib[k]);   // (melting on the thawing ice: from the air touching it)
+      }
+      if (fon && pw > 0 && Tfn < P.Tf) {                        // (#160) melt and rain soak into the cold firn and refreeze, warming it toward freezing
+        const real mr = fmin(pw, Cf * (P.Tf - Tfn) / P.Lf);
+        pw -= mr;
+        m_ice += mr;
+        sn = (sn > 0 ? sn : (real)0) + mr;
+        Tfn += P.Lf * mr / Cf;
       }
     } else if (Ts[i] < P.Tf) {                                  // snow: its freezing warms the ground (rain's; snow froze aloft)
       m_ice += R;
@@ -1837,7 +1858,8 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
       th[n] += mu[k] * pib[k] * (th[k] - tn) / (mu[n] * pib[n]);
       th[k] = tn;
     }
-  const real E1 = column_energy(L, mu, pib, th, q, P) + Cw * Ts[i] - P.Lf * m_ice;
+  const real E1 = column_energy(L, mu, pib, th, q, P) + Cw * Ts[i] - P.Lf * m_ice + Cf * (Tfn - P.Tf);
+  if (Cf > 0) firn[i] = Tfn;
   for (int k = 0; k < L; k++) { theta[(size_t)k * N + i] = th[k]; if (moist) qv[(size_t)k * N + i] = q[k]; if (cloudy) cloudw[(size_t)k * N + i] = cl[k]; }
   stored[i] = E1 - E0;
 }

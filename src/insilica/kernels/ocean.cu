@@ -161,7 +161,8 @@ extern "C" __global__ void ocn_column(int N, int L, const real* h, real* T, real
     if (hn - h0 > dm) dm = hn - h0;
   }
   real up_max = h1 - hmin;
-  if (reach > 0) { up_max = 0; for (int k = 1; k < L; k++) up_max += fmax(h[(size_t)k * N + i] - hmin, (real)0); }
+  // (#170) in one interval only down to the first layer with water, kb, through the emptied ones above it: its jump db set the entrainment
+  if (reach > 0) { up_max = 0; for (int k = 1; k <= kb; k++) up_max += fmax(h[(size_t)k * N + i] - hmin, (real)0); }
   if (hmax - h0 < up_max) up_max = hmax - h0;
   const real dn_max = h0 - hmin;
   if (dm > up_max) dm = up_max > 0 ? up_max : (real)0;

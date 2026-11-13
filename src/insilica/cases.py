@@ -584,6 +584,17 @@ PRESETS['earth7'] = dict(PRESETS['earth6'], build=earth7, stress=[0.0] * 7,
 PRESETS['earth7o5'] = dict(PRESETS['earth7'], ocean=dict(PRESETS['earth7']['ocean'], gprime=(0.024, 0.0153, 0.0067, 0.0048), h_layers=(50.0, 150.0, 300.0, 500.0),
                                                          T_layers=(293.15, 285.15, 279.15), fw_local=1.0, kappa_h=1000.0))
 
+# V2-6d (#171, trial): earth7 over an eight-layer ocean of density classes (#169): the mixed layer, then water of 26, 22, 18, 14, 10
+# and 6 °C and the deep water at 2 °C (at 35 psu), fine enough near the top that the class under the tropical mixed layer is
+# close to it; the currents from each layer's own density (#166), the interfacial stress from the shear (#167), shear mixing at
+# the mixed layer's base (#168), the mixed layer reaching through emptied classes (#170), interior mixing κ_d 1e-5
+_C8 = (26.0, 22.0, 18.0, 14.0, 10.0, 6.0, 2.0)
+PRESETS['earth7o8'] = dict(PRESETS['earth7'], ocean=dict(PRESETS['earth7']['ocean'], gprime=(0.0096, 0.0115, 0.0099, 0.0083, 0.0067, 0.0052, 0.0036),
+                                                         h_layers=(50.0, 50.0, 75.0, 100.0, 150.0, 200.0, 400.0), T_layers=tuple(273.15 + t for t in _C8[:-1]),
+                                                         T_deep=273.15 + _C8[-1], T_classes=tuple(273.15 + t for t in _C8), fw_local=1.0, kappa_h=1000.0,
+                                                         kappa_d=1e-5, eos_currents=1.0, interface_stress=0.0, interface_cd=1e-3, ri_b=0.65, reach=1.0,
+                                                         bed_min=100.0))   # (eight layers at their 10 m floor need the shallowest sea deeper than 80 m)
+
 PRESETS['rce'] = dict(build=aqua_dry, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True, physics=AIR3), dynamics=False)
 
 

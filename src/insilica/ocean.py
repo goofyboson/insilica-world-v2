@@ -252,13 +252,15 @@ class Ocean:
         self.update_cap()
 
     def heat(self):
-        """The ocean's heat content (J, relative to 0 K): ρ_w c_w Σ A h T."""
+        """The ocean's heat content (J): ρ_w c_w Σ A h (T − 273.15 K). Relative to T_REF (v1 §18 #12), so water arriving or leaving
+        with its volume (#165: rain, evaporation, rivers, sea ice; 0 K made each kilogram of melt water 1.1 MJ) carries only its
+        heat above freezing; with a fixed volume it differs from the 0 K form by a constant."""
         A = cp.asarray(self.dg.host.areaCell)
         rc = self.cfg['rho'] * self.cfg['cw']
         if self.land is None:
-            return float(cp.sum(A * cp.sum(self.h * self.T, axis=0))) * rc
+            return float(cp.sum(A * cp.sum(self.h * (self.T - 273.15), axis=0))) * rc
         ground = self.cap * (self.T[0] - 273.15) + (self.c_deep * (self.T[1] - 273.15) if self.c_deep > 0 else 0.0)
-        return float(cp.sum(A * ((1 - self.land) * rc * cp.sum(self.h * self.T, axis=0) + self.land * ground)))
+        return float(cp.sum(A * ((1 - self.land) * rc * cp.sum(self.h * (self.T - 273.15), axis=0) + self.land * ground)))
 
     def salt(self):
         """The ocean's salt (kg): ρ_w Σ A h S / 1000."""

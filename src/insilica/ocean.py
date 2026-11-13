@@ -32,7 +32,7 @@ OCEAN = dict(depth=4000.0, h_mixed=100.0, h_thermo=600.0, T_thermo=293.15, T_dee
              gprime=(0.016, 0.016),
              hmin=10.0, hmax=1000.0, dTmin=0.1, m_kt=0.5, n_kt=0.2, visc4_U=0.5, bottom_stress=2.5e-4,
              interface_stress=5.0e-4, thin=2.0, walls=(), sw_R=0.58, sw_z1=0.35, sw_z2=23.0, land_drag=1.0, bed=None, bed_min=50.0, shelf=50.0, h_layers=None,
-             kappa_d=0.0, dwf=0.0, kappa_h=0.0, fw_local=0.0, eos_currents=0.0, interface_cd=0.0, ri_b=0.0, T_classes=None, classes_top=1.0, reach=0.0)   # crossing the interior interfaces (V2-6d, #163: mixing m2/s, deep-water formation), mixing along the layers (#164, m2/s), fresh water with its volume (#165); all off
+             kappa_d=0.0, dwf=0.0, kappa_h=0.0, fw_local=0.0, eos_currents=0.0, interface_cd=0.0, ri_b=0.0, T_classes=None, classes_top=1.0, reach=0.0, h_ent=0.0)   # crossing the interior interfaces (V2-6d, #163: mixing m2/s, deep-water formation), mixing along the layers (#164, m2/s), fresh water with its volume (#165); all off
 
 
 def wall_mask(g, walls):
@@ -234,7 +234,7 @@ class Ocean:
                                                self.sun_acc) + self.eos() + (R(c['S_ref']), R(ALPHA_REF), R(c['rho']), R(c['cw']),
                                                R(c['m_kt']), R(c['n_kt']), R(c['hmin']), R(c['hmax']), R(c['dTmin']), R(c['sw_R']),
                                                R(c['sw_z1']), R(c['sw_z2']), R(dt), self.wx, self._land(), R(c['kappa_d']), R(c['dwf']),
-                                               self.shear if self.shear is not None else NULL, R(c['ri_b']), R(c['reach'])))
+                                               self.shear if self.shear is not None else NULL, R(c['ri_b']), R(c['reach']), R(c['h_ent'])))
         seq = c['reach'] > 0
         self.k['ocn_xch_salt'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.wx, self.h, self.S, i32(1 if seq else 0)))
         self.core.exchange(self.wx, self.h, self.u, self.M, self.T, seq=seq)

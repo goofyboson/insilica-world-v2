@@ -117,7 +117,7 @@ extern "C" __global__ void ocn_column(int N, int L, const real* h, real* T, real
                                       const real* qfw, const real* qsun, real grav, real alpha, real alpha2, real beta, real S_ref,
                                       real alpha_ref, real rho_w, real cw, real m_kt, real n_kt, real hmin, real hmax, real dTmin,
                                       real R, real z1, real z2, real dt, real* wx, const real* land, real kappa_d, real dwf,
-                                      const real* shear, real ri_b, real reach) {
+                                      const real* shear, real ri_b, real reach, real h_ent) {
   LOOP1(i, N)
   if (land && land[i] > (real)0.5) {                            // no water here (decision #84)
     for (int k = 0; k < L - 1; k++) wx[(size_t)k * N + i] = 0;
@@ -160,6 +160,10 @@ extern "C" __global__ void ocn_column(int N, int L, const real* h, real* T, real
     const real hn = sqrt(ri_b * du * du * h0 / db);
     if (hn - h0 > dm) dm = hn - h0;
   }
+  // Upwelling (V2-6d, #173): where the currents' divergence has thinned the mixed layer below h_ent, it takes water from below to
+  // h_ent again, whatever the turbulence (Anderson & McCreary 1985's minimum thickness): Ekman divergence draws the thermocline
+  // up by continuity. Without it the layer's floor (hmin) stopped the divergence itself: half the equatorial Pacific sat there.
+  if (h_ent > 0 && h0 + dm < h_ent) dm = h_ent - h0;
   real up_max = h1 - hmin;
   // (#170) in one interval only down to the first layer with water, kb, through the emptied ones above it: its jump db set the entrainment
   if (reach > 0) { up_max = 0; for (int k = 1; k <= kb; k++) up_max += fmax(h[(size_t)k * N + i] - hmin, (real)0); }

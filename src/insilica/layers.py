@@ -34,7 +34,7 @@ DIV_DAMP = 0.1              # divergence damping of the fast mode (decision #28)
 
 class Layers:
     def __init__(self, dg, layers=1, b=None, grav=GRAV, gprime=(), drag=0.0, stress=0.0, nu4=0.0, floor=1.0, rotation=1.0,
-                 div_damp=DIV_DAMP, air=None, vmix=0.0, thin=2.0, wall=None, thin_wind=0.0, shelf=0.0):
+                 div_damp=DIV_DAMP, air=None, vmix=0.0, thin=2.0, wall=None, thin_wind=0.0, shelf=0.0, vmix_cd=0.0):
         """air: None for Boussinesq (ocean-like) layers, h in m; or a dict for air layers, h the layer's mass per area
         (kg/m²) with a potential temperature θ per layer passed to step() (decision #32). The fast mode then runs on
         the column mass with each cell's own coefficient Gc = R·T_s/μ (decision #37), at √(R·T_s). thin: the PV flux's cap on a
@@ -59,6 +59,7 @@ class Layers:
         self.fV = dg.fV * rotation
         self.air = air
         self.vmix = vmix                    # interfacial stress coefficient c (decision #39), h-units/s
+        self.vmix_cd = vmix_cd              # (#167) its quadratic part: c = vmix_cd |Δu|
         self.zero = z(N)
         self.Gc = cp.full(N, float(grav))   # the fast mode's coefficient per cell: g, or for air R·T_s/μ
         if air:
@@ -192,8 +193,8 @@ class Layers:
         self._stage(h, u, h, u, 1 / 3, dt, nfast, self.h1, self.u1, theta=theta)
         self._stage(self.h1, self.u1, h, u, 1 / 2, dt, nfast, self.h2, self.u2, theta=theta)
         self._stage(self.h2, self.u2, h, u, 1.0, dt, nfast, h, u, Fm, theta=theta)
-        if self.vmix and L > 1:
-            k['lay_vmix'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(L), h, g.eI, g.eJ, self.real(self.vmix), self.real(dt), u, self.diss))
+        if (self.vmix or self.vmix_cd) and L > 1:
+            k['lay_vmix'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(L), h, g.eI, g.eJ, self.real(self.vmix), self.real(dt), u, self.diss, self.real(self.vmix_cd)))
             self.mask(u, L)
             if self.air:
                 R = self.real

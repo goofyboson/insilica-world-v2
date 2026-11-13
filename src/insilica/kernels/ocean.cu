@@ -107,7 +107,8 @@ __device__ __forceinline__ real kt_energy(real h, real us3, real B, real m_kt, r
 // adjustment did it, by mixing T and S without moving the interface) and entraining would only move thickness; the mixed layer stays at most
 // hmax deep (Earth's deepest winter mixed layers) (decision #68).
 // 3. The interior interfaces (V2-6d, #163), below layers k >= 1: water crosses them, which the fixed density steps (#64) alone never
-//    let it. Deep-water formation (dwf > 0): where convection has made layer k as dense as the layer below it (the adjustment
+//    let it. Deep-water formation (dwf > 0): where the surface is losing buoyancy (convection driven from the top; not sunlight
+//    reaching through thin layers and lightening the one below, #167) and convection has made layer k as dense as the layer below it (the adjustment
 //    mixed them into one block), its water above hmin is that layer's water, and joins it. Mixing across the interface
 //    (kappa_d, m^2/s; Munk 1966): the diffusion of density across it, carried in fixed classes as the lower layer's water rising
 //    into the upper one at w = 2 kappa_d / (h_k + h_k+1) (the interface's step over the distance between the layers' middles),
@@ -115,7 +116,8 @@ __device__ __forceinline__ real kt_energy(real h, real us3, real B, real m_kt, r
 extern "C" __global__ void ocn_column(int N, int L, const real* h, real* T, real* S, const real* taum, const real* qns,
                                       const real* qfw, const real* qsun, real grav, real alpha, real alpha2, real beta, real S_ref,
                                       real alpha_ref, real rho_w, real cw, real m_kt, real n_kt, real hmin, real hmax, real dTmin,
-                                      real R, real z1, real z2, real dt, real* wx, const real* land, real kappa_d, real dwf) {
+                                      real R, real z1, real z2, real dt, real* wx, const real* land, real kappa_d, real dwf,
+                                      const real* shear, real ri_b) {
   LOOP1(i, N)
   if (land && land[i] > (real)0.5) {                            // no water here (decision #84)
     for (int k = 0; k < L - 1; k++) wx[(size_t)k * N + i] = 0;
@@ -144,6 +146,15 @@ extern "C" __global__ void ocn_column(int N, int L, const real* h, real* T, real
       }
     dm = lo - h0;
   }
+  // Shear instability at the base (V2-6d, #168; Price, Weller & Pinkel 1986): with the velocity jump du = |u_0 - u_1| the
+  // bulk Richardson number db h0 / du^2 below ri_b mixes the layer below in until it is ri_b again. Taking in d of the layer
+  // below scales the jumps of buoyancy and velocity alike by h0 / (h0 + d), so Ri = db (h0 + d)^2 / (du^2 h0): the depth
+  // h0 + d = sqrt(ri_b du^2 h0 / db). The exchange carries the momentum with the water, which closes the jump.
+  if (shear && ri_b > 0 && db > 0) {
+    const real du = shear[i];
+    const real hn = sqrt(ri_b * du * du * h0 / db);
+    if (hn - h0 > dm) dm = hn - h0;
+  }
   real up_max = h1 - hmin;
   if (hmax - h0 < up_max) up_max = hmax - h0;
   const real dn_max = h0 - hmin;
@@ -154,7 +165,7 @@ extern "C" __global__ void ocn_column(int N, int L, const real* h, real* T, real
   for (int k = 1; k < L - 1; k++) {
     const real hk = h[(size_t)k * N + i], hb = h[(size_t)(k + 1) * N + i];
     real v = 0;
-    if (dwf > 0 && buoy(T[(size_t)k * N + i], S[(size_t)k * N + i], q) <= buoy(T[(size_t)(k + 1) * N + i], S[(size_t)(k + 1) * N + i], q))
+    if (dwf > 0 && Bns < 0 && buoy(T[(size_t)k * N + i], S[(size_t)k * N + i], q) <= buoy(T[(size_t)(k + 1) * N + i], S[(size_t)(k + 1) * N + i], q))
       v = -fmax(hk - hmin - gave, (real)0);                    // formed: down into the layer below
     else if (kappa_d > 0)
       v = fmin(2 * kappa_d / (hk + hb) * dt, fmax(hb - hmin, (real)0));   // mixed: up from it

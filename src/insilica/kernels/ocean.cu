@@ -117,7 +117,7 @@ extern "C" __global__ void ocn_column(int N, int L, const real* h, real* T, real
                                       const real* qfw, const real* qsun, real grav, real alpha, real alpha2, real beta, real S_ref,
                                       real alpha_ref, real rho_w, real cw, real m_kt, real n_kt, real hmin, real hmax, real dTmin,
                                       real R, real z1, real z2, real dt, real* wx, const real* land, real kappa_d, real dwf,
-                                      const real* shear, real ri_b) {
+                                      const real* shear, real ri_b, real reach) {
   LOOP1(i, N)
   if (land && land[i] > (real)0.5) {                            // no water here (decision #84)
     for (int k = 0; k < L - 1; k++) wx[(size_t)k * N + i] = 0;
@@ -126,13 +126,18 @@ extern "C" __global__ void ocn_column(int N, int L, const real* h, real* T, real
   const Eos q = {grav, alpha, alpha2, beta};
   adjust(N, L, i, h, T, S, q);
   const real h0 = h[i], h1 = h[(size_t)N + i];
-  const real T0 = T[i], T1 = T[(size_t)N + i];
+  // reach (V2-6d, #170): the mixed layer's base meets the first layer below it with water above the floor; layers emptied to
+  // their floor between them are passed through (a real mixed layer deepening into the thermocline does not stop at a
+  // class that is absent there). Without it, it trades with layer 1 alone, and an emptied layer 1 cut it off from the cold water.
+  int kb = 1;
+  if (reach > 0) while (kb < L - 1 && h[(size_t)kb * N + i] - hmin < 1) kb++;
+  const real T0 = T[i], T1 = T[(size_t)kb * N + i];
   const real us = sqrt(taum[i] / rho_w);                        // u* from the interval's rms stress (N/m^2)
   const real us3 = us * us * us;
   const real ga = grav * expand(T0, q);
   const real Bns = ga * qns[i] / (rho_w * cw) + grav * beta * S_ref * qfw[i] / rho_w, Bsw = ga * qsun[i] / (rho_w * cw);
   const real P = kt_energy(h0, us3, kt_buoy(h0, Bns, Bsw, R, z1, z2), m_kt, n_kt);
-  const real db = buoy(T0, S[i], q) - buoy(T1, S[(size_t)N + i], q);
+  const real db = buoy(T0, S[i], q) - buoy(T1, S[(size_t)kb * N + i], q);
   real dm = 0;
   if (P > 0) {
     if (db > grav * alpha_ref * dTmin) dm = P / (h0 * db) * dt;
@@ -156,6 +161,7 @@ extern "C" __global__ void ocn_column(int N, int L, const real* h, real* T, real
     if (hn - h0 > dm) dm = hn - h0;
   }
   real up_max = h1 - hmin;
+  if (reach > 0) { up_max = 0; for (int k = 1; k < L; k++) up_max += fmax(h[(size_t)k * N + i] - hmin, (real)0); }
   if (hmax - h0 < up_max) up_max = hmax - h0;
   const real dn_max = h0 - hmin;
   if (dm > up_max) dm = up_max > 0 ? up_max : (real)0;
@@ -171,6 +177,13 @@ extern "C" __global__ void ocn_column(int N, int L, const real* h, real* T, real
       v = fmin(2 * kappa_d / (hk + hb) * dt, fmax(hb - hmin, (real)0));   // mixed: up from it
     wx[(size_t)k * N + i] = v;
     gave = v > 0 ? v : (real)0;
+  }
+  if (reach > 0 && dm > 0) {                                    // (#170) what layer 1 lacks comes up through it from below
+    real rem = dm - fmax(h1 - hmin, (real)0);
+    for (int k = 1; k < L - 1 && rem > 0; k++) {
+      wx[(size_t)k * N + i] += rem;
+      rem -= fmax(h[(size_t)(k + 1) * N + i] - hmin, (real)0);
+    }
   }
 }
 
@@ -249,10 +262,97 @@ extern "C" __global__ void ocn_diffuse(int N, int L, const real* h, const real* 
 }
 
 // Salt with the water the mixing moves between layers (wx as in Layers.exchange, applied before it; upwind, conserved).
-extern "C" __global__ void ocn_xch_salt(int N, int L, const real* wx, const real* h, real* S) {
+// Density classes (V2-6d, #169): layers k >= 1 each stand for a class of water, its density that of T_class[k] at S_ref
+// (Bk = b / g). Heating, cooling, freshening and mixing change a layer's density; in a layered ocean such a change is water
+// crossing into the neighbouring class (water-mass transformation, Walin 1982), not a layer drifting out of its own. A layer
+// lighter than its class is read as part water of its class and part of the class above (the mixed layer's own density
+// when it is lighter, for layer 1); denser, of its class and the one below. The two parts keep the layer's salinity, with
+// temperatures solving the equation of state for the two densities, and split its volume so that its heat is kept:
+// h_a = h (T - T_b) / (T_a - T_b) at T_a joins the neighbour, the rest stays at T_b (h_a at most h - hmin; the whole layer
+// when it lies beyond the neighbour's class). Volume, heat and salt are conserved exactly; the result is the interfaces'
+// net flux wx (moved with momentum by Layers.exchange) and every layer's new T and S.
+__device__ __forceinline__ real temp_of(real B, real S, const Eos& q) {     // T (K) where b / g = B at S; < 0 if none
+  const real c = B + q.beta * S, disc = q.a * q.a + 2 * q.a2 * c;
+  if (disc < 0) return (real)-1;
+  return (real)273.15 + (-q.a + sqrt(disc)) / q.a2;
+}
+extern "C" __global__ void ocn_classes(int N, int L, const real* h, const real* T, const real* S, const real* Tc, real grav,
+                                       real alpha, real alpha2, real beta, real S_ref, real hmin, real Tmin, const real* land,
+                                       real* wx, real* Tn, real* Sn, real top) {
+  LOOP1(i, N)
+  if (land && land[i] > (real)0.5) {
+    for (int k = 0; k < L - 1; k++) wx[(size_t)k * N + i] = 0;
+    for (int k = 0; k < L; k++) { Tn[(size_t)k * N + i] = T[(size_t)k * N + i]; Sn[(size_t)k * N + i] = S[(size_t)k * N + i]; }
+    return;
+  }
+  const Eos q = {(real)1, alpha, alpha2, beta};                 // (b / g)
+  real hk[LMAX], Hk[LMAX], Sk[LMAX], Bc[LMAX], up[LMAX], dn[LMAX];
+  for (int k = 0; k < L; k++) {
+    const size_t o = (size_t)k * N + i;
+    hk[k] = h[o]; Hk[k] = h[o] * T[o]; Sk[k] = h[o] * S[o]; up[k] = 0; dn[k] = 0;
+    Bc[k] = k > 0 ? buoy(Tc[k], S_ref, q) : (real)0;
+  }
+  real gH[LMAX], gS[LMAX], gh[LMAX];                             // what each layer receives
+  for (int k = 0; k < L; k++) { gH[k] = 0; gS[k] = 0; gh[k] = 0; }
+  real keepT[LMAX];
+  for (int k = 0; k < L; k++) keepT[k] = T[(size_t)k * N + i];
+  for (int k = 1; k < L; k++) {
+    const size_t o = (size_t)k * N + i;
+    const real Tk = T[o], Sl = S[o], b = buoy(Tk, Sl, q), room = hk[k] - hmin;
+    if (room <= 0) continue;
+    int to = -1;
+    real Bd = 0;
+    if (b > Bc[k]) {                                            // too light: part joins the class above
+      Bd = k > 1 ? Bc[k - 1] : buoy(T[i], S[i], q);
+      if (Bd > Bc[k] && (k > 1 || top > 0)) to = k - 1;   // (top 0: layer 1 open above, the seasonal thermocline's water kept)
+    } else if (b < Bc[k] && k + 1 < L) {                        // too dense: part joins the class below
+      Bd = Bc[k + 1];
+      if (Bd < Bc[k]) to = k + 1;
+    }
+    if (to < 0) continue;
+    const real Tb = temp_of(Bc[k], Sl, q), Ta0 = temp_of(Bd, Sl, q);
+    if (Tb < Tmin || Ta0 < Tmin) continue;
+    real ha, Ta, Tr;
+    if ((to < k && b >= Bd) || (to > k && b <= Bd)) { ha = room; Ta = Tk; Tr = Tk; }   // beyond the neighbour's class: as much as can go
+    else {
+      ha = hk[k] * (Tk - Tb) / (Ta0 - Tb);
+      Ta = Ta0; Tr = Tb;
+      if (ha > room) { ha = room; Tr = (hk[k] * Tk - ha * Ta) / (hk[k] - ha); }
+    }
+    if (!(ha > 0)) continue;
+    keepT[k] = Tr;
+    if (to < k) up[k] = ha; else dn[k] = ha;
+    gh[to] += ha; gH[to] += ha * Ta; gS[to] += ha * Sl;
+  }
+  for (int k = 0; k < L; k++) {
+    const size_t o = (size_t)k * N + i;
+    const real out = up[k] + dn[k], h0 = hk[k] - out, h1 = h0 + gh[k];
+    Tn[o] = (h0 * keepT[k] + gH[k]) / h1;
+    Sn[o] = (h0 * S[o] + gS[k]) / h1;
+    if (k + 1 < L) wx[o] = up[k + 1] - dn[k];                  // the interface below layer k, positive up
+  }
+}
+
+// seq (#170): upward moves from the bottom interface up, downward from the top down, each at its donor's salinity as it stands then,
+// so water passing through a layer in one step carries its own salt, not the passed layer's (as xch_edge does for momentum)
+extern "C" __global__ void ocn_xch_salt(int N, int L, const real* wx, const real* h, real* S, int seq) {
   LOOP1(i, N)
   real hs[LMAX], tr[LMAX];
   for (int k = 0; k < L; k++) { hs[k] = h[(size_t)k * N + i]; tr[k] = hs[k] * S[(size_t)k * N + i]; }
+  if (seq) {
+    for (int pass = 0; pass < 2; pass++)
+      for (int n = 0; n + 1 < L; n++) {
+        const int k = pass == 0 ? L - 2 - n : n;
+        const real v = wx[(size_t)k * N + i];
+        if (pass == 0 ? !(v > 0) : !(v < 0)) continue;
+        const int d = v > 0 ? k + 1 : k;
+        const real s = tr[d] / hs[d];
+        tr[k] += v * s; tr[k + 1] -= v * s;
+        hs[k] += v; hs[k + 1] -= v;
+      }
+    for (int k = 0; k < L; k++) S[(size_t)k * N + i] = tr[k] / hs[k];
+    return;
+  }
   for (int k = 0; k + 1 < L; k++) {
     const real v = wx[(size_t)k * N + i];
     const real s = v > 0 ? S[(size_t)(k + 1) * N + i] : S[(size_t)k * N + i];

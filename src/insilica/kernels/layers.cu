@@ -418,10 +418,30 @@ extern "C" __global__ void lay_u(int E, const real* u0, const real* Tp, const re
 // negative moves down. Mass, tracer (upwind: the donor's value) and momentum (upwind, on edges) move together,
 // so every total is conserved. The caller keeps each donor above the floor.
 
-extern "C" __global__ void xch_cell(int N, int L, const real* wx, const real* areaCell, real* h, real* M, real* psi) {
+extern "C" __global__ void xch_cell(int N, int L, const real* wx, const real* areaCell, real* h, real* M, real* psi, int seq) {
   LOOP1(i, N)
   real tr[LMAX], dm[LMAX];
   for (int k = 0; k < L; k++) { tr[k] = 0; dm[k] = 0; }
+  if (seq) {                                // (#170) in the order water passes through (as xch_edge), each donor's tracer as it stands then
+    real m[LMAX], t[LMAX];
+    for (int k = 0; k < L; k++) { const size_t o = (size_t)k * N + i; m[k] = M[o]; t[k] = M[o] * psi[o]; }
+    for (int pass = 0; pass < 2; pass++)
+      for (int n = 0; n + 1 < L; n++) {
+        const int k = pass == 0 ? L - 2 - n : n;
+        const real v = wx[(size_t)k * N + i];
+        if (pass == 0 ? !(v > 0) : !(v < 0)) continue;
+        const int d = v > 0 ? k + 1 : k;
+        const real vol = v * areaCell[i], p = t[d] / m[d];
+        m[k] += vol; m[k + 1] -= vol; t[k] += vol * p; t[k + 1] -= vol * p;
+      }
+    for (int k = 0; k < L; k++) {
+      const size_t o = (size_t)k * N + i;
+      h[o] = h[o] + (m[k] - M[o]) / areaCell[i];
+      M[o] = m[k];
+      psi[o] = t[k] / m[k];
+    }
+    return;
+  }
   for (int k = 0; k + 1 < L; k++) {
     const real v = wx[(size_t)k * N + i];
     const real p = v > 0 ? psi[(size_t)(k + 1) * N + i] : psi[(size_t)k * N + i];

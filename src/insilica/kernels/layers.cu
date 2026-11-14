@@ -44,14 +44,16 @@ __device__ __forceinline__ real edge_h(real a, real b, real shelf) {
   return shelf > 0 && m < shelf ? m : (real)0.5 * (a + b);
 }
 
-// (V2-6d, #174) Which layers rest on the sea floor: layer k of cell i does when every layer below it is within twice its floor
-// (ob = 1), so the squeezed-layer handling (#97) reaches only layers a rising floor has pinched, never a thin mixed layer
-// over the open ocean. ob NULL (off): every thin layer counts as squeezed, as before.
+// (V2-6d, #174) Which layers count as squeezed (ob = 1): layer k of cell i rests on the sea floor (every layer below it within
+// twice its floor), or it and the layer below are both emptied to within twice the floor (a stack of empty layers, as on a shelf
+// whose water is all in the abyss), so the squeezed-layer handling (#97) never reaches a thin mixed layer over water below.
+// ob NULL (off): every thin layer counts as squeezed, as before.
 extern "C" __global__ void lay_onbed(int N, int L, const real* h, real floor_, real* ob) {
   LOOP1(i, N)
   real below = 0;
   for (int k = L - 1; k >= 0; k--) {
-    ob[(size_t)k * N + i] = below <= (L - 1 - k) * 2 * floor_ ? (real)1 : (real)0;
+    const bool stack = k + 1 < L && h[(size_t)k * N + i] < 2 * floor_ && h[(size_t)(k + 1) * N + i] < 2 * floor_;
+    ob[(size_t)k * N + i] = below <= (L - 1 - k) * 2 * floor_ || stack ? (real)1 : (real)0;
     below += h[(size_t)k * N + i];
   }
 }

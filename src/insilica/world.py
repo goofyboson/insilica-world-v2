@@ -127,6 +127,10 @@ class World:
             self.routing = LandWater(self.dg, self.b, self.land, self.soilcap, self.pond, self.soil, self.ice, rho_ice=p['rho_ice'])
             self.mouth = self.routing.mouth
             self.STATE = self.STATE + ('soil', 'pond', 'snow', 'mouth')
+            self.firn = None
+            if p['firn'] > 0:                                    # the firn's temperature (V2-6d, #160)
+                self.firn = cp.full(self.grid.N, p['Tf'])
+                self.STATE = self.STATE + ('firn',)
             self.cap = self.land * p['c_land'] + (1 - self.land) * p['c_slab']   # (the ocean's own when coupled)
             if p['cover'] > 0:                                   # land cover (V2-6b, #132)
                 if spec.get('cover') is None:
@@ -238,7 +242,7 @@ class World:
                                 qocean=self.sea.qocean if self.sea is not None else None,
                                 qsw=self.sea.qsw if self.sea is not None else None,
                                 land=self.land, soilcap=self.soilcap, soil=self.soil, pond=self.pond, snow=self.snow,
-                                cw=self.cw if self.moist else None, elev=self.b)
+                                cw=self.cw if self.moist else None, elev=self.b, firn=getattr(self, 'firn', None))
             if rec:
                 rec.post_column()
             if self.sea is not None:
@@ -332,6 +336,9 @@ class World:
             if self.moist:
                 e += (self.physics.p['Lv'] * float(cp.sum(A * cp.sum(self.h * self.q, axis=0)))
                       - self.physics.p['Lf'] * float(cp.sum(A * self.ice)))
+            if getattr(self, 'firn', None) is not None:              # (#160)
+                p = self.physics.p
+                e += p['c_ice'] * p['rho_firn'] * p['firn'] * float(cp.sum(A * (self.firn - p['Tf'])))
             return e
         return self.core.energy(self.h, self.u)
 
@@ -449,6 +456,8 @@ class World:
         w = cls(n=meta['n'], preset=meta['preset'], params=meta['params'],
                 state=(arrays['h'], arrays['b'], arrays['u'], extra))
         for k in w.STATE:
+            if k == 'firn' and k not in arrays:                  # (a save from before the firn: it starts at freezing)
+                continue
             a = arrays[k]
             if a.shape != getattr(w, k).shape or a.dtype != np.float64:
                 raise ValueError(f'save file array {k}: shape {a.shape} {a.dtype}, expected {getattr(w, k).shape} float64')

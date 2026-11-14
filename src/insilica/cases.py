@@ -280,7 +280,7 @@ PRESETS['aqua7'] = _aqua_n([420.0, 370.0, 345.0, 330.0, 317.0, 305.0], [0.8e4, 1
 # stress on the ocean (exact, in Ocean.couple), so the air's own bottom stress is off. Air steps must divide the hour.
 # Evaporation recalibrated for the ocean's surface (K_EVAP 4.8e-3 against the slab's 4e-3: 2.0 → ~2.3 mm/day; #80).
 PRESETS['coupled'] = dict(PRESETS['aqua'], stress=[0.0, 0.0, 0.0], ocean=dict(surface_drag=SURFACE_DRAG),
-                          air=dict(AIR, physics=dict(AIR3, moist=1.0, k_evap=4.8e-3)))
+                          air=dict(AIR, physics=dict(AIR3, moist=1.0, k_evap=4.8e-3, firn=2.0)))
 # One ocean basin (decision #79): the coupled world with a thin pole-to-pole wall at 180° that the ocean cannot cross, so
 # that gyres, western boundary currents and an east–west tilt of the equatorial thermocline can form; the air is unchanged.
 PRESETS['basin'] = dict(PRESETS['coupled'], ocean=dict(surface_drag=SURFACE_DRAG, walls=(180.0,)))
@@ -336,6 +336,14 @@ PRESETS['ridge'] = dict(PRESETS['aqua'], build=lambda g: _over_terrain(g, ridge_
 PRESETS['continent'] = dict(PRESETS['coupled'], build=lambda g: _over_terrain(g, continent_height(g)),
                             land=lambda g: continent_height(g) > 0)
 PRESETS['relief'] = dict(PRESETS['coupled'], build=lambda g: _over_terrain(g, relief_height(g)), land=lambda g: relief_height(g) > 0)
+# ICE's polar sheet (#162): relief with its land poleward of 68° raised 2 km, the surface of the sheet the test starts there (as on
+# `earth`, whose terrain is ETOPO1's ice surface: the air does not see the ice's own height, #87)
+def relief_ice_height(g):
+    b = relief_height(g)
+    return b + 2000.0 * ((b > 0) & (np.degrees(g.lat) > 68.0))
+
+
+PRESETS['relief_ice'] = dict(PRESETS['relief'], build=lambda g: _over_terrain(g, relief_ice_height(g)))
 
 
 _EARTH = {}
@@ -465,7 +473,7 @@ def earth_bed(g):
 # V2-6a (#109-#112): the k-tables' radiation, and the moist physics that put its troposphere on the observed profile (owner: option C):
 # the surface air's vapor (q_shape), freeze-drying, edge vapor, plumes rooted at the surface, entraining 0.1 per 100 hPa, their rain evaporating.
 PRESETS['earth'] = dict(PRESETS['coupled'], build=earth, land=lambda g: earth_land(g)[0], ocean=dict(surface_drag=SURFACE_DRAG, bed=earth_bed, land_drag=8.0),
-                        air=dict(AIR, longwave='ktables', physics=dict(AIR3, moist=1.0, k_evap=4.8e-3, plume_deep=1.0, sat_prof=1.0, bl_bot=0.25, cloud=1.0, tau0=1.3, land_exch=2.0,
+                        air=dict(AIR, longwave='ktables', physics=dict(AIR3, moist=1.0, k_evap=4.8e-3, firn=2.0, plume_deep=1.0, sat_prof=1.0, bl_bot=0.25, cloud=1.0, tau0=1.3, land_exch=2.0,
                                                                               q_shape=1.0, freeze_dry=1.0, edge_vap=1.0, plume_root=1.0, plume_ent=1e-5, conv_revap=0.05)))
 def earth4(g, rise=5.0e-3, bl=1.0e4):
     """The four-layer start (V2-6b, #113): earth's three layers with its bottom layer split, its lowest bl (Pa) the mixed
@@ -569,6 +577,23 @@ def earth7(g, lo=318.0, hi=350.0):
 # V2-6c (#155): the deep plume's IFS entrainment and detrainment through every tropospheric layer it crosses
 PRESETS['earth7'] = dict(PRESETS['earth6'], build=earth7, stress=[0.0] * 7,
                          air=dict(PRESETS['earth6']['air'], physics=dict(PRESETS['earth6']['air']['physics'], theta_stars=[500.0, 380.0, 330.0, 305.0, 204.0, 200.0], ice_sw=1.0, det_all=1.0, ml_clear=1.0, cu_cloud=2.0)))
+
+# V2-6d (#165, trial): earth7 over a five-layer ocean: the mixed layer (50 m at the start), the upper thermocline (150 m, 20 °C), the
+# lower thermocline (300 m, 12 °C), intermediate water (500 m, 6 °C) and the deep water (0 °C); density steps g' from the observed
+# classes σθ ≈ 22.5 | 25.0 | 26.6 | 27.3 | 27.8; fresh water diluting the local salt and mixing along the layers (#164, #165)
+PRESETS['earth7o5'] = dict(PRESETS['earth7'], ocean=dict(PRESETS['earth7']['ocean'], gprime=(0.024, 0.0153, 0.0067, 0.0048), h_layers=(50.0, 150.0, 300.0, 500.0),
+                                                         T_layers=(293.15, 285.15, 279.15), fw_local=1.0, kappa_h=1000.0))
+
+# V2-6d (#171, trial): earth7 over an eight-layer ocean of density classes (#169): the mixed layer, then water of 26, 22, 18, 14, 10
+# and 6 °C and the deep water at 2 °C (at 35 psu), fine enough near the top that the class under the tropical mixed layer is
+# close to it; the currents from each layer's own density (#166), the interfacial stress from the shear (#167), shear mixing at
+# the mixed layer's base (#168), the mixed layer reaching through emptied classes (#170), interior mixing κ_d 1e-5
+_C8 = (26.0, 22.0, 18.0, 14.0, 10.0, 6.0, 2.0)
+PRESETS['earth7o8'] = dict(PRESETS['earth7'], ocean=dict(PRESETS['earth7']['ocean'], gprime=(0.0096, 0.0115, 0.0099, 0.0083, 0.0067, 0.0052, 0.0036),
+                                                         h_layers=(50.0, 50.0, 75.0, 100.0, 150.0, 200.0, 400.0), T_layers=tuple(273.15 + t for t in _C8[:-1]),
+                                                         T_deep=273.15 + _C8[-1], T_classes=tuple(273.15 + t for t in _C8), fw_local=1.0, kappa_h=1000.0,
+                                                         kappa_d=1e-5, eos_currents=1.0, interface_stress=0.0, interface_cd=1e-3, ri_b=0.65, reach=1.0,
+                                                         bed_min=100.0))   # (eight layers at their 10 m floor need the shallowest sea deeper than 80 m)
 
 PRESETS['rce'] = dict(build=aqua_dry, dt=lambda n: 3600.0, air=dict(AIR, mean_sun=True, physics=AIR3), dynamics=False)
 

@@ -34,7 +34,7 @@ DIV_DAMP = 0.1              # divergence damping of the fast mode (decision #28)
 
 class Layers:
     def __init__(self, dg, layers=1, b=None, grav=GRAV, gprime=(), drag=0.0, stress=0.0, nu4=0.0, floor=1.0, rotation=1.0,
-                 div_damp=DIV_DAMP, air=None, vmix=0.0, thin=2.0, wall=None, thin_wind=0.0, shelf=0.0):
+                 div_damp=DIV_DAMP, air=None, vmix=0.0, thin=2.0, wall=None, thin_wind=0.0, shelf=0.0, vmix_cd=0.0, shelf_bed=False):
         """air: None for Boussinesq (ocean-like) layers, h in m; or a dict for air layers, h the layer's mass per area
         (kg/m²) with a potential temperature θ per layer passed to step() (decision #32). The fast mode then runs on
         the column mass with each cell's own coefficient Gc = R·T_s/μ (decision #37), at √(R·T_s). thin: the PV flux's cap on a
@@ -47,17 +47,20 @@ class Layers:
         self.grav, self.nu4, self.floor, self.div_damp, self.thin = grav, nu4, floor, div_damp, thin
         self.thin_wind = thin_wind
         self.shelf = shelf                                 # sea floor: layers thinner than this take the thinner side's thickness at an edge (#97)
+        self.ob = cp.zeros((layers, dg.N), dtype=dg.dtype) if shelf_bed and shelf > 0 else None   # (#174) only layers resting on the floor
         assert wall is None or not air, 'walls are for Boussinesq layers'
         self.wall = None if wall is None else cp.asarray(wall, dtype=dg.dtype)
         N, E, NV, L, dt = dg.N, dg.E, dg.NV, layers, dg.dtype
         z = lambda *s: cp.zeros(s, dtype=dt)
         self.b = z(N) if b is None else cp.asarray(b, dtype=dt)
+        self.sig = self.zm = None        # (#166: the ocean's per-cell layer buoyancy, set by its owner, and the layers' mid-heights)
         self.gp = cp.asarray(np.asarray(gprime, dtype=float).reshape(-1) if layers > 1 else np.zeros(1), dtype=dt)
         self.drag = cp.asarray(np.broadcast_to(np.asarray(drag, dtype=float), (layers,)), dtype=dt)
         self.stress = cp.asarray(np.broadcast_to(np.asarray(stress, dtype=float), (layers,)), dtype=dt)
         self.fV = dg.fV * rotation
         self.air = air
         self.vmix = vmix                    # interfacial stress coefficient c (decision #39), h-units/s
+        self.vmix_cd = vmix_cd              # (#167) its quadratic part: c = vmix_cd |Δu|
         self.zero = z(N)
         self.Gc = cp.full(N, float(grav))   # the fast mode's coefficient per cell: g, or for air R·T_s/μ
         if air:
@@ -76,7 +79,7 @@ class Layers:
         k = lambda n, f='layers.cu': dg.kernel(n, f)
         self.k = {n: k(n) for n in ('lay_eta', 'lay_ubar', 'lay_bern', 'air_bern', 'air_gfast', 'lay_slow', 'bt_eta', 'bt_u', 'lay_flux', 'lay_scale',
                                     'lay_limit', 'lay_h', 'lay_u', 'xch_cell', 'xch_edge', 'lay_vmix', 'vmix_heat', 'lay_edge_hq',
-                                    'air_stiff', 'af_muphi', 'af_u', 'af_flux', 'lay_mask')}
+                                    'air_stiff', 'af_muphi', 'af_u', 'af_flux', 'lay_mask', 'lay_onbed')}
         # lay_slow's gathers: each edge's (h_e, u, q_e) per layer packed together, and the PV weights, 32-bit when mixed (#106)
         self.pk = cp.zeros(3 * layers * dg.E, dtype=cp.float32 if dg.mixed else dg.dtype)
         self.wf = dg.w.astype(cp.float32) if dg.mixed else dg.w
@@ -128,15 +131,17 @@ class Layers:
             k['air_bern'](*c1, (N, E, i32(L), hs, us, theta, self.b, R(self.grav), R(CP_DRY), R(KAPPA), R(P0), self.S,
                                 g.cellEdge, g.le, g.de, g.rA, self.B, self.pibar))
         else:
-            k['lay_bern'](*c1, (N, E, i32(L), hs, us, self.b, self.gp, g.cellEdge, g.le, g.de, g.areaCell, self.B))
+            k['lay_bern'](*c1, (N, E, i32(L), hs, us, self.b, self.gp, g.cellEdge, g.le, g.de, g.areaCell, self.B,
+                                self.sig if self.sig is not None else NULL, self.zm if self.sig is not None else NULL))
         k['swe_vertex'](*grid_dims(g.NV, L), (N, E, NV, hs, us, g.vCell, g.vSlot, g.kite, g.vEdge, g.vEdgeSign, g.de, g.rAV,
                                               self.fV, self.q))
-        k['lay_edge_hq'](*grid_dims(g.E, L), (N, E, NV, hs, self.q, g.eI, g.eJ, g.ev1, g.ev2, R(self.shelf), us, self.hedge, self.pk))
+        k['lay_edge_hq'](*grid_dims(g.E, L), (N, E, NV, hs, self.q, g.eI, g.eJ, g.ev1, g.ev2, R(self.shelf), us, self.hedge, self.pk, self.ob if self.ob is not None else NULL))
         k['lay_slow'](*e1, (N, E, i32(L), self.pk, self.wf, self.hedge, us, self.B, g.eoeStart, g.eoe, g.eI, g.eJ, g.rde,
                             self.drag, self.stress, R(self.floor), R(self.nu4), self.L2 if self.nu4 else NULL,
                             theta if self.air else NULL,
                             self.pibar if self.air else NULL, R(c * dt), R(self.thin), R(self.shelf), self.Tp, self.G, self.He,
-                            self.ubs))
+                            self.ubs, self.sig if self.sig is not None else NULL, self.zm if self.sig is not None else NULL,
+                            self.ob if self.ob is not None else NULL))
         n = max(1, math.ceil(c * nfast))
         tau = R(c * dt / n)
         if self.air:
@@ -164,7 +169,7 @@ class Layers:
             self.mask(self.ub, 1)
             self.mask(self.acc, 1)
         # layers
-        k['lay_flux'](*eL, (N, E, hs, us, self.ubs, self.acc, R(1.0 / n), g.eI, g.eJ, R(self.shelf), self.F))
+        k['lay_flux'](*eL, (N, E, hs, us, self.ubs, self.acc, R(1.0 / n), g.eI, g.eJ, R(self.shelf), self.F, self.ob if self.ob is not None else NULL))
         self.mask(self.F, L)
         k['lay_scale'](*cL, (N, E, h0, self.F, g.cellEdgeAsc, g.eI, g.le, g.areaCell, R(c * dt), R(self.floor), self.scale))
         k['lay_limit'](*eL, (N, E, g.eI, g.eJ, self.scale, g.le, R(dt), self.F, Fm if Fm is not None else NULL))
@@ -181,7 +186,10 @@ class Layers:
             k['air_stiff'](*grid_dims(g.N), (i32(g.N), i32(L), h, theta, R(self.grav), R(CP_DRY), R(KAPPA), R(P0), self.S))
         else:
             k['lay_eta'](*grid_dims(g.N), (i32(g.N), i32(L), h, self.b, self.eta0))
-            k['lay_ubar'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(L), h, u, g.eI, g.eJ, self.real(self.shelf), self.ub0))
+            if self.ob is not None:
+                k['lay_onbed'](*grid_dims(g.N), (i32(g.N), i32(L), h, self.real(self.floor), self.ob))
+            k['lay_ubar'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(L), h, u, g.eI, g.eJ, self.real(self.shelf), self.ub0,
+                                            self.ob if self.ob is not None else NULL))
             self.mask(self.ub0, 1)
         if self.nu4:
             self._lap(u, self.L1)
@@ -190,15 +198,15 @@ class Layers:
         self._stage(h, u, h, u, 1 / 3, dt, nfast, self.h1, self.u1, theta=theta)
         self._stage(self.h1, self.u1, h, u, 1 / 2, dt, nfast, self.h2, self.u2, theta=theta)
         self._stage(self.h2, self.u2, h, u, 1.0, dt, nfast, h, u, Fm, theta=theta)
-        if self.vmix and L > 1:
-            k['lay_vmix'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(L), h, g.eI, g.eJ, self.real(self.vmix), self.real(dt), u, self.diss))
+        if (self.vmix or self.vmix_cd) and L > 1:
+            k['lay_vmix'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(L), h, g.eI, g.eJ, self.real(self.vmix), self.real(dt), u, self.diss, self.real(self.vmix_cd)))
             self.mask(u, L)
             if self.air:
                 R = self.real
                 k['vmix_heat'](*grid_dims(g.N), (i32(g.N), i32(L), h, self.diss, g.cellEdge, g.le, g.de, g.areaCell, R(self.grav),
                                                  R(CP_DRY), R(KAPPA), R(P0), theta))
 
-    def exchange(self, wx, h, u, M, psi, theta=None):
+    def exchange(self, wx, h, u, M, psi, theta=None, seq=False):
         """Move thickness wx (L−1, N; m, positive upward across the interface below layer k) between layers with
         its tracer and momentum, conservatively (upwind). The caller keeps donors above the floor. For air (theta
         given) the kinetic energy the momentum mixing removed warms the column (decision #73), with the last step's ∇⁴
@@ -207,7 +215,7 @@ class Layers:
         hold = self.hold
         cp.copyto(hold, h)
         heat = self.air and theta is not None
-        k['xch_cell'](*grid_dims(g.N), (i32(g.N), i32(self.L), wx, g.areaCell, h, M, psi))
+        k['xch_cell'](*grid_dims(g.N), (i32(g.N), i32(self.L), wx, g.areaCell, h, M, psi, i32(1 if seq else 0)))
         v4 = heat and self.nu4 != 0
         k['xch_edge'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(self.L), wx, hold, g.eI, g.eJ, u, self.diss if heat else NULL,
                                          self.L2 if v4 else NULL, self.real(self.nu4dt if v4 else 0.0),

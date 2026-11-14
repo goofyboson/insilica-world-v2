@@ -21,6 +21,13 @@
 typedef REAL real;
 #define LMAX 8
 #define LOOP1(i, n) const int i = blockIdx.x * blockDim.x + threadIdx.x; if (i >= (n)) return;
+#if defined(MIXED)
+typedef float fast;                                              // the waves' spectrum arithmetic (#106; the deposits stay real)
+#define FEXP(x) expf(x)
+#else
+typedef real fast;
+#define FEXP(x) exp(x)
+#endif
 
 struct Oro { real grav, p0, kappa, rd, G, cd, hnc, ric, dt, mu_min; };
 
@@ -234,30 +241,37 @@ extern "C" __global__ void gw_cell(int N, int E, int L, const real* mu, const re
   const real us = U[ks], rhos = psrc / (rd * T[ks]), Hs = rd * T[ks] / grav;
   const real wc = nn[ks] * kw / sqrt(kw * kw + (real)0.25 / (Hs * Hs));
   const int nc = (int)round(2 * cmax / dc) + 1;
+  const fast usf = (fast)us, cwf = (fast)cw, cmf = (fast)cmax, dcf = (fast)dc, ln2 = (fast)LN2, kwf = (fast)kw, wcf = (fast)wc;
+  fast Uf[LMAX], thr[LMAX];                                    // each layer's wind and its saturation threshold
+  for (int k = 0; k < L; k++) {
+    Uf[k] = (fast)U[k];
+    const real rho = fmax(pt[k], (real)1) / (rd * T[k]);       // at the layer's top
+    thr[k] = (fast)((real)0.5 * (rho / rhos) * kw / nn[k]);
+  }
   real bsum = 0;
   for (int n = 0; n < nc; n++) {
-    const real c = -cmax + n * dc, x = (c - us) / cw;
-    if (c != us) bsum += exp(-LN2 * x * x);
+    const fast c = -cmf + n * dcf, x = (c - usf) / cwf;
+    if (c != usf) bsum += FEXP(-ln2 * x * x);
   }
   if (bsum <= 0) return;
   const real amp = bt / bsum;
   real dep[LMAX];
   for (int k = 0; k < L; k++) dep[k] = 0;
   for (int n = 0; n < nc; n++) {
-    const real c = -cmax + n * dc, cs = c - us;
-    if (cs == 0 || fabs(cs) * kw >= wc) continue;             // (no wave, or reflected)
-    const real x = cs / cw, s = cs > 0 ? (real)1 : (real)-1;
-    const real b0 = s * exp(-LN2 * x * x);                     // m^2/s^2, before scaling
+    const fast c = -cmf + n * dcf, cs = c - usf;
+    if (cs == 0 || fabs(cs) * kwf >= wcf) continue;           // (no wave, or reflected)
+    const fast x = cs / cwf, sf = cs > 0 ? (fast)1 : (fast)-1;
+    const fast b0 = sf * FEXP(-ln2 * x * x);                   // m^2/s^2, before scaling
     int kd = 0;
     for (int k = ks; k >= 1; k--) {
-      const real cu = c - U[k];
+      const fast cu = c - Uf[k];
       if (cs * cu <= 0) { kd = k + 1; break; }                 // past its critical level: it ended in the layer below
-      const real rho = fmax(pt[k], (real)1) / (rd * T[k]);     // at the layer's top
-      if (b0 / (cu * cu * cu) >= (real)0.5 * (rho / rhos) * kw / nn[k]) { kd = k; break; }
+      if (b0 / (cu * cu * cu) >= thr[k]) { kd = k; break; }
     }
-    if (kd == 0 && s * (c - U[0]) <= 0) kd = 1;                // (the top layer already past c)
+    if (kd == 0 && sf * (c - Uf[0]) <= 0) kd = 1;              // (the top layer already past c)
+    const real s = sf;
     const real room = fmax((real)0, s * (c - U[kd]) * mu[(size_t)kd * N + i] / dt - s * dep[kd]);
-    dep[kd] += s * fmin(fabs(amp * b0), room);
+    dep[kd] += s * fmin(fabs(amp * (real)b0), room);
   }
   real net = 0;
   for (int k = 0; k < L; k++) net += dep[k];

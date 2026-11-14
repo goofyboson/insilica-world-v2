@@ -31,7 +31,8 @@ ALPHA_REF = 2.0e-4                                              # 1/K: dTmin's b
 OCEAN = dict(depth=4000.0, h_mixed=100.0, h_thermo=600.0, T_thermo=293.15, T_deep=273.15, alpha=0.52e-4, alpha2=1.0e-5, beta=7.6e-4, S_ref=35.0, rho=1025.0, cw=3990.0, dt=3600.0, mix_dt=86400.0,
              gprime=(0.016, 0.016),
              hmin=10.0, hmax=1000.0, dTmin=0.1, m_kt=0.5, n_kt=0.2, visc4_U=0.5, bottom_stress=2.5e-4,
-             interface_stress=5.0e-4, thin=2.0, walls=(), sw_R=0.58, sw_z1=0.35, sw_z2=23.0, land_drag=1.0, bed=None, bed_min=50.0, shelf=50.0, h_layers=None)
+             interface_stress=5.0e-4, thin=2.0, walls=(), sw_R=0.58, sw_z1=0.35, sw_z2=23.0, land_drag=1.0, bed=None, bed_min=50.0, shelf=50.0, h_layers=None,
+             kappa_d=0.0, dwf=0.0, kappa_h=0.0, fw_local=0.0, eos_currents=0.0, interface_cd=0.0, ri_b=0.0, T_classes=None, classes_top=1.0, reach=0.0, h_ent=0.0, shelf_bed=0.0)   # crossing the interior interfaces (V2-6d, #163: mixing m2/s, deep-water formation), mixing along the layers (#164, m2/s), fresh water with its volume (#165); all off
 
 
 def wall_mask(g, walls):
@@ -78,7 +79,8 @@ class Ocean:
             self.wall = m
             self.land = cp.asarray(np.asarray(land, dtype=float))
         self.core = Layers(dg, L, b=self.b, gprime=list(c['gprime']), stress=[0.0] * (L - 1) + [c['bottom_stress']], nu4=nu4,
-                           floor=c['hmin'], vmix=c['interface_stress'], thin=c['thin'], wall=self.wall, shelf=c['shelf'] if c['bed'] is not None else 0.0)
+                           floor=c['hmin'], vmix=c['interface_stress'], vmix_cd=c['interface_cd'], thin=c['thin'], wall=self.wall, shelf=c['shelf'] if c['bed'] is not None else 0.0,
+                           shelf_bed=c['shelf_bed'] > 0)
         if nu4:
             lam = self.core.lap_max()
             assert nu4 * lam * lam * c['dt'] <= 1.0, 'ocean nu4 unstable at its step'
@@ -100,6 +102,8 @@ class Ocean:
             u = np.zeros((L, E))
             # the layers between: evenly from T_thermo to the abyss's T_deep, no warmer than the surface
             Tk = [c['T_thermo'] + (c['T_deep'] - c['T_thermo']) * (k - 1) / (L - 2) for k in range(1, L - 1)] if L > 2 else []
+            if c.get('T_layers'):                              # (#165) each layer's own start, for layers 1 … L−2
+                Tk = list(c['T_layers'])
             T = np.stack([Ts] + [np.clip(Ts, c['T_deep'], t) for t in Tk] + [np.full(N, c['T_deep'])])
             S = np.full((L, N), c['S_ref'])
         else:
@@ -128,7 +132,16 @@ class Ocean:
         self.mix_every = int(round(ratio))
         k = lambda n: dg.kernel(n, 'ocean.cu')
         self.k = {n: k(n) for n in ('couple_stress', 'ocn_column', 'ocn_cap', 'ocn_overturn', 'ocn_pen', 'ocn_fresh', 'ocn_xch_salt',
-                                    'ocn_heat', 'ocn_ground')}
+                                    'ocn_heat', 'ocn_ground', 'ocn_diffuse', 'ocn_sigma', 'ocn_classes')}
+        self.Tc = None
+        if c.get('T_classes'):                                  # (#169) density classes for layers 1 … L−1, by temperature at S_ref
+            assert len(c['T_classes']) == L - 1, 'one class temperature per layer below the mixed layer'
+            self.Tc = cp.asarray(np.array([0.0] + list(c['T_classes']), dtype=float))
+            self._wc, self._Tsc = z(L - 1, N), z(L, N)
+        if c['eos_currents'] > 0:                                # (#166) the currents feel each layer's own density
+            self.core.sig, self.core.zm = z(L, N), z(L, N)
+        self._Tn, self._Sn = z(L, N), z(L, N)                   # (ocn_diffuse's out)
+        self._du, self.shear = (z(E), z(N)) if c["ri_b"] > 0 else (None, None)   # (#168) the velocity jump at the mixed layer's base
         self.conv = None                                        # the currents' heat convergence, when tracked
         self.k['cell_speed'] = dg.kernel('cell_speed', 'air.cu')
         self.update_cap()
@@ -178,7 +191,8 @@ class Ocean:
         g, c, R = self.dg, self.cfg, self.dg.dtype.type
         if evap is not None:
             self.k['ocn_fresh'](*grid_dims(g.N), (np.int32(g.N), self.h, self.S, evap, rain, ice, self.ice_prev, R(c['S_ref']),
-                                                 R(c['rho']), R(dt), self.fw_acc, self._land(), mouth if mouth is not None else NULL))
+                                                 R(c['rho']), R(dt), self.fw_acc, self._land(), mouth if mouth is not None else NULL, R(c['fw_local']),
+                                                 self.h, self.M, g.areaCell))
         self.k['ocn_pen'](*grid_dims(g.N), (np.int32(g.N), np.int32(self.L), self.h, self.T, self.qocean, self.qsw, R(c['rho'] * c['cw']),
                                            R(c['sw_R']), R(c['sw_z1']), R(c['sw_z2']), R(dt), self.q_acc, self.sun_acc, self._land()))
 
@@ -189,6 +203,8 @@ class Ocean:
         self.k['ocn_overturn'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.T, self.S) + self.eos() + (self._land(),))
         if self.conv is not None:
             self._heat(-1.0)
+        if self.core.sig is not None:
+            self.k['ocn_sigma'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.T, self.S) + self.eos() + (R(c['S_ref']), self.core.sig))
         self.core.step(self.h, self.u, c['dt'], self.nfast, self._Fm)
         self.tr.mass_after(self.M, self._Fm, self._M1)
         self.tr.step_many(self.M, self._M1, self._Fm, [self.T, self.S], order=3)     # (the heat below touches T only)
@@ -203,15 +219,33 @@ class Ocean:
         self.tau_acc *= 1.0 / dt                               # in place: the tick is captured as a CUDA graph
         cp.sqrt(self.tau_acc, out=self.tau_acc)
         self.k['cell_speed'](*grid_dims(g.N), (i32(g.N), self.tau_acc, g.cellEdge, g.le, g.de, g.areaCell, self.taum))
+        if c['kappa_h'] > 0:                                   # mixing along the layers (#164), over the interval
+            self.k['ocn_diffuse'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.T, self.S, self._Tn, self._Sn, g.cellEdge, g.eI, g.eJ,
+                                                    g.le, g.de, g.areaCell, self.core.wall if self.core.wall is not None else NULL,
+                                                    R(c['kappa_h']), R(dt)))
+            cp.copyto(self.T, self._Tn)
+            cp.copyto(self.S, self._Sn)
         self.q_acc /= dt
         self.sun_acc /= dt
         self.fw_acc /= dt
+        if self.shear is not None:
+            cp.subtract(self.u[0], self.u[1], out=self._du)
+            self.k['cell_speed'](*grid_dims(g.N), (i32(g.N), self._du, g.cellEdge, g.le, g.de, g.areaCell, self.shear))
         self.k['ocn_column'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.T, self.S, self.taum, self.q_acc, self.fw_acc,
                                                self.sun_acc) + self.eos() + (R(c['S_ref']), R(ALPHA_REF), R(c['rho']), R(c['cw']),
                                                R(c['m_kt']), R(c['n_kt']), R(c['hmin']), R(c['hmax']), R(c['dTmin']), R(c['sw_R']),
-                                               R(c['sw_z1']), R(c['sw_z2']), R(dt), self.wx, self._land()))
-        self.k['ocn_xch_salt'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.wx, self.h, self.S))
-        self.core.exchange(self.wx, self.h, self.u, self.M, self.T)
+                                               R(c['sw_z1']), R(c['sw_z2']), R(dt), self.wx, self._land(), R(c['kappa_d']), R(c['dwf']),
+                                               self.shear if self.shear is not None else NULL, R(c['ri_b']), R(c['reach']), R(c['h_ent'])))
+        seq = c['reach'] > 0
+        self.k['ocn_xch_salt'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.wx, self.h, self.S, i32(1 if seq else 0)))
+        self.core.exchange(self.wx, self.h, self.u, self.M, self.T, seq=seq)
+        if self.Tc is not None:                                 # (#169) water crossing into the class its density now belongs to
+            self.k['ocn_classes'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.T, self.S, self.Tc) + self.eos()
+                                  + (R(c['S_ref']), R(c['hmin']), R(271.0), self._land(), self._wc, self._Tn, self._Sn, R(c['classes_top'])))
+            cp.copyto(self._Tsc, self.T)
+            self.core.exchange(self._wc, self.h, self.u, self.M, self._Tsc)
+            cp.copyto(self.T, self._Tn)
+            cp.copyto(self.S, self._Sn)
         self.tau_acc.fill(0)
         self.q_acc.fill(0)
         self.sun_acc.fill(0)
@@ -219,13 +253,15 @@ class Ocean:
         self.update_cap()
 
     def heat(self):
-        """The ocean's heat content (J, relative to 0 K): ρ_w c_w Σ A h T."""
+        """The ocean's heat content (J): ρ_w c_w Σ A h (T − 273.15 K). Relative to T_REF (v1 §18 #12), so water arriving or leaving
+        with its volume (#165: rain, evaporation, rivers, sea ice; 0 K made each kilogram of melt water 1.1 MJ) carries only its
+        heat above freezing; with a fixed volume it differs from the 0 K form by a constant."""
         A = cp.asarray(self.dg.host.areaCell)
         rc = self.cfg['rho'] * self.cfg['cw']
         if self.land is None:
-            return float(cp.sum(A * cp.sum(self.h * self.T, axis=0))) * rc
+            return float(cp.sum(A * cp.sum(self.h * (self.T - 273.15), axis=0))) * rc
         ground = self.cap * (self.T[0] - 273.15) + (self.c_deep * (self.T[1] - 273.15) if self.c_deep > 0 else 0.0)
-        return float(cp.sum(A * ((1 - self.land) * rc * cp.sum(self.h * self.T, axis=0) + self.land * ground)))
+        return float(cp.sum(A * ((1 - self.land) * rc * cp.sum(self.h * (self.T - 273.15), axis=0) + self.land * ground)))
 
     def salt(self):
         """The ocean's salt (kg): ρ_w Σ A h S / 1000."""

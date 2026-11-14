@@ -54,7 +54,6 @@ struct Par {
   real ml_clear;                                  // the mixed layer's cloud only where its air is saturated, no subgrid spread (V2-6c, #157)
   real firn, k_firn, rho_firn, c_ice;   // firn (V2-6d, #160): its depth (m; 0 off), conductivity, density, the ice's heat capacity
   real lw_refl;                         // (V2-6d, #175) the surface reflects 1 - eps_s of the longwave reaching it (Kirchhoff), absorbing eps_s
-  real ice_fall;                        // (V2-6d, #177) ice falls out of its cloud's own depth, the mu_cloud sheet cover_of spreads it in
   real cu_cloud;                                  // with ml_clear: the thermals' cloud above their condensation level, in the cumulus layer (V2-6c, #158)
   real bare_fx;                                   // bare soil evaporates as (wet / full)^bare_fx, Noah's direct soil evaporation (V2-6c, #148); 0: as the plants'
   real buoy_v;                                    // the plumes' buoyancy in virtual theta, theta (1 + 0.608 q) (V2-6c, #145)
@@ -74,7 +73,7 @@ __device__ Par unpack(const real* a) {
   P.kappa = a[15]; P.p0 = a[16]; P.tilt = a[17]; P.year_s = a[18]; P.day_s = a[19]; P.tau_lin = a[20]; P.theta_star2 = a[21];
   P.moist = a[22]; P.Lv = a[23]; P.Lf = a[24]; P.Tf = a[25]; P.k_evap = a[26]; P.tau_conv = a[27]; P.alb_ice = a[28];
   P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32]; P.sat_layer = a[33]; P.sw_tau = a[34];
-  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; P.plume_ent = a[78]; P.l_ice = a[79]; P.storm_area = a[80]; P.graupel_v = a[81]; P.ice_small = a[82]; P.q_shape = a[83]; P.edge_heat = a[84]; P.freeze_dry = a[85]; P.edge_vap = a[86]; P.conv_revap = a[87]; P.plume_root = a[88]; P.bl_q = a[89]; P.sfc = a[90]; P.z0_land = a[91]; P.downdraft = a[92]; P.ent_cloud = a[93]; P.c_deep = a[94]; P.rs_max = a[95]; P.rs_sun = a[96]; P.q_sea = a[97]; P.bl_reach = a[98]; P.dry_edge = a[99]; P.bl_lcl = a[100]; P.edge_k = (int)a[101]; P.ice_air = a[102]; P.revap = a[103]; P.revap_rhs = a[104]; P.revap_rhl = a[105]; P.revap_area = a[106]; P.root_q = a[107]; P.ent_det = a[108]; P.ent_ifs = a[109]; P.shallow = a[110]; P.cu_dth = a[111]; P.cu_dp = a[112]; P.buoy_v = a[113]; P.cu_sub = a[114]; P.bare_fx = a[115]; P.det_all = a[116]; P.cl_float = a[117]; P.ml_clear = a[118]; P.cu_cloud = a[119]; P.firn = a[120]; P.k_firn = a[121]; P.rho_firn = a[122]; P.c_ice = a[123]; P.lw_refl = a[124]; P.ice_fall = a[125]; P.bl_room = (real)1e30; for (int j = 0; j < LMAX; j++) P.ths[j] = a[126 + j];
+  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; P.plume_ent = a[78]; P.l_ice = a[79]; P.storm_area = a[80]; P.graupel_v = a[81]; P.ice_small = a[82]; P.q_shape = a[83]; P.edge_heat = a[84]; P.freeze_dry = a[85]; P.edge_vap = a[86]; P.conv_revap = a[87]; P.plume_root = a[88]; P.bl_q = a[89]; P.sfc = a[90]; P.z0_land = a[91]; P.downdraft = a[92]; P.ent_cloud = a[93]; P.c_deep = a[94]; P.rs_max = a[95]; P.rs_sun = a[96]; P.q_sea = a[97]; P.bl_reach = a[98]; P.dry_edge = a[99]; P.bl_lcl = a[100]; P.edge_k = (int)a[101]; P.ice_air = a[102]; P.revap = a[103]; P.revap_rhs = a[104]; P.revap_rhl = a[105]; P.revap_area = a[106]; P.root_q = a[107]; P.ent_det = a[108]; P.ent_ifs = a[109]; P.shallow = a[110]; P.cu_dth = a[111]; P.cu_dp = a[112]; P.buoy_v = a[113]; P.cu_sub = a[114]; P.bare_fx = a[115]; P.det_all = a[116]; P.cl_float = a[117]; P.ml_clear = a[118]; P.cu_cloud = a[119]; P.firn = a[120]; P.k_firn = a[121]; P.rho_firn = a[122]; P.c_ice = a[123]; P.lw_refl = a[124]; P.bl_room = (real)1e30; for (int j = 0; j < LMAX; j++) P.ths[j] = a[125 + j];
   return P;
 }
 
@@ -1247,15 +1246,12 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
       real pt_ = 0;
       for (int j = 0; j < k; j++) pt_ += P.grav * mu[j];
       const real pm = pt_ + (real)0.5 * P.grav * mu[k], Tk = pib[k] * th[k] / P.cp, depth = mu[k] / (pm / (287.0 * Tk));
-      // ice_fall (#177): the ice sits in the sheet cover_of and inc spread it in, a depth mu_cloud of the layer's mass, and falls out of that
-      // sheet's base; it then crosses the clear air below as snow (sublimating there, revap). Off: it falls through the whole layer's depth
-      const real dice_ = P.ice_fall > 0 ? depth * fmin((real)1, P.mu_cloud / mu[k]) : depth;
-      const real rate = liq[k] * P.c_auto * OMEXP(r * r) + (1 - liq[k]) * P.v_ice / dice_;
+      const real rate = liq[k] * P.c_auto * OMEXP(r * r) + (1 - liq[k]) * P.v_ice / depth;
       const real loss = cl[k] * OMEXP(rate * dt);
       cl[k] -= loss;
       Fr += mu[k] * loss / dt;
       if (icy) {
-        const real fz = rate > 0 ? fmin((real)1, (1 - liq[k]) * P.v_ice / dice_ / rate) : (real)0, dz = loss * fz;
+        const real fz = rate > 0 ? fmin((real)1, (1 - liq[k]) * P.v_ice / depth / rate) : (real)0, dz = loss * fz;
         Fs += mu[k] * dz / dt;
         th[k] += P.Lf * dz / pib[k];
         dth[k] += P.Lf * dz / pib[k];

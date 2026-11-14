@@ -32,7 +32,7 @@ OCEAN = dict(depth=4000.0, h_mixed=100.0, h_thermo=600.0, T_thermo=293.15, T_dee
              gprime=(0.016, 0.016),
              hmin=10.0, hmax=1000.0, dTmin=0.1, m_kt=0.5, n_kt=0.2, visc4_U=0.5, bottom_stress=2.5e-4,
              interface_stress=5.0e-4, thin=2.0, walls=(), sw_R=0.58, sw_z1=0.35, sw_z2=23.0, land_drag=1.0, bed=None, bed_min=50.0, shelf=50.0, h_layers=None,
-             kappa_d=0.0, dwf=0.0, kappa_h=0.0, fw_local=0.0, eos_currents=0.0, interface_cd=0.0, ri_b=0.0, T_classes=None, classes_top=1.0, reach=0.0, h_ent=0.0)   # crossing the interior interfaces (V2-6d, #163: mixing m2/s, deep-water formation), mixing along the layers (#164, m2/s), fresh water with its volume (#165); all off
+             kappa_d=0.0, dwf=0.0, kappa_h=0.0, fw_local=0.0, eos_currents=0.0, interface_cd=0.0, ri_b=0.0, T_classes=None, classes_top=1.0, reach=0.0, h_ent=0.0, shelf_bed=0.0)   # crossing the interior interfaces (V2-6d, #163: mixing m2/s, deep-water formation), mixing along the layers (#164, m2/s), fresh water with its volume (#165); all off
 
 
 def wall_mask(g, walls):
@@ -79,7 +79,8 @@ class Ocean:
             self.wall = m
             self.land = cp.asarray(np.asarray(land, dtype=float))
         self.core = Layers(dg, L, b=self.b, gprime=list(c['gprime']), stress=[0.0] * (L - 1) + [c['bottom_stress']], nu4=nu4,
-                           floor=c['hmin'], vmix=c['interface_stress'], vmix_cd=c['interface_cd'], thin=c['thin'], wall=self.wall, shelf=c['shelf'] if c['bed'] is not None else 0.0)
+                           floor=c['hmin'], vmix=c['interface_stress'], vmix_cd=c['interface_cd'], thin=c['thin'], wall=self.wall, shelf=c['shelf'] if c['bed'] is not None else 0.0,
+                           shelf_bed=c['shelf_bed'] > 0)
         if nu4:
             lam = self.core.lap_max()
             assert nu4 * lam * lam * c['dt'] <= 1.0, 'ocean nu4 unstable at its step'

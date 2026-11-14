@@ -44,11 +44,27 @@ __device__ __forceinline__ real edge_h(real a, real b, real shelf) {
   return shelf > 0 && m < shelf ? m : (real)0.5 * (a + b);
 }
 
-extern "C" __global__ void lay_ubar(int N, int E, int L, const real* h, const real* u, const int* eI, const int* eJ, real shelf, real* ubar) {
+// (V2-6d, #174) Which layers rest on the sea floor: layer k of cell i does when every layer below it is within twice its floor
+// (ob = 1), so the squeezed-layer handling (#97) reaches only layers a rising floor has pinched, never a thin mixed layer
+// over the open ocean. ob NULL (off): every thin layer counts as squeezed, as before.
+extern "C" __global__ void lay_onbed(int N, int L, const real* h, real floor_, real* ob) {
+  LOOP1(i, N)
+  real below = 0;
+  for (int k = L - 1; k >= 0; k--) {
+    ob[(size_t)k * N + i] = below <= (L - 1 - k) * 2 * floor_ ? (real)1 : (real)0;
+    below += h[(size_t)k * N + i];
+  }
+}
+__device__ __forceinline__ real shelf_at(const real* ob, int N, int k, int i, int j, real shelf) {
+  return !ob || ob[(size_t)k * N + i] > 0 || ob[(size_t)k * N + j] > 0 ? shelf : (real)0;
+}
+
+extern "C" __global__ void lay_ubar(int N, int E, int L, const real* h, const real* u, const int* eI, const int* eJ, real shelf, real* ubar,
+                                    const real* ob) {
   LOOP1(e, E)
   real H = 0, U = 0;
   for (int k = 0; k < L; k++) {
-    const real he = edge_h(h[(size_t)k * N + eI[e]], h[(size_t)k * N + eJ[e]], shelf);
+    const real he = edge_h(h[(size_t)k * N + eI[e]], h[(size_t)k * N + eJ[e]], shelf_at(ob, N, k, eI[e], eJ[e], shelf));
     H += he;
     U += he * u[(size_t)k * E + e];
   }
@@ -231,10 +247,10 @@ extern "C" __global__ void air_gfast(int N, int L, const real* h, const real* th
 // Per stage: each edge's layer thickness h_e and potential vorticity q_e (the mean of its two vertices), read by
 // lay_slow for every neighbour instead of being recomputed from cells and vertices there: packed with the edge's wind.
 extern "C" __global__ void lay_edge_hq(int N, int E, int NV, const real* h, const real* q, const int* eI, const int* eJ,
-                                       const int* ev1, const int* ev2, real shelf, const real* u, real* he, fast* pk) {
+                                       const int* ev1, const int* ev2, real shelf, const real* u, real* he, fast* pk, const real* ob) {
   LOOP(e, E)
   const size_t o = (size_t)l * E + e;
-  const real hv = edge_h(h[(size_t)l * N + eI[e]], h[(size_t)l * N + eJ[e]], shelf);
+  const real hv = edge_h(h[(size_t)l * N + eI[e]], h[(size_t)l * N + eJ[e]], shelf_at(ob, N, l, eI[e], eJ[e], shelf));
   const real qv = (real)0.5 * (q[(size_t)l * NV + ev1[e]] + q[(size_t)l * NV + ev2[e]]);
   he[o] = hv;
   fast* pp = pk + ((size_t)e * gridDim.y + l) * 3;   // for lay_slow's gathers: [edge][layer][h_e, u, q_e]
@@ -250,7 +266,7 @@ extern "C" __global__ void lay_slow(int N, int E, int L, const fast* pk, const f
                                     const real* de, const real* drag, const real* stress,
                                     real floor_, real nu4, const real* lap4, const real* theta, const real* pibar,
                                     real dts, real thin, real shelf, real* Tp, real* G, real* He, real* ubs,
-                                    const real* sig, const real* zm) {
+                                    const real* sig, const real* zm, const real* ob) {
   LOOP1(e, E)
   real T[LMAX], hev[LMAX], sqk[LMAX];
   real H = 0, U = 0, GT = 0;
@@ -274,7 +290,8 @@ extern "C" __global__ void lay_slow(int N, int E, int L, const fast* pk, const f
     }
     // a squeezed layer's interfaces there are the floor's slope, not a pressure force: it fades with the layer, gone at twice the floor, and the
     // floor's step stops the water that is left within hours
-    const real sq0 = shelf > 0 && he < shelf ? (he - 2 * floor_ > 0 ? (he - 2 * floor_) / (shelf - 2 * floor_) : (real)0) : (real)1;
+    const real shk = shelf_at(ob, N, k, eI[e], eJ[e], shelf);
+    const real sq0 = shk > 0 && he < shk ? (he - 2 * floor_ > 0 ? (he - 2 * floor_) / (shk - 2 * floor_) : (real)0) : (real)1;
     // (air, V2-6b: a layer squeezed against the ground keeps its own forces here and takes its neighbours' below)
     const real sq = theta ? (real)1 : sq0;
     sqk[k] = sq0;
@@ -357,9 +374,9 @@ extern "C" __global__ void bt_u(int E, const real* eta, const real* eta_prev, re
 // Layer thickness fluxes for the stage: each layer's baroclinic flux plus its share of the barotropic transport,
 // F_k = h_e,k (u_k - ubar*) + h_e,k ubar_avg, so sum_k F_k = H_e ubar_avg, the transport the fast mode moved.
 extern "C" __global__ void lay_flux(int N, int E, const real* h, const real* u, const real* ubs, const real* acc, real inv_n,
-                                    const int* eI, const int* eJ, real shelf, real* F) {
+                                    const int* eI, const int* eJ, real shelf, real* F, const real* ob) {
   LOOP(e, E)
-  const real he = edge_h(h[(size_t)l * N + eI[e]], h[(size_t)l * N + eJ[e]], shelf);
+  const real he = edge_h(h[(size_t)l * N + eI[e]], h[(size_t)l * N + eJ[e]], shelf_at(ob, N, l, eI[e], eJ[e], shelf));
   F[(size_t)l * E + e] = he * (u[(size_t)l * E + e] - ubs[e]) + he * (acc[e] * inv_n);
 }
 

@@ -16,7 +16,8 @@ sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parents[1]
 from insilica.world import World  # noqa: E402
 
 GROUPS = {'core': 'air dynamics', 'tr': 'transport', 'physics': 'air column physics', 'sea': 'ocean physics',
-          'sea.core': 'ocean dynamics', 'sea.tr': 'ocean transport', 'routing': 'land water and ice'}
+          'sea.core': 'ocean dynamics', 'sea.tr': 'ocean transport', 'routing': 'land water and ice',
+          'gw': 'wave and mountain drag', 'oro': 'wave and mountain drag'}
 
 
 class Timed:
@@ -43,6 +44,10 @@ def instrument(w, log):
             continue
         for name, k in list(obj.k.items()):
             obj.k[name] = Timed(k, (GROUPS[path], name), log)
+    for part, attrs in (('lw', ('ks', 'k')), ('sw', ('k',))):        # the radiation's kernels (hourly; V2-6a)
+        r = getattr(getattr(w, 'physics', None), part, None)
+        for a in attrs if r is not None else ():
+            setattr(r, a, Timed(getattr(r, a), ('radiation', f'{part}.{a}'), log))
 
 
 def main():

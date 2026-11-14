@@ -267,3 +267,36 @@ def test_earth_budget(record):
            'global within 15%; maximum within 10° of latitude; each 10° band 50°S–50°N within 30%', okr,
            title="RAIN earth7's rain against GPCP (V2-6c, SPEC #134; earth6 since #142, earth7 since #153)")
     assert ok and okw and okr
+
+
+@pytest.mark.xdist_group('grid4')
+def test_orbit(record):
+    """ORBIT Earth's elliptical orbit (V2-6e, SPEC #184): the kernels' Kepler solution against the orbit's own numbers"""
+    from insilica.atmosphere import PAR_ORDER
+    e, lp, Y = 0.0167, np.radians(282.9), 365.0
+
+    def lon(t):                                       # reference: Kepler's equation, Newton to convergence
+        E0 = 2 * np.arctan(np.sqrt((1 - e) / (1 + e)) * np.tan(-lp / 2))
+        M = E0 - e * np.sin(E0) + 2 * np.pi * t / Y
+        E = M.copy()
+        for _ in range(8):
+            E = E - (E - e * np.sin(E) - M) / (1 - e * np.cos(E))
+        return 2 * np.arctan2(np.sqrt(1 + e) * np.sin(E / 2), np.sqrt(1 - e) * np.cos(E / 2)) + lp, 1 / (1 - e * np.cos(E)) ** 2
+    t = np.linspace(0, Y, 365 * 144 + 1)
+    L, f = lon(t)
+    L = np.unwrap(L)
+    sep = t[np.argmax(L >= L[0] + np.pi)]
+    peri = Y - t[np.argmax(f)]
+    sun = []
+    for ecc in (0.0, e):                              # the kernels at the March equinox: same sun, scaled by (a / r)^2
+        w = World(4, 'earth7')
+        w.physics.par[PAR_ORDER.index('ecc')] = ecc
+        w.step(1, graph=False)
+        sun.append(float(cp.asnumpy(w.physics.sw_abs) @ w.grid.areaCell))
+    ratio, want = sun[1] / sun[0], float(lon(np.zeros(1))[1][0])
+    ok = abs(sep - 186.4) <= 0.5 and abs(peri - 76) <= 1.5 and abs(ratio / want - 1) <= 1e-6
+    record('ORBIT', f'March to September equinox {sep:.1f} days (186.4), perihelion {peri:.1f} days before the March equinox (~76, 3 January), '
+           f'(a/r)² {f.min():.4f}–{f.max():.4f}; the kernels\' sunlight at the equinox ×{ratio:.7f} against ×{want:.7f}',
+           'equinox interval within 0.5 day; perihelion within 1.5 days; kernels within 1e-6', ok,
+           title="ORBIT Earth's elliptical orbit (V2-6e, SPEC #184)")
+    assert ok

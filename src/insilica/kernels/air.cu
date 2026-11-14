@@ -53,6 +53,7 @@ struct Par {
   real cl_float;                                  // the cloud layer's lower edge floating this far (K) above the cumulus layer's lifted top (V2-6c, #156)
   real ml_clear;                                  // the mixed layer's cloud only where its air is saturated, no subgrid spread (V2-6c, #157)
   real firn, k_firn, rho_firn, c_ice;   // firn (V2-6d, #160): its depth (m; 0 off), conductivity, density, the ice's heat capacity
+  real ecc, lam_peri;                             // Earth's orbit (V2-6e, #184): eccentricity (0: circular) and the sun's longitude at perihelion (rad)
   real ent_loc;                                   // (#180) the plume's surroundings hold their layer's vapor at the layer's relative humidity, level by level
   real lw_refl;                         // (V2-6d, #175) the surface reflects 1 - eps_s of the longwave reaching it (Kirchhoff), absorbing eps_s
   real cu_cloud;                                  // with ml_clear: the thermals' cloud above their condensation level, in the cumulus layer (V2-6c, #158)
@@ -74,7 +75,7 @@ __device__ Par unpack(const real* a) {
   P.kappa = a[15]; P.p0 = a[16]; P.tilt = a[17]; P.year_s = a[18]; P.day_s = a[19]; P.tau_lin = a[20]; P.theta_star2 = a[21];
   P.moist = a[22]; P.Lv = a[23]; P.Lf = a[24]; P.Tf = a[25]; P.k_evap = a[26]; P.tau_conv = a[27]; P.alb_ice = a[28];
   P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32]; P.sat_layer = a[33]; P.sw_tau = a[34];
-  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; P.plume_ent = a[78]; P.l_ice = a[79]; P.storm_area = a[80]; P.graupel_v = a[81]; P.ice_small = a[82]; P.q_shape = a[83]; P.edge_heat = a[84]; P.freeze_dry = a[85]; P.edge_vap = a[86]; P.conv_revap = a[87]; P.plume_root = a[88]; P.bl_q = a[89]; P.sfc = a[90]; P.z0_land = a[91]; P.downdraft = a[92]; P.ent_cloud = a[93]; P.c_deep = a[94]; P.rs_max = a[95]; P.rs_sun = a[96]; P.q_sea = a[97]; P.bl_reach = a[98]; P.dry_edge = a[99]; P.bl_lcl = a[100]; P.edge_k = (int)a[101]; P.ice_air = a[102]; P.revap = a[103]; P.revap_rhs = a[104]; P.revap_rhl = a[105]; P.revap_area = a[106]; P.root_q = a[107]; P.ent_det = a[108]; P.ent_ifs = a[109]; P.shallow = a[110]; P.cu_dth = a[111]; P.cu_dp = a[112]; P.buoy_v = a[113]; P.cu_sub = a[114]; P.bare_fx = a[115]; P.det_all = a[116]; P.cl_float = a[117]; P.ml_clear = a[118]; P.cu_cloud = a[119]; P.firn = a[120]; P.k_firn = a[121]; P.rho_firn = a[122]; P.c_ice = a[123]; P.lw_refl = a[124]; P.ent_loc = a[125]; P.bl_room = (real)1e30; for (int j = 0; j < LMAX; j++) P.ths[j] = a[126 + j];
+  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; P.plume_ent = a[78]; P.l_ice = a[79]; P.storm_area = a[80]; P.graupel_v = a[81]; P.ice_small = a[82]; P.q_shape = a[83]; P.edge_heat = a[84]; P.freeze_dry = a[85]; P.edge_vap = a[86]; P.conv_revap = a[87]; P.plume_root = a[88]; P.bl_q = a[89]; P.sfc = a[90]; P.z0_land = a[91]; P.downdraft = a[92]; P.ent_cloud = a[93]; P.c_deep = a[94]; P.rs_max = a[95]; P.rs_sun = a[96]; P.q_sea = a[97]; P.bl_reach = a[98]; P.dry_edge = a[99]; P.bl_lcl = a[100]; P.edge_k = (int)a[101]; P.ice_air = a[102]; P.revap = a[103]; P.revap_rhs = a[104]; P.revap_rhl = a[105]; P.revap_area = a[106]; P.root_q = a[107]; P.ent_det = a[108]; P.ent_ifs = a[109]; P.shallow = a[110]; P.cu_dth = a[111]; P.cu_dp = a[112]; P.buoy_v = a[113]; P.cu_sub = a[114]; P.bare_fx = a[115]; P.det_all = a[116]; P.cl_float = a[117]; P.ml_clear = a[118]; P.cu_cloud = a[119]; P.firn = a[120]; P.k_firn = a[121]; P.rho_firn = a[122]; P.c_ice = a[123]; P.lw_refl = a[124]; P.ent_loc = a[125]; P.ecc = a[126]; P.lam_peri = a[127]; P.bl_room = (real)1e30; for (int j = 0; j < LMAX; j++) P.ths[j] = a[128 + j];
   return P;
 }
 
@@ -121,6 +122,20 @@ __device__ __forceinline__ fast qsat_a(fast T, fast p, real ice) {
 }
 
 // The pressure whose Exner function is pib (a layer's representative pressure).
+// The sun's ecliptic longitude at time t (s from the March equinox) and its distance factor (a / r)^2 (V2-6e, #184): Kepler's equation
+// for an orbit of eccentricity ecc whose perihelion falls at the sun's longitude lam_peri; ecc = 0, the circular orbit (2 pi t / year, 1).
+__device__ __forceinline__ real sun_lon(real t, const Par& P, real* fd) {
+  if (!(P.ecc > 0)) { *fd = 1; return 2 * PI_ * t / P.year_s; }
+  const real e = P.ecc, nu0 = -P.lam_peri;                      // the true anomaly at the equinox
+  const real E0 = 2 * atan(sqrt((1 - e) / (1 + e)) * tan(nu0 / 2));
+  const real M = E0 - e * sin(E0) + 2 * PI_ * t / P.year_s;      // the mean anomaly, uniform in time
+  real E = M;
+  for (int it = 0; it < 5; it++) E -= (E - e * sin(E) - M) / (1 - e * cos(E));
+  const real nu = 2 * atan2(sqrt(1 + e) * sin(E / 2), sqrt(1 - e) * cos(E / 2)), r = 1 - e * cos(E);
+  *fd = 1 / (r * r);
+  return nu + P.lam_peri;
+}
+
 __device__ __forceinline__ real p_of(real pib, const Par& P) { return FPOW(pib / P.cp, 1 / P.kappa) * P.p0; }
 
 // Saturation adjustment of air at Exner pib and pressure p in one Newton step: vapor beyond q_sat condenses and its
@@ -944,12 +959,13 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   for (int k = 0; k < L; k++) { qrad[k] = 0; qet[k] = 0; qeb[k] = 0; }
   real I;
   if (mode == 0) {
-    const real ang = 2 * PI_ * t[0] / P.year_s;
+    real fd;
+    const real ang = sun_lon(t[0], P, &fd);
     const real dec = asin(sin(P.tilt) * sin(ang));
     const real rot = 2 * PI_ * fmod(t[0], P.day_s) / P.day_s;
     const real sx = cos(dec) * cos(-rot), sy = cos(dec) * sin(-rot), sz = sin(dec);
     const real cz = pos[3 * i] * sx + pos[3 * i + 1] * sy + pos[3 * i + 2] * sz;
-    I = P.S0 * (cz > 0 ? cz : (real)0);
+    I = P.S0 * fd * (cz > 0 ? cz : (real)0);
   } else {
     I = insol[i];
   }
@@ -2312,7 +2328,8 @@ extern "C" __global__ void sw_column(int N, int L_in, const real* par, int NG, c
       fast sum = 0; int lit = 0;
       for (int j = 0; j < 4; j++) {
         const real tt = t[0] + (j + (real)0.5) * interval / 4;
-        const real ang = 2 * PI_ * tt / P.year_s, dec = asin(sin(P.tilt) * sin(ang)), rot = 2 * PI_ * fmod(tt, P.day_s) / P.day_s;
+        real fd;
+        const real ang = sun_lon(tt, P, &fd), dec = asin(sin(P.tilt) * sin(ang)), rot = 2 * PI_ * fmod(tt, P.day_s) / P.day_s;
         const real cz = pos[3 * i] * cos(dec) * cos(-rot) + pos[3 * i + 1] * cos(dec) * sin(-rot) + pos[3 * i + 2] * sin(dec);
         if (cz > 0) { sum += (fast)cz; lit++; }
       }

@@ -8,7 +8,7 @@ import cupy as cp
 import numpy as np
 
 KERNEL_DIR = Path(__file__).resolve().parent / 'kernels'
-BLOCK = 256
+BLOCK = 64                   # threads a block: 64 spreads n = 4's 2562 columns over all the SMs (256: 11 blocks; V2-6d)
 NULL = np.uint64(0)          # a null device pointer as a kernel argument
 SUM_THREADS, SUM_CHUNK = 256, 8
 # --fmad=false: no fused multiply-adds, so every product is rounded as in v1's JavaScript and as NumPy does.

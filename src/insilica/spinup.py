@@ -12,7 +12,7 @@ Changes the spin-up's path only: the climate after re-coupling is measured again
 import cupy as cp
 import numpy as np
 
-from .gpu import grid_dims
+from .gpu import NULL, grid_dims
 
 LAMBDA = 10.0          # W/m²/K: the air's damping of a sea-temperature anomaly over years (the air warming with the sea): of 10 and 40 tried, 10 lagged a plain spin-up least (SPEC #107)
 DAY = 86400.0
@@ -39,8 +39,10 @@ class Recorder:
 
     def post_couple(self):
         g = self.w.dg
-        self.k['rec_du'](*grid_dims(g.E), (np.int32(g.E), self.w.time, g.dtype.type(self.year), np.int32(self.nslot), self.sea.u[0],
-                                           self._uE, self.du))
+        s = self.sea
+        hh = s.core.ob is not None                          # (#174) record the stress, replayed on the mixed layer of the time
+        self.k['rec_du'](*grid_dims(g.E), (np.int32(g.E), self.w.time, g.dtype.type(self.year), np.int32(self.nslot), s.u[0],
+                                           self._uE, self.du, s.h if hh else NULL, g.eI, g.eJ))
 
     def pre_column(self):
         cp.copyto(self._TN, self.sea.T[0])
@@ -94,7 +96,8 @@ class OceanOnly:
         c = s.cfg
         dt = c['dt']
         hdr = (self.time, R(f['year']), i32(f['nslot']))
-        self.k['play_edge'](*grid_dims(g.E), (i32(g.E),) + hdr + (f['du'], f['tau'], R(dt), s.u[0], s.tau_acc))
+        hh = s.core.ob is not None
+        self.k['play_edge'](*grid_dims(g.E), (i32(g.E),) + hdr + (f['du'], f['tau'], R(dt), s.u[0], s.tau_acc, s.h if hh else NULL, g.eI, g.eJ))
         self.k['play_cell'](*grid_dims(g.N), (i32(g.N),) + hdr + (f['Q'], f['T'], f['qns'], f['sun'], f['fw'], R(self.lam),
                             R(c['S_ref']), R(c['rho']), R(dt), s.h, s.cap, s.T, s.S, s.qocean, s.qsw, s.fw_acc, s._land(), R(c['fw_local']),
                             s.h, s.M, g.areaCell, R(273.15 if c['fw_local'] > 0 else 0.0)))

@@ -14,10 +14,14 @@ __device__ __forceinline__ int slot_of(real t, real year, int nslot) {
   return s < 0 ? 0 : (s >= nslot ? nslot - 1 : s);
 }
 
-// Recording, after the wind stress: the momentum it gave the mixed layer (u0 now minus before).
-extern "C" __global__ void rec_du(int E, const real* t, real year, int nslot, const real* u0, const real* before, real* acc) {
+// Recording, after the wind stress: the momentum it gave the mixed layer (u0 now minus before); with h (#174, else NULL)
+// times the mixed layer's thickness at the edge, the stress itself (tau / rho_w), which the replay spreads over the
+// mixed layer it then has: a velocity recorded on a thick mixed layer and replayed on a thin one would run away.
+extern "C" __global__ void rec_du(int E, const real* t, real year, int nslot, const real* u0, const real* before, real* acc,
+                                  const real* h, const int* eI, const int* eJ) {
   LOOP1(e, E)
-  acc[(size_t)slot_of(t[0], year, nslot) * E + e] += u0[e] - before[e];
+  const real f = h ? (real)0.5 * (h[eI[e]] + h[eJ[e]]) : (real)1;
+  acc[(size_t)slot_of(t[0], year, nslot) * E + e] += (u0[e] - before[e]) * f;
 }
 
 // Recording, after the air's column: its heating of the mixed layer (J/m^2), and the seconds each slot has seen.
@@ -59,11 +63,12 @@ __device__ __forceinline__ void slots_at(real t, real year, int nslot, int& s0, 
 
 // Replaying, every ocean step (dt): the wind's momentum on the mixed layer and its stress for the mixing.
 extern "C" __global__ void play_edge(int E, const real* t, real year, int nslot, const float* du, const float* tau, real dt, real* u0,
-                                     real* tau_acc) {
+                                     real* tau_acc, const real* h, const int* eI, const int* eJ) {
   LOOP1(e, E)
   int s0, s1; real w;
   slots_at(t[0], year, nslot, s0, s1, w);
-  u0[e] += ((1 - w) * du[(size_t)s0 * E + e] + w * du[(size_t)s1 * E + e]) * dt;
+  const real f = h ? (real)2 / (h[eI[e]] + h[eJ[e]]) : (real)1;
+  u0[e] += ((1 - w) * du[(size_t)s0 * E + e] + w * du[(size_t)s1 * E + e]) * dt * f;
   tau_acc[e] += ((1 - w) * tau[(size_t)s0 * E + e] + w * tau[(size_t)s1 * E + e]) * dt;
 }
 

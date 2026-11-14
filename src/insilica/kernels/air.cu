@@ -53,6 +53,7 @@ struct Par {
   real cl_float;                                  // the cloud layer's lower edge floating this far (K) above the cumulus layer's lifted top (V2-6c, #156)
   real ml_clear;                                  // the mixed layer's cloud only where its air is saturated, no subgrid spread (V2-6c, #157)
   real firn, k_firn, rho_firn, c_ice;   // firn (V2-6d, #160): its depth (m; 0 off), conductivity, density, the ice's heat capacity
+  real ent_loc;                                   // (#180) the plume's surroundings hold their layer's vapor at the layer's relative humidity, level by level
   real lw_refl;                         // (V2-6d, #175) the surface reflects 1 - eps_s of the longwave reaching it (Kirchhoff), absorbing eps_s
   real cu_cloud;                                  // with ml_clear: the thermals' cloud above their condensation level, in the cumulus layer (V2-6c, #158)
   real bare_fx;                                   // bare soil evaporates as (wet / full)^bare_fx, Noah's direct soil evaporation (V2-6c, #148); 0: as the plants'
@@ -73,7 +74,7 @@ __device__ Par unpack(const real* a) {
   P.kappa = a[15]; P.p0 = a[16]; P.tilt = a[17]; P.year_s = a[18]; P.day_s = a[19]; P.tau_lin = a[20]; P.theta_star2 = a[21];
   P.moist = a[22]; P.Lv = a[23]; P.Lf = a[24]; P.Tf = a[25]; P.k_evap = a[26]; P.tau_conv = a[27]; P.alb_ice = a[28];
   P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32]; P.sat_layer = a[33]; P.sw_tau = a[34];
-  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; P.plume_ent = a[78]; P.l_ice = a[79]; P.storm_area = a[80]; P.graupel_v = a[81]; P.ice_small = a[82]; P.q_shape = a[83]; P.edge_heat = a[84]; P.freeze_dry = a[85]; P.edge_vap = a[86]; P.conv_revap = a[87]; P.plume_root = a[88]; P.bl_q = a[89]; P.sfc = a[90]; P.z0_land = a[91]; P.downdraft = a[92]; P.ent_cloud = a[93]; P.c_deep = a[94]; P.rs_max = a[95]; P.rs_sun = a[96]; P.q_sea = a[97]; P.bl_reach = a[98]; P.dry_edge = a[99]; P.bl_lcl = a[100]; P.edge_k = (int)a[101]; P.ice_air = a[102]; P.revap = a[103]; P.revap_rhs = a[104]; P.revap_rhl = a[105]; P.revap_area = a[106]; P.root_q = a[107]; P.ent_det = a[108]; P.ent_ifs = a[109]; P.shallow = a[110]; P.cu_dth = a[111]; P.cu_dp = a[112]; P.buoy_v = a[113]; P.cu_sub = a[114]; P.bare_fx = a[115]; P.det_all = a[116]; P.cl_float = a[117]; P.ml_clear = a[118]; P.cu_cloud = a[119]; P.firn = a[120]; P.k_firn = a[121]; P.rho_firn = a[122]; P.c_ice = a[123]; P.lw_refl = a[124]; P.bl_room = (real)1e30; for (int j = 0; j < LMAX; j++) P.ths[j] = a[125 + j];
+  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; P.plume_ent = a[78]; P.l_ice = a[79]; P.storm_area = a[80]; P.graupel_v = a[81]; P.ice_small = a[82]; P.q_shape = a[83]; P.edge_heat = a[84]; P.freeze_dry = a[85]; P.edge_vap = a[86]; P.conv_revap = a[87]; P.plume_root = a[88]; P.bl_q = a[89]; P.sfc = a[90]; P.z0_land = a[91]; P.downdraft = a[92]; P.ent_cloud = a[93]; P.c_deep = a[94]; P.rs_max = a[95]; P.rs_sun = a[96]; P.q_sea = a[97]; P.bl_reach = a[98]; P.dry_edge = a[99]; P.bl_lcl = a[100]; P.edge_k = (int)a[101]; P.ice_air = a[102]; P.revap = a[103]; P.revap_rhs = a[104]; P.revap_rhl = a[105]; P.revap_area = a[106]; P.root_q = a[107]; P.ent_det = a[108]; P.ent_ifs = a[109]; P.shallow = a[110]; P.cu_dth = a[111]; P.cu_dp = a[112]; P.buoy_v = a[113]; P.cu_sub = a[114]; P.bare_fx = a[115]; P.det_all = a[116]; P.cl_float = a[117]; P.ml_clear = a[118]; P.cu_cloud = a[119]; P.firn = a[120]; P.k_firn = a[121]; P.rho_firn = a[122]; P.c_ice = a[123]; P.lw_refl = a[124]; P.ent_loc = a[125]; P.bl_room = (real)1e30; for (int j = 0; j < LMAX; j++) P.ths[j] = a[126 + j];
   return P;
 }
 
@@ -510,6 +511,19 @@ __device__ void plume_ascent(int bot, const real* mu, const real* th, real th0, 
     const bool ek = k > 0 && (k == bot - 1 || (P.cu_dth > 0 && P.ent_ifs > 0 && k == bot - 2) || (P.det_all > 0 && P.ent_ifs > 0 && !shal && k >= P.edge_k));
     const int Mk = P.ent_ifs > 0 && ek ? min(48, max(M, (int)ceil(P.grav * mu[k] / (real)2500))) : M;
     const real f = q && P.plume_ent > 0 ? OMEXP(P.plume_ent * P.grav * mu[k] / Mk) : (real)0;   // the mixing per sub-level
+    // ent_loc (#180): the air the plume takes in at each sub-level holds the layer's vapor at the layer's relative humidity there (its vapor where its
+    // air is warm, as edge_q's), not the layer's mean: in the 400 hPa 305-330 K layer the mean is half the vapor above 305 K, so the plume met air
+    // at RH ~0.2 where the layer's is ~0.45. qsl: the mean of the sub-levels' saturation, so their vapor averages the layer's; what the plume takes
+    // in at more (or less) than the mean, which plume_out moves at the mean, is booked through qa
+    const bool loc = P.ent_loc > 0 && G && q && P.ent_cloud > 0 && P.ent_ifs > 0 && ek && k >= P.edge_k && q[k] > 0;
+    real qsl = 0;
+    if (loc) {
+      for (int j = 0; j < Mk; j++) {
+        const real x = (j + (real)0.5) / Mk, pl = pt - x * P.grav * mu[k];
+        const real te = a + (b - a) * SPREAD(x, s, es);
+        qsl += (real)qsat_a((fast)(te * FPOW(pl / P.p0, P.kappa)), (fast)pl, P.ice_air) / Mk;
+      }
+    }
     bool last = false;
     for (int j = 0; j < Mk; j++) {
       const real x = (j + (real)0.5) / Mk, pl = pt - x * P.grav * mu[k];
@@ -528,13 +542,15 @@ __device__ void plume_ascent(int bot, const real* mu, const real* th, real th0, 
           // (q_s(T) / q_s at cloud base)^3 and mixing detrainment 0.75e-4 /m: strong in dry air near cloud base, so a diluted plume stops low and
           // leaves its air there. The detrainment is an equal-mass exchange (its vapor to the layer, as plume_ent's); the rest of the entrainment
           // grows the plume, the air taken in rising with it
-          const real qse = (real)qsat_a((fast)(te * ex), (fast)pl, P.ice_air), rh = fmin((real)1, fmax((real)0, q[k] / qse));
+          const real qse = (real)qsat_a((fast)(te * ex), (fast)pl, P.ice_air), qen = loc && qsl > 0 ? q[k] * qse / qsl : q[k];
+          const real rh = fmin((real)1, fmax((real)0, qen / qse));
           const real fs = fmin((real)1, qse / qsb);    // (at most 1, as above cloud base in the tropics: over an inversion the layer is warmer than cloud base)
           const real eps_ = (shal ? (real)3.5e-3 : (real)1.75e-3) * ((real)1.3 - rh) * fs * fs * fs, del_ = fmin(eps_, (real)0.75e-4);
           const real fe_ = -expm1(-eps_ * dz), fd_ = -expm1(-del_ * dz);
-          qa[k] += Mp * fd_ * (qp - q[k]);
+          qa[k] += Mp * fd_ * (qp - qen);
+          if (loc) qa[k] -= Mp * expm1((eps_ - del_) * dz) * (qen - q[k]);   // (the growth taken in at qen; plume_out moves it at q[k])
           tp += fe_ * (te - tp);
-          qp += fe_ * (q[k] - qp);
+          qp += fe_ * (qen - qp);
           gk[k] += Mp * expm1((eps_ - del_) * dz);
           Mp *= exp((eps_ - del_) * dz);
         } else {

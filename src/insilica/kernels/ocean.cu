@@ -117,7 +117,7 @@ extern "C" __global__ void ocn_column(int N, int L, const real* h, real* T, real
                                       const real* qfw, const real* qsun, real grav, real alpha, real alpha2, real beta, real S_ref,
                                       real alpha_ref, real rho_w, real cw, real m_kt, real n_kt, real hmin, real hmax, real dTmin,
                                       real R, real z1, real z2, real dt, real* wx, const real* land, real kappa_d, real dwf,
-                                      const real* shear, real ri_b, real reach, real h_ent) {
+                                      const real* shear, real ri_b, real reach, real h_ent, const real* Tc, real det_class) {
   LOOP1(i, N)
   if (land && land[i] > (real)0.5) {                            // no water here (decision #84)
     for (int k = 0; k < L - 1; k++) wx[(size_t)k * N + i] = 0;
@@ -194,6 +194,15 @@ extern "C" __global__ void ocn_column(int N, int L, const real* h, real* T, real
       v = fmin(2 * kappa_d / (hk + hb) * dt, fmax(hb - hmin - (add[k] - add[k + 1]), (real)0));   // mixed: up from it
     wx[(size_t)k * N + i] = v + add[k];
     gave = (v > 0 ? v : (real)0) + (add[k] - add[k + 1]);         // (the next layer's own water passed up through this one)
+  }
+  // (#194) the water the mixed layer leaves behind joins the class of its own density (the isopycnal models' detrainment), passing
+  // down through the lighter classes above it; water lighter than every class joins the lightest. Without it, it all joined layer 1
+  // whatever its temperature (polar winter water into the 26 C class: 55,000 Sv a year in and out again through the class sorting)
+  if (Tc && det_class > 0 && dm < 0) {
+    int ks = 1;
+    const real b0 = buoy(T0, S[i], q);                         // (by density, as the class sorting: fresh polar water is light)
+    for (int k = 2; k < L; k++) if (b0 <= (real)0.5 * (buoy(Tc[k - 1], S_ref, q) + buoy(Tc[k], S_ref, q))) ks = k;
+    for (int k = 1; k < ks; k++) wx[(size_t)k * N + i] += dm;
   }
 }
 

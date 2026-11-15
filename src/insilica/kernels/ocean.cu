@@ -117,7 +117,7 @@ extern "C" __global__ void ocn_column(int N, int L, const real* h, real* T, real
                                       const real* qfw, const real* qsun, real grav, real alpha, real alpha2, real beta, real S_ref,
                                       real alpha_ref, real rho_w, real cw, real m_kt, real n_kt, real hmin, real hmax, real dTmin,
                                       real R, real z1, real z2, real dt, real* wx, const real* land, real kappa_d, real dwf,
-                                      const real* shear, real ri_b, real reach, real h_ent, const real* Tc, real det_class) {
+                                      const real* shear, real ri_b, real reach, real h_ent, const real* Tc, real det_class, const real* Sc) {
   LOOP1(i, N)
   if (land && land[i] > (real)0.5) {                            // no water here (decision #84)
     for (int k = 0; k < L - 1; k++) wx[(size_t)k * N + i] = 0;
@@ -201,7 +201,8 @@ extern "C" __global__ void ocn_column(int N, int L, const real* h, real* T, real
   if (Tc && det_class > 0 && dm < 0) {
     int ks = 1;
     const real b0 = buoy(T0, S[i], q);                         // (by density, as the class sorting: fresh polar water is light)
-    for (int k = 2; k < L; k++) if (b0 <= (real)0.5 * (buoy(Tc[k - 1], S_ref, q) + buoy(Tc[k], S_ref, q))) ks = k;
+    for (int k = 2; k < L; k++)
+      if (b0 <= (real)0.5 * (buoy(Tc[k - 1], Sc ? Sc[k - 1] : S_ref, q) + buoy(Tc[k], Sc ? Sc[k] : S_ref, q))) ks = k;
     for (int k = 1; k < ks; k++) wx[(size_t)k * N + i] += dm;
   }
 }
@@ -297,7 +298,7 @@ __device__ __forceinline__ real temp_of(real B, real S, const Eos& q) {     // T
 }
 extern "C" __global__ void ocn_classes(int N, int L, const real* h, const real* T, const real* S, const real* Tc, real grav,
                                        real alpha, real alpha2, real beta, real S_ref, real hmin, real Tmin, const real* land,
-                                       real* wx, real* Tn, real* Sn, real top) {
+                                       real* wx, real* Tn, real* Sn, real top, const real* Sc) {
   LOOP1(i, N)
   if (land && land[i] > (real)0.5) {
     for (int k = 0; k < L - 1; k++) wx[(size_t)k * N + i] = 0;
@@ -309,7 +310,7 @@ extern "C" __global__ void ocn_classes(int N, int L, const real* h, const real* 
   for (int k = 0; k < L; k++) {
     const size_t o = (size_t)k * N + i;
     hk[k] = h[o]; Hk[k] = h[o] * T[o]; Sk[k] = h[o] * S[o]; up[k] = 0; dn[k] = 0;
-    Bc[k] = k > 0 ? buoy(Tc[k], S_ref, q) : (real)0;
+    Bc[k] = k > 0 ? buoy(Tc[k], Sc ? Sc[k] : S_ref, q) : (real)0;   // (#198) each class's own salinity, when given
   }
   real gH[LMAX], gS[LMAX], gh[LMAX];                             // what each layer receives
   for (int k = 0; k < L; k++) { gH[k] = 0; gS[k] = 0; gh[k] = 0; }

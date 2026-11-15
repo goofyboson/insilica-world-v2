@@ -97,7 +97,9 @@ class OceanOnly:
         dt = c['dt']
         hdr = (self.time, R(f['year']), i32(f['nslot']))
         hh = s.core.ob is not None
+        s.mark()
         self.k['play_edge'](*grid_dims(g.E), (i32(g.E),) + hdr + (f['du'], f['tau'], R(dt), s.u[0], s.tau_acc, s.h if hh else NULL, g.eI, g.eJ))
+        s.spread(None)
         self.k['play_cell'](*grid_dims(g.N), (i32(g.N),) + hdr + (f['Q'], f['T'], f['qns'], f['sun'], f['fw'], R(self.lam),
                             R(c['S_ref']), R(c['rho']), R(dt), s.h, s.cap, s.T, s.S, s.qocean, s.qsw, s.fw_acc, s._land(), R(c['fw_local']),
                             s.h, s.M, g.areaCell, R(273.15 if c['fw_local'] > 0 else 0.0)))

@@ -485,3 +485,27 @@ extern "C" __global__ void ice_move(int N, const real* F, const real* si, const 
   ice[i] += d;
   if (ice_prev) ice_prev[i] += d;
 }
+
+// (#200) The wind's momentum in the Ekman layer: the stress just given to the mixed layer (its impulse h0 (u0 - u0b)) is spread
+// over the top ek metres of water, each layer within it accelerated alike (a layer partly within by its share), so where the
+// mixed layer is thinner than the wind-stirred layer the Ekman transport is carried by the water the wind stirs, not passed down
+// by the interfacial stress within hours (#194). Momentum exact; the kinetic energy the spreading removes goes to diss (heat).
+extern "C" __global__ void ek_spread(int N, int E, int L, const real* h, real* u, const real* u0b, const int* eI, const int* eJ,
+                                     real ek, real rho_w, const real* wall, real* diss) {
+  LOOP1(e, E)
+  if (wall && wall[e] == 0) return;
+  const real h0 = (real)0.5 * (h[eI[e]] + h[eJ[e]]);
+  if (h0 >= ek) return;
+  const real I = h0 * (u[e] - u0b[e]);
+  if (I == 0) return;
+  real z = 0, ke0 = 0, ke1 = 0;
+  for (int k = 0; k < L && z < ek; k++) {
+    const real hk = (real)0.5 * (h[(size_t)k * N + eI[e]] + h[(size_t)k * N + eJ[e]]);
+    const real take = fmin(hk, ek - z);
+    real* pu = u + (size_t)k * E + e;
+    const real ub = k == 0 ? u0b[e] : *pu, uo = *pu, un = ub + I * take / (ek * hk);
+    ke0 += (real)0.5 * hk * uo * uo; ke1 += (real)0.5 * hk * un * un;
+    *pu = un; z += take;
+  }
+  if (diss) diss[e] += rho_w * (ke0 - ke1);
+}

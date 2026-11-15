@@ -33,7 +33,7 @@ OCEAN = dict(depth=4000.0, h_mixed=100.0, h_thermo=600.0, T_thermo=293.15, T_dee
              hmin=10.0, hmax=1000.0, dTmin=0.1, m_kt=0.5, n_kt=0.2, visc4_U=0.5, bottom_stress=2.5e-4,
              interface_stress=5.0e-4, thin=2.0, walls=(), sw_R=0.58, sw_z1=0.35, sw_z2=23.0, land_drag=1.0, bed=None, bed_min=50.0, shelf=50.0, h_layers=None,
              kappa_d=0.0, dwf=0.0, kappa_h=0.0, fw_local=0.0, eos_currents=0.0, interface_cd=0.0, ri_b=0.0, T_classes=None, classes_top=1.0, reach=0.0, h_ent=0.0, shelf_bed=0.0,
-             ice_drift=0.0, ice_turn=25.0, ice_hmax=4.0, sw_up=0.0, det_class=0.0, S_classes=None)   # crossing the interior interfaces (V2-6d, #163: mixing m2/s, deep-water formation), mixing along the layers (#164, m2/s), fresh water with its volume (#165); sea-ice drift (V2-6e, #185: the wind's share, its turn in degrees, the thickness that stops convergence in m); all off
+             ice_drift=0.0, ice_turn=25.0, ice_hmax=4.0, sw_up=0.0, det_class=0.0, S_classes=None, ek_depth=0.0)   # crossing the interior interfaces (V2-6d, #163: mixing m2/s, deep-water formation), mixing along the layers (#164, m2/s), fresh water with its volume (#165); sea-ice drift (V2-6e, #185: the wind's share, its turn in degrees, the thickness that stops convergence in m); all off
 
 
 def wall_mask(g, walls):
@@ -133,12 +133,13 @@ class Ocean:
         assert abs(ratio - round(ratio)) < 1e-9 and round(ratio) >= 1, 'mix_dt must be a whole number of ocean steps'
         self.mix_every = int(round(ratio))
         k = lambda n: dg.kernel(n, 'ocean.cu')
-        self.k = {n: k(n) for n in ('couple_stress', 'ocn_column', 'ocn_cap', 'ocn_overturn', 'ocn_pen', 'ocn_fresh', 'ocn_xch_salt',
+        self.k = {n: k(n) for n in ('couple_stress', 'ek_spread', 'ocn_column', 'ocn_cap', 'ocn_overturn', 'ocn_pen', 'ocn_fresh', 'ocn_xch_salt',
                                     'ocn_heat', 'ocn_ground', 'ocn_diffuse', 'ocn_sigma', 'ocn_classes',
                                     'ice_flux', 'ice_limit', 'ice_move')}
         self._iF = None
         if c['ice_drift'] > 0:
             self.enable_ice_drift(c['ice_drift'])
+        self._u0b = cp.zeros(E) if c['ek_depth'] > 0 else None   # (#200)
         self.Tc = self.Sc = None
         if c.get('T_classes'):                                  # (#169) density classes for layers 1 … L−1, by temperature at S_ref
             assert len(c['T_classes']) == L - 1, 'one class temperature per layer below the mixed layer'
@@ -181,10 +182,26 @@ class Ocean:
         """The wind stress over one air step (exactly, momentum conserved); the kinetic energy it removed is left in
         self.diss (J/m² per edge) for the air to take as heat."""
         g, i32, R = self.dg, np.int32, self.dg.dtype.type
+        self.mark()
         self.k['couple_stress'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(air_h.shape[0]), air_h, air_u, self.h, self.u,
                                                   g.eI, g.eJ, R(c), R(self.cfg['rho']), R(dt), self.diss, self.tau_acc,
                                                   self.core.wall if self.core.wall is not None else NULL, R(self.cfg['land_drag']),
                                                   cd if cd is not None else NULL))
+        self.spread(self.diss)
+
+    def spread(self, diss):
+        """(#200) Spread the stress just given to the mixed layer over the top ek_depth metres (when it is thinner); needs
+        mark() before the stress."""
+        if self.cfg['ek_depth'] <= 0:
+            return
+        g, i32, R = self.dg, np.int32, self.dg.dtype.type
+        self.k['ek_spread'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(self.L), self.h, self.u, self._u0b, g.eI, g.eJ, R(self.cfg['ek_depth']),
+                                              R(self.cfg['rho']), self.core.wall if self.core.wall is not None else NULL, diss if diss is not None else NULL))
+
+    def mark(self):
+        """(#200) Remember the mixed layer's velocity before a stress (for spread)."""
+        if self.cfg['ek_depth'] > 0:
+            cp.copyto(self._u0b, self.u[0])
 
     def _land(self):
         return self.land if self.land is not None else NULL

@@ -204,7 +204,7 @@ extern "C" __global__ void oro_edge(int N, int E, int L, const real* mu, const i
 // wave's phase speed in a step (#130); what none could take stays with the source layer, so each column's momentum is exact.
 // Zonal: the force is eastward. Out: F (as oro_cell's; its north part 0).
 extern "C" __global__ void gw_cell(int N, int E, int L, const real* mu, const real* theta, const real* u, const int* cellEdge,
-                                  const real* op, const real* lat, const real* par, real* F) {
+                                  const real* op, const real* lat, const real* par, const real* conv, const real* cmean, real* F) {
   LOOP1(i, N)
   for (int k = 0; k < L; k++) { F[(size_t)(2 * k) * N + i] = 0; F[(size_t)(2 * k + 1) * N + i] = 0; }
   const real grav = par[0], p0 = par[1], kappa = par[2], rd = par[3], bt = par[4], cw = par[5], kw = par[6], psrc = par[7],
@@ -254,7 +254,10 @@ extern "C" __global__ void gw_cell(int N, int E, int L, const real* mu, const re
     if (c != usf) bsum += FEXP(-ln2 * x * x);
   }
   if (bsum <= 0) return;
-  const real amp = bt / bsum;
+  // (#188) the convective share fc of the launched flux goes where the storms are: each column's convective rain against
+  // the planet's mean (the global flux unchanged); the rest stays uniform
+  const real fc = par[11];
+  const real amp = (conv != NULL && fc > 0 ? bt * ((1 - fc) + fc * conv[i] / fmax(cmean[0], (real)1e-30)) : bt) / bsum;
   real dep[LMAX];
   for (int k = 0; k < L; k++) dep[k] = 0;
   for (int n = 0; n < nc; n++) {
@@ -277,4 +280,14 @@ extern "C" __global__ void gw_cell(int N, int E, int L, const real* mu, const re
   for (int k = 0; k < L; k++) net += dep[k];
   dep[ks] -= net;                                              // (what no layer could take)
   for (int k = 0; k < L; k++) F[(size_t)(2 * k) * N + i] = dep[k];
+}
+
+// (#188) the planet's area-mean convective rain, for gw_cell's convective source: one block
+extern "C" __global__ void gw_mean(int N, const real* conv, const real* area, real* out) {
+  __shared__ double sa[256], sb[256];
+  double a = 0, b = 0;
+  for (int i = threadIdx.x; i < N; i += blockDim.x) { a += (double)area[i] * (double)conv[i]; b += (double)area[i]; }
+  sa[threadIdx.x] = a; sb[threadIdx.x] = b; __syncthreads();
+  for (int s = blockDim.x / 2; s > 0; s >>= 1) { if (threadIdx.x < s) { sa[threadIdx.x] += sa[threadIdx.x + s]; sb[threadIdx.x] += sb[threadIdx.x + s]; } __syncthreads(); }
+  if (threadIdx.x == 0) out[0] = (real)(sa[0] / sb[0]);
 }

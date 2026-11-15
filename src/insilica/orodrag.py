@@ -4,7 +4,7 @@ import cupy as cp
 import numpy as np
 
 from .constants import GRAV, KAPPA, P0, R_PLANET
-from .gpu import grid_dims
+from .gpu import NULL, grid_dims
 
 RD = 287.0
 
@@ -71,15 +71,21 @@ class WaveDrag:
         self.op, self.nrm = cp.asarray(op.reshape(-1), dtype=R), cp.asarray(nrm.reshape(-1), dtype=R)
         self.lat = cp.asarray(np.degrees(g.lat), dtype=R)
         self.par = cp.asarray([p.get('grav', GRAV), P0, KAPPA, RD, p['gw_bt'], p['gw_cw'], 2 * np.pi / p['gw_lambda'], p['gw_psrc'],
-                               p['gw_cmax'], p['gw_dc'], dt], dtype=R)
+                               p['gw_cmax'], p['gw_dc'], dt, p.get('gw_conv', 0.0)], dtype=R)
         self.F, self.zero = cp.zeros((2 * L, g.N), dtype=R), cp.zeros((L, g.N), dtype=R)
-        self.k = {n: dg.kernel(n, 'drag.cu') for n in ('gw_cell', 'oro_edge')}
+        self.k = {n: dg.kernel(n, 'drag.cu') for n in ('gw_cell', 'oro_edge', 'gw_mean')}
+        self.conv = None                                       # (#188) the column's convective rain, when gw_conv > 0
+        if p.get('gw_conv', 0.0) > 0:
+            self.cmean = cp.zeros(1, dtype=R)
 
     def apply(self, h, theta, u, dt, diss):
         """One step's wave forcing on u (in place); the kinetic energy it removed (negative: gave) is added to diss."""
         g, i32, R = self.dg, np.int32, self.dg.dtype.type
         assert dt == self.dt
+        if self.conv is not None:
+            self.k['gw_mean']((1,), (256,), (i32(g.N), self.conv, g.areaCell, self.cmean))
         self.k['gw_cell'](*grid_dims(g.N), (i32(g.N), i32(g.E), i32(self.L), h, theta, u, g.cellEdge, self.op, self.lat, self.par,
+                                            self.conv if self.conv is not None else NULL, self.cmean if self.conv is not None else NULL,
                                             self.F))
         self.k['oro_edge'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(self.L), h, g.eI, g.eJ, self.nrm, self.zero, self.F,
                                              R(dt), u, diss))

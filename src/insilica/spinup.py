@@ -102,7 +102,8 @@ class OceanOnly:
                             R(c['S_ref']), R(c['rho']), R(dt), s.h, s.cap, s.T, s.S, s.qocean, s.qsw, s.fw_acc, s._land(), R(c['fw_local']),
                             s.h, s.M, g.areaCell, R(273.15 if c['fw_local'] > 0 else 0.0)))
         s.k['ocn_pen'](*grid_dims(g.N), (i32(g.N), i32(s.L), s.h, s.T, s.qocean, s.qsw, R(c['rho'] * c['cw']), R(c['sw_R']),
-                                        R(c['sw_z1']), R(c['sw_z2']), R(dt), s.q_acc, s.sun_acc, s._land()))
+                                        R(c['sw_z1']), R(c['sw_z2']), R(dt), s.q_acc, s.sun_acc, s._land(),
+                                        s.wx if c['sw_up'] > 0 else NULL))
         s.step(mix=mix)
         self.k['play_time']((1,), (1,), (self.time, R(dt)))
 

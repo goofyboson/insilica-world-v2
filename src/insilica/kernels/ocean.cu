@@ -372,9 +372,14 @@ extern "C" __global__ void ocn_xch_salt(int N, int L, const real* wx, const real
 // moved, not made. qns_acc and sun_acc sum the mixed layer's non-solar flux and the sunlight entering the water for the
 // mixing (decision #74).
 extern "C" __global__ void ocn_pen(int N, int L, const real* h, real* T, const real* qocean, const real* qsw, real rho_cw,
-                                   real R, real z1, real z2, real dt, real* qns_acc, real* sun_acc, const real* land) {
+                                   real R, real z1, real z2, real dt, real* qns_acc, real* sun_acc, const real* land, const real* up) {
   LOOP1(i, N)
   if (land && land[i] > (real)0.5) return;
+  qns_acc[i] += (qocean[i] - qsw[i]) * dt;
+  sun_acc[i] += qsw[i] * dt;
+  // (#189) where water rose into the mixed layer at the last mixing (up = the exchange across its base, positive up), the sunlight
+  // passing its base heats water on its way up into it: the mixed layer keeps it all
+  if (up && up[i] > 0) return;
   real z = h[i];
   real f = sun_f(z, R, z1, z2);
   const real pen = qsw[i] * f;
@@ -386,8 +391,6 @@ extern "C" __global__ void ocn_pen(int N, int L, const real* h, real* T, const r
     T[(size_t)k * N + i] += qsw[i] * (f - fb) * dt / (rho_cw * hk);
     f = fb;
   }
-  qns_acc[i] += (qocean[i] - qsw[i]) * dt;
-  sun_acc[i] += qsw[i] * dt;
 }
 
 // Diagnostic (decision #80): H += sign rho c_w sum_k h_k (T_k - 273.15 K), J/m^2 relative to 0 C. Taken with sign -1 before

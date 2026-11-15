@@ -32,7 +32,8 @@ OCEAN = dict(depth=4000.0, h_mixed=100.0, h_thermo=600.0, T_thermo=293.15, T_dee
              gprime=(0.016, 0.016),
              hmin=10.0, hmax=1000.0, dTmin=0.1, m_kt=0.5, n_kt=0.2, visc4_U=0.5, bottom_stress=2.5e-4,
              interface_stress=5.0e-4, thin=2.0, walls=(), sw_R=0.58, sw_z1=0.35, sw_z2=23.0, land_drag=1.0, bed=None, bed_min=50.0, shelf=50.0, h_layers=None,
-             kappa_d=0.0, dwf=0.0, kappa_h=0.0, fw_local=0.0, eos_currents=0.0, interface_cd=0.0, ri_b=0.0, T_classes=None, classes_top=1.0, reach=0.0, h_ent=0.0, shelf_bed=0.0)   # crossing the interior interfaces (V2-6d, #163: mixing m2/s, deep-water formation), mixing along the layers (#164, m2/s), fresh water with its volume (#165); all off
+             kappa_d=0.0, dwf=0.0, kappa_h=0.0, fw_local=0.0, eos_currents=0.0, interface_cd=0.0, ri_b=0.0, T_classes=None, classes_top=1.0, reach=0.0, h_ent=0.0, shelf_bed=0.0,
+             ice_drift=0.0, ice_turn=25.0, ice_hmax=4.0)   # crossing the interior interfaces (V2-6d, #163: mixing m2/s, deep-water formation), mixing along the layers (#164, m2/s), fresh water with its volume (#165); sea-ice drift (V2-6e, #185: the wind's share, its turn in degrees, the thickness that stops convergence in m); all off
 
 
 def wall_mask(g, walls):
@@ -132,7 +133,11 @@ class Ocean:
         self.mix_every = int(round(ratio))
         k = lambda n: dg.kernel(n, 'ocean.cu')
         self.k = {n: k(n) for n in ('couple_stress', 'ocn_column', 'ocn_cap', 'ocn_overturn', 'ocn_pen', 'ocn_fresh', 'ocn_xch_salt',
-                                    'ocn_heat', 'ocn_ground', 'ocn_diffuse', 'ocn_sigma', 'ocn_classes')}
+                                    'ocn_heat', 'ocn_ground', 'ocn_diffuse', 'ocn_sigma', 'ocn_classes',
+                                    'ice_flux', 'ice_limit', 'ice_move')}
+        self._iF = None
+        if c['ice_drift'] > 0:
+            self.enable_ice_drift(c['ice_drift'])
         self.Tc = None
         if c.get('T_classes'):                                  # (#169) density classes for layers 1 … L−1, by temperature at S_ref
             assert len(c['T_classes']) == L - 1, 'one class temperature per layer below the mixed layer'
@@ -251,6 +256,24 @@ class Ocean:
         self.sun_acc.fill(0)
         self.fw_acc.fill(0)
         self.update_cap()
+
+    def enable_ice_drift(self, wind):
+        """Sea-ice drift (#185) on, with wind its share of the bottom wind: per edge the turn's sine, signed by hemisphere."""
+        g, dg = self.dg.host, self.dg
+        self.cfg['ice_drift'] = wind
+        t = math.radians(self.cfg['ice_turn'])
+        self._isn = cp.asarray(math.sin(t) * np.sign(g.lat[g.eI] + g.lat[g.eJ]), dtype=dg.dtype)
+        self._ics = math.cos(t)
+        self._iF, self._isi = cp.zeros(dg.E), cp.zeros(dg.N)
+
+    def drift_ice(self, ice, air_u, rho_ice):
+        """Sea-ice drift over one ocean step (#185): free drift with the mixed layer's current and ice_drift of the bottom wind."""
+        g, c, i32, R = self.dg, self.cfg, np.int32, self.dg.dtype.type
+        wall = self.core.wall if self.core.wall is not None else NULL
+        self.k['ice_flux'](*grid_dims(g.E), (i32(g.E), i32(air_u.shape[0]), air_u, self.u, g.eI, g.eJ, g.eoeStart, g.eoe, g.w, self._isn,
+                                             R(self._ics), R(c['ice_drift']), wall, ice, g.le, R(rho_ice), R(c['ice_hmax']), R(c['dt']), self._iF))
+        self.k['ice_limit'](*grid_dims(g.N), (i32(g.N), self._iF, g.cellEdge, g.eI, ice, g.areaCell, self._isi))
+        self.k['ice_move'](*grid_dims(g.N), (i32(g.N), self._iF, self._isi, g.cellEdge, g.eI, g.eJ, g.areaCell, ice, self.ice_prev))
 
     def heat(self):
         """The ocean's heat content (J): ρ_w c_w Σ A h (T − 273.15 K). Relative to T_REF (v1 §18 #12), so water arriving or leaving

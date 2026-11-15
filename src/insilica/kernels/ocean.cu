@@ -418,3 +418,52 @@ extern "C" __global__ void ocn_cap(int N, const real* h, real rho_cw, real* cap,
   LOOP1(i, N)
   cap[i] = land && land[i] > (real)0.5 ? (cap[i] > 0 ? cap[i] : c_land) : rho_cw * h[i];   // land's stays once set: the air's column may set it by its soil water
 }
+
+// Sea-ice drift (V2-6e, #185): free drift, the ice moving with the mixed layer's current plus ice_drift (~2%) of the air's bottom
+// wind turned ice_turn to the right in the north (left in the south; Thorndike & Colony 1982); no internal stress, except that no
+// ice is pushed into a cell already ice_hmax thick (where real pack ice's strength stops the convergence). Donor-cell (upwind)
+// fluxes through sea edges only, limited so a cell sends at most the ice it holds; the ice's energy (-Lf m) and its fresh water
+// go with it, so ice_prev moves too (moved ice is not melt). F (kg, positive from eI to eJ) per edge; si per cell.
+extern "C" __global__ void ice_flux(int E, int La, const real* ua, const real* uo, const int* eI, const int* eJ, const int* eoeStart,
+                                    const int* eoe, const real* w, const real* sn, real cs, real cwind, const real* wall,
+                                    const real* ice, const real* le, real rho_ice, real hmax, real dt, real* F) {
+  LOOP1(e, E)
+  F[e] = 0;
+  if (wall && wall[e] == 0) return;
+  const real* a = ua + (size_t)(La - 1) * E;
+  real ut = 0;                                              // the wind along the edge (TRiSK's tangential: k x n)
+  for (int j = eoeStart[e]; j < eoeStart[e + 1]; j++) ut += w[j] * a[eoe[j]];
+  const real v = uo[e] + cwind * (cs * a[e] + sn[e] * ut);
+  const int dn = v > 0 ? eI[e] : eJ[e], rc = v > 0 ? eJ[e] : eI[e];
+  if (!(ice[dn] > 0) || ice[rc] >= rho_ice * hmax) return;
+  F[e] = v * dt * le[e] * ice[dn];
+}
+
+extern "C" __global__ void ice_limit(int N, const real* F, const int* cellEdge, const int* eI, const real* ice, const real* area, real* si) {
+  LOOP1(i, N)
+  real out = 0;
+  for (int m = 0; m < 6; m++) {
+    const int e = cellEdge[i * 6 + m];
+    if (e < 0) break;
+    const real f = eI[e] == i ? F[e] : -F[e];
+    if (f > 0) out += f;
+  }
+  const real have = ice[i] > 0 ? ice[i] * area[i] : (real)0;
+  si[i] = out > have ? have / out : (real)1;
+}
+
+extern "C" __global__ void ice_move(int N, const real* F, const real* si, const int* cellEdge, const int* eI, const int* eJ,
+                                   const real* area, real* ice, real* ice_prev) {
+  LOOP1(i, N)
+  real d = 0;
+  for (int m = 0; m < 6; m++) {
+    const int e = cellEdge[i * 6 + m];
+    if (e < 0) break;
+    const real f = F[e] * si[F[e] > 0 ? eI[e] : eJ[e]];     // from eI to eJ, scaled by its donor's limit
+    d += eI[e] == i ? -f : f;
+  }
+  if (d == 0) return;
+  d /= area[i];
+  ice[i] += d;
+  if (ice_prev) ice_prev[i] += d;
+}

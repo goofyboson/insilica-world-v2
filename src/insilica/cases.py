@@ -472,7 +472,7 @@ def earth_bed(g):
 # Modern Earth's land and sea floor over the coupled ocean. Its physics is V2-4c's and V2-4e's (#88, #91, #94, #95), the rest of the worlds still without; land_drag 8 goes with land_exch 2.
 # V2-6a (#109-#112): the k-tables' radiation, and the moist physics that put its troposphere on the observed profile (owner: option C):
 # the surface air's vapor (q_shape), freeze-drying, edge vapor, plumes rooted at the surface, entraining 0.1 per 100 hPa, their rain evaporating.
-PRESETS['earth'] = dict(PRESETS['coupled'], build=earth, land=lambda g: earth_land(g)[0], ocean=dict(surface_drag=SURFACE_DRAG, bed=earth_bed, land_drag=8.0),
+PRESETS['earth'] = dict(PRESETS['coupled'], build=earth, land=lambda g: earth_land(g)[0], ocean=dict(surface_drag=SURFACE_DRAG, bed=earth_bed, land_drag=8.0, ice_drift=0.02),
                         air=dict(AIR, longwave='ktables', physics=dict(AIR3, moist=1.0, k_evap=4.8e-3, firn=2.0, ecc=0.0167, lam_peri=math.radians(282.9), plume_deep=1.0, sat_prof=1.0, bl_bot=0.25, cloud=1.0, tau0=1.3, land_exch=2.0,
                                                                               q_shape=1.0, freeze_dry=1.0, edge_vap=1.0, plume_root=1.0, plume_ent=1e-5, conv_revap=0.05)))
 def earth4(g, rise=5.0e-3, bl=1.0e4):

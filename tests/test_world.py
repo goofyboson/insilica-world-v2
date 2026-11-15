@@ -68,13 +68,16 @@ def test_conserve(record, n, days):
 def conserve_land(record, days=2):
     """The land's budgets (V2-4a, `continent` from its cached spin-up, every step): the column's energy ledger with land; the
     land's water (soil, surface water, ice and what waits at the mouths change by rain − evaporation − what the sea took); the ocean's salt against its fresh water, the rivers included;
-    no water across a coast; total energy against TOA; and a save/load continuation."""
+    no water across a coast; total energy against TOA; and a save/load continuation. The sea ice drifts (#185), so these budgets
+    hold with it moving."""
     import sys
     sys.path.insert(0, str(__import__('pathlib').Path(__file__).parent))
     from test_climate import coupled_spun
     w = coupled_spun(4, 'continent')
     g, sea = w.grid, w.sea
     w.ice += cp.asarray(np.abs(g.lat) > np.radians(50.0)) * w.land * 3.0e6        # 3 km of ice on the far land, so that some flows into the sea (#86)
+    w.enable_ice_drift(0.02)                                                    # sea-ice drift (V2-6e, #185)
+    moved = 0.0
     A, At = cp.asarray(g.areaCell), float(np.sum(g.areaCell))
     rho, Sr, land = sea.cfg['rho'], sea.cfg['S_ref'], w.land
     calved = w.routing.calved
@@ -86,6 +89,8 @@ def conserve_land(record, days=2):
         e0 = w.energy()
         took = float(cp.sum(A * w.mouth))                      # the ocean takes what waits at the start of its tick
         w.step(1, graph=False)
+        if w._kind(w.tick - 1):                                # what the drift carried this ocean step (it moves ice and ice_prev together)
+            moved += float(cp.sum(cp.abs(w.sea._iF)))
         p = w.physics
         toa = float(cp.sum(A * (p.sw_abs - p.olr))) * w.dt
         res += w.energy() - e0 - toa
@@ -101,11 +106,12 @@ def conserve_land(record, days=2):
     f = os.path.join(tempfile.gettempdir(), f'land{os.getpid()}.iw2')
     w.save(f)
     r = World.load(f)
+    r.enable_ice_drift(0.02)
     w.step(48); r.step(48)
     same = w.state_hash() == r.state_hash()
     os.remove(f)
     ok = col <= 1e-13 and wland <= 1e-13 and sflux <= 1e-13 and coast == 0 and abs(energy) <= 0.1 and same and gave > 0
-    record('CONSERVE land', f'continent, {days} d after the spin-up, with 3 km of ice on land beyond 50° (it gives the sea {gave:.1e} mm/day of the land): column energy {fmt(col)} of the energy stored; land water {fmt(wland)}; salt against fresh water '
+    record('CONSERVE land', f'continent, {days} d after the spin-up, with 3 km of ice on land beyond 50° (it gives the sea {gave:.1e} mm/day of the land), the sea ice drifting ({moved / days / float(cp.sum(A * (1 - land) * w.ice)):.1e} of it a day): column energy {fmt(col)} of the energy stored; land water {fmt(wland)}; salt against fresh water '
            f'and rivers {fmt(sflux)}; fastest water across a coast {coast:.1f} m/s; energy change − TOA {energy:+.4f} W/m²; reload continues {"identically" if same else "DIFFERENTLY"}',
            '≤ 1e-13; ≤ 1e-13; ≤ 1e-13; 0; |energy − TOA| ≤ 0.1 W/m²; identical', ok)
     return ok

@@ -190,6 +190,12 @@ class World:
         if self.moist:
             cp.copyto(self.sea.ice_prev, self.ice)
 
+    def enable_ice_drift(self, wind=0.02):
+        """Sea-ice drift (V2-6e, #185) on in a built world; its captured step graphs are dropped so the drift is in them."""
+        self.sea.enable_ice_drift(wind)
+        self._graphs.clear()
+        self._tick0 = self.tick
+
     def _kind(self, tick):
         """0: air only; 1: with an ocean step; 2: with an ocean step and the mixed layer's mixing."""
         if self.sea is None or (tick + 1) % self.ocean_every:
@@ -254,6 +260,8 @@ class World:
             if rec and kind == 2:
                 rec.pre_mix()
             self.sea.step(mix=kind == 2)
+            if self.moist and self.sea.cfg['ice_drift'] > 0:              # sea-ice drift (V2-6e, #185)
+                self.sea.drift_ice(self.ice, self.u, self.physics.p['rho_ice'])
         if self.routing is not None and (kind or self.sea is None):     # on the ocean's step (1 h), or every step
             self.routing.step(self.sea.cfg['dt'] if self.sea is not None else self.dt)
 

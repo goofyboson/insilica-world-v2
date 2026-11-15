@@ -33,6 +33,31 @@ ICOSA_KEYS = ('n', 'N', 'pos', 'lat', 'lon', 'area', 'east', 'north', 'nbr', 'de
 
 GRID_VERSION = 1
 
+LENGTHS, AREAS = ('de', 'dist', 'edgeLen', 'le'), ('area', 'areaCell', 'areaV', 'kite', 'totalArea')
+
+
+def for_planet(g, radius, omega, grav):
+    """The grid on a planet of this radius (m) and rotation (rad/s) (V2-6e, #186): lengths and areas scaled from the cached
+    Earth-sized grid, the Coriolis parameter from the rotation; it carries radius, omega and grav for the presets' builders.
+    Earth's own returns the cached grid itself."""
+    from ..constants import GRAV, OMEGA, R_PLANET
+    if radius == R_PLANET and omega == OMEGA and grav == GRAV:
+        return g
+    a, s = g.arrays(), radius / R_PLANET
+    for k in LENGTHS:
+        a[k] = a[k] * s
+    for k in AREAS:
+        a[k] = a[k] * s * s
+    a['fV'] = a['fV'] * (omega / OMEGA)
+    a.update(radius=float(radius), omega=float(omega), grav=float(grav))
+    return Grid(a)
+
+
+def planet_of(g):
+    """(radius, omega, grav) of the planet a grid is on."""
+    from ..constants import GRAV, OMEGA, R_PLANET
+    return getattr(g, 'radius', R_PLANET), getattr(g, 'omega', OMEGA), getattr(g, 'grav', GRAV)
+
 
 def generator_hash():
     """The grids' cache key and save-file stamp: the hand-maintained GRID_VERSION (not a hash of the source)."""

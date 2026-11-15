@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from .constants import CP_DRY, GRAV, KAPPA, OMEGA, P0, R_PLANET
+from .grid import planet_of
 
 
 def edge_east_north(g):
@@ -42,20 +43,20 @@ def default_dt(n):
 def initial_state(g, preset):
     """One layer (h, b, u): Williamson 2 (steady zonal flow), Williamson 5 (zonal flow over an isolated mountain),
     Williamson 6 / 'rh4' (Rossby–Haurwitz wave 4) or the Galewsky jet (a balanced jet with a small bump)."""
-    a, Om = R_PLANET, OMEGA
+    a, Om, G = planet_of(g)                 # the grid's planet (#186): Earth's unless the world sets another
     lat_e, lon_e, en, nn = edge_east_north(g)
     b = np.zeros(g.N)
     if preset == 'w2':
         u0, gh0 = 2 * math.pi * a / (12 * 86400), 2.94e4
         s = np.sin(g.lat)
-        h = (gh0 - (a * Om * u0 + u0 * u0 / 2) * s * s) / GRAV
+        h = (gh0 - (a * Om * u0 + u0 * u0 / 2) * s * s) / G
         u = u0 * np.cos(lat_e) * en
     elif preset == 'w5':
         u0, h0, Rm, lc, pc = 20.0, 5960.0, math.pi / 9, -math.pi / 2, math.pi / 6
         s = np.sin(g.lat)
         dl = np.arctan2(np.sin(g.lon - lc), np.cos(g.lon - lc))
         b = 2000 * (1 - np.minimum(Rm, np.hypot(dl, g.lat - pc)) / Rm)
-        h = h0 - (a * Om * u0 + u0 * u0 / 2) * s * s / GRAV - b
+        h = h0 - (a * Om * u0 + u0 * u0 / 2) * s * s / G - b
         u = u0 * np.cos(lat_e) * en
     elif preset == 'rh4':
         om = Kk = 7.848e-6
@@ -64,7 +65,7 @@ def initial_state(g, preset):
         A = om / 2 * (2 * Om + om) * c * c + 0.25 * Kk * Kk * c ** (2 * R) * ((R + 1) * c * c + (2 * R * R - R - 2) - 2 * R * R / (c * c))
         B = 2 * (Om + om) * Kk / ((R + 1) * (R + 2)) * c ** R * ((R * R + 2 * R + 2) - (R + 1) ** 2 * c * c)
         C = 0.25 * Kk * Kk * c ** (2 * R) * ((R + 1) * c * c - (R + 2))
-        h = h0 + a * a * (A + B * np.cos(R * g.lon) + C * np.cos(2 * R * g.lon)) / GRAV
+        h = h0 + a * a * (A + B * np.cos(R * g.lon) + C * np.cos(2 * R * g.lon)) / G
         ce, se = np.cos(lat_e), np.sin(lat_e)
         ue = a * om * ce + a * Kk * ce ** (R - 1) * (R * se * se - ce * ce) * np.cos(R * lon_e)
         vn = -a * Kk * R * ce ** (R - 1) * se * np.sin(R * lon_e)
@@ -88,7 +89,7 @@ def initial_state(g, preset):
         gh = np.concatenate([[0.0], np.cumsum(-a * uu * (2 * Om * np.sin(ph) + np.tan(ph) * uu / a) * dphi)])
         x = (g.lat + math.pi / 2) / dphi
         k = np.minimum(M - 1, np.floor(x).astype(int))
-        h = (gh[k] + (x - k) * (gh[k + 1] - gh[k])) / GRAV
+        h = (gh[k] + (x - k) * (gh[k + 1] - gh[k])) / G
         h = h + 10000 - np.sum(h * g.areaCell) / np.sum(g.areaCell)
         h = h + 120 * np.cos(g.lat) * np.exp(-((g.lon / (1 / 3)) ** 2)) * np.exp(-(((math.pi / 4 - g.lat) / (1 / 15)) ** 2))
         u = ujet(lat_e) * en

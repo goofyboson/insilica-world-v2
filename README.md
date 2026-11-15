@@ -12,7 +12,7 @@ A planet simulator with two moving ocean layers and three moving air layers, run
 
 ## Current status
 
-**V2-6e in progress:** Earth's elliptical orbit (SPEC #184, ORBIT test) and sea-ice drift (#185: free drift with the current and 2% of the wind; the Arctic ice no longer piles up where glaciers reach the sea, and at equilibrium it is seasonal, 8 million km² in spring and none in late summer). EARTH passes; RAIN (+17%) and WINDS' equatorial stratosphere still fail.
+**V2-6e in progress:** Earth's elliptical orbit (SPEC #184, ORBIT test) and sea-ice drift (#185: free drift with the current and 2% of the wind; the Arctic ice no longer piles up where glaciers reach the sea, and at equilibrium it is seasonal, 8 million km² in spring and none in late summer). Planet settings per world (#186): radius, rotation, gravity, day, year, sun, orbit and gases from a `planet` dict, Earth's bit-identical, Williamson 2 steady on a Mars-sized planet. EARTH passes; RAIN (+17%) and WINDS' equatorial stratosphere still fail.
 
 **V2-6d Ice and deep ocean closed 2026-11-14 (45/47 with PERF; RAIN and WINDS' equatorial stratosphere known failures, carried on). Next: V2-6e planet settings and composition.** ICE passes with firn holding stored cold (SPEC #160, #162). The ocean's interior crossing, mixing and density classes are built behind switches and off (#163–#174); the trials traced the remaining climate errors: a polar-warm planet without sea ice, westerlies 10° equatorward, and a tropical troposphere ~5 K cold aloft that no convective lever moves (#176–#182). Sea-ice motion moves to V2-6e (#183). Speed: n = 4 model year 128 → 66 s, n = 6 step 26.9 → 21.4 ms, double precision bit-identical. PERF air n = 6 23.8 ms per model hour.
 

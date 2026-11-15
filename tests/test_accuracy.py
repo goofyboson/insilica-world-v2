@@ -67,8 +67,14 @@ def test_accuracy(record):
         w.step(int(5 * 86400 / w.dt))
         err.append(l2rel(w.grid.areaCell, w.h.get()[0], h0))
     fall = min(err[0] / err[1], err[1] / err[2])
-    rows.append(('ACCURACY N1', f'L2 {" → ".join(fmt(e) for e in err)} at n = 4, 5, 6 (×{err[0] / err[1]:.2f}, ×{err[1] / err[2]:.2f})',
-                 '< 1e-3 at n = 4; falls ≥ ×3 per level', err[0] < 1e-3 and fall >= 3))
+    # the same on a Mars-sized planet (V2-6e, #186): its radius, rotation and gravity through the grid, the Coriolis term and the dynamics
+    w = World(4, 'w2', params={'planet': dict(radius=3.3895e6, omega=7.0882e-5, grav=3.721)})
+    h0 = w.h.get()[0].copy()
+    w.step(int(5 * 86400 / w.dt))
+    em = l2rel(w.grid.areaCell, w.h.get()[0], h0)
+    rows.append(('ACCURACY N1', f'L2 {" → ".join(fmt(e) for e in err)} at n = 4, 5, 6 (×{err[0] / err[1]:.2f}, ×{err[1] / err[2]:.2f}); '
+                 f'on a Mars-sized planet (3390 km, 24.6 h, 3.72 m/s²) {fmt(em)} at n = 4',
+                 '< 1e-3 at n = 4 (Earth and Mars-sized); falls ≥ ×3 per level', err[0] < 1e-3 and em < 1e-3 and fall >= 3))
 
     # W5 mountain, 15 days at n = 4: energy drift, bounded
     w = World(4, 'w5')

@@ -47,7 +47,7 @@ def wall_mask(g, walls):
 
 
 class Ocean:
-    def __init__(self, dg, cfg=None, Tsurf=None, state=None, land=None, c_land=2.0e6, c_deep=0.0):
+    def __init__(self, dg, cfg=None, Tsurf=None, state=None, land=None, c_land=2.0e6, c_deep=0.0, grav=GRAV, day_s=86400.0):
         """cfg overrides OCEAN; Tsurf (N, K) starts the mixed layer's temperature (from the air case's surface);
         state = (h, u, T) restores one; land (N, 0/1): cells with no water (#84), walled off, their T[0] the ground's
         temperature with heat capacity c_land; with c_deep > 0 (#118) that is the ground's skin, and T[1] there is the deep
@@ -73,13 +73,14 @@ class Ocean:
         # sides carry no water — a basin's coasts, with no land cells (the air still sees open water there)
         self.wall = wall_mask(g, c['walls']) if len(c['walls']) else None
         self.c_land, self.c_deep = c_land, c_deep
+        self.grav, self.day_s = grav, day_s                     # the planet's (#186)
         self.land = None
         if land is not None:
             m = self.wall if self.wall is not None else np.ones(g.E)
             m[(land[g.eI] > 0.5) | (land[g.eJ] > 0.5)] = 0.0
             self.wall = m
             self.land = cp.asarray(np.asarray(land, dtype=float))
-        self.core = Layers(dg, L, b=self.b, gprime=list(c['gprime']), stress=[0.0] * (L - 1) + [c['bottom_stress']], nu4=nu4,
+        self.core = Layers(dg, L, b=self.b, grav=grav, gprime=list(c['gprime']), stress=[0.0] * (L - 1) + [c['bottom_stress']], nu4=nu4,
                            floor=c['hmin'], vmix=c['interface_stress'], vmix_cd=c['interface_cd'], thin=c['thin'], wall=self.wall, shelf=c['shelf'] if c['bed'] is not None else 0.0,
                            shelf_bed=c['shelf_bed'] > 0)
         if nu4:
@@ -166,7 +167,8 @@ class Ocean:
         """The deep ground's exchange with its skin over dt (#118); nothing unless c_deep > 0."""
         if self.c_deep > 0 and self.land is not None:
             g = self.dg
-            self.k['ocn_ground'](*grid_dims(g.N), (np.int32(g.N), self.land, self.T, self.cap, g.dtype.type(self.c_deep), g.dtype.type(dt)))
+            self.k['ocn_ground'](*grid_dims(g.N), (np.int32(g.N), self.land, self.T, self.cap, g.dtype.type(self.c_deep), g.dtype.type(dt),
+                                                  g.dtype.type(self.day_s)))
 
     def update_cap(self):
         g = self.dg
@@ -188,7 +190,7 @@ class Ocean:
     def eos(self):
         """The column physics' equation of state as kernel arguments: g, α, α2, β (decision #76)."""
         c, R = self.cfg, self.dg.dtype.type
-        return R(GRAV), R(c['alpha']), R(c['alpha2']), R(c['beta'])
+        return R(self.grav), R(c['alpha']), R(c['alpha2']), R(c['beta'])
 
     def accumulate(self, dt, evap=None, rain=None, ice=None, mouth=None):
         """Pass the air step's sunlight below the mixed layer's base to the layers below, add the fluxes the mixed layer

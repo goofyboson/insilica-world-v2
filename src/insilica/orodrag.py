@@ -23,7 +23,7 @@ def operators(g):
     (E, 4)."""
     east, north = east_north(g.pos)
     ce = np.where(g.cellEdge >= 0, g.cellEdge, 0)
-    c = np.where(g.cellEdge >= 0, g.cellSign * g.le[ce] * R_PLANET, 0.0) / g.areaCell[:, None]
+    c = np.where(g.cellEdge >= 0, g.cellSign * g.le[ce] * getattr(g, 'radius', R_PLANET), 0.0) / g.areaCell[:, None]
     d = g.xm[ce] - g.pos[:, None, :]
     op = np.stack([c * np.sum(d * east[:, None, :], 2), c * np.sum(d * north[:, None, :], 2)], 2)
     # the normal from the reconstruction itself: a uniform wind W at a cell gives u_e = W . n_e
@@ -45,7 +45,7 @@ class OroDrag:
         self.dg, self.L = dg, L
         self.op, self.nrm = cp.asarray(op.reshape(-1), dtype=R), cp.asarray(nrm.reshape(-1), dtype=R)
         self.sso = cp.asarray(np.stack([np.asarray(x, dtype=float) for x in sso]).reshape(-1), dtype=R)
-        self.p = [GRAV, P0, KAPPA, RD, p['oro_g'], p['oro_cd'], p['oro_hnc'], p['oro_ric'], dt, 1.0]
+        self.p = [p.get('grav', GRAV), P0, KAPPA, RD, p['oro_g'], p['oro_cd'], p['oro_hnc'], p['oro_ric'], dt, 1.0]
         self.par = cp.asarray(self.p, dtype=R)
         self.beta, self.F = cp.zeros((L, g.N), dtype=R), cp.zeros((2 * L, g.N), dtype=R)
         self.k = {n: dg.kernel(n, 'drag.cu') for n in ('oro_cell', 'oro_edge')}
@@ -70,7 +70,7 @@ class WaveDrag:
         self.dg, self.L, self.dt = dg, L, dt
         self.op, self.nrm = cp.asarray(op.reshape(-1), dtype=R), cp.asarray(nrm.reshape(-1), dtype=R)
         self.lat = cp.asarray(np.degrees(g.lat), dtype=R)
-        self.par = cp.asarray([GRAV, P0, KAPPA, RD, p['gw_bt'], p['gw_cw'], 2 * np.pi / p['gw_lambda'], p['gw_psrc'],
+        self.par = cp.asarray([p.get('grav', GRAV), P0, KAPPA, RD, p['gw_bt'], p['gw_cw'], 2 * np.pi / p['gw_lambda'], p['gw_psrc'],
                                p['gw_cmax'], p['gw_dc'], dt], dtype=R)
         self.F, self.zero = cp.zeros((2 * L, g.N), dtype=R), cp.zeros((L, g.N), dtype=R)
         self.k = {n: dg.kernel(n, 'drag.cu') for n in ('gw_cell', 'oro_edge')}

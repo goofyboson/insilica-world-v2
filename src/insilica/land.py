@@ -14,7 +14,7 @@ GRAV = 9.81           # m/s²
 
 
 class LandWater:
-    def __init__(self, dg, b, land, soilcap, pond, soil, ice, rho_ice=917.0, uflow=RIVER_SPEED, kseep=K_SEEP):
+    def __init__(self, dg, b, land, soilcap, pond, soil, ice, rho_ice=917.0, uflow=RIVER_SPEED, kseep=K_SEEP, grav=GRAV):
         """b, land, soilcap: terrain (m), mask and capacity; pond, soil, ice: the world's buffers (kg/m²), changed in place."""
         self.dg, self.b, self.land, self.soilcap = dg, b, land, soilcap
         self.pond, self.soil, self.ice = pond, soil, ice
@@ -25,7 +25,7 @@ class LandWater:
         self.z, self.zt, self.sp, self.ss, self.pond1, self.soil1 = z(), z(), z(), z(), z(), z()
         self.s, self.g2, self.si, self.ice1, self.calved = z(), z(), z(), z(), z()    # calved: ice given to each sea cell, summed (kg/m²)
         self.ice_prev = None                              # the ocean's, when there is one
-        self.gam = 2.0 * GLEN_A * (rho_ice * GRAV) ** 3 / 5.0
+        self.gam = 2.0 * GLEN_A * (rho_ice * grav) ** 3 / 5.0
         self.k = {n: dg.kernel(n, 'land.cu') for n in ('land_heights', 'land_scale', 'land_apply', 'ice_surface', 'ice_slope', 'ice_scale', 'ice_apply')}
 
     def step(self, dt):

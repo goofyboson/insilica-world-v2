@@ -22,7 +22,7 @@ from .cases import PRESETS, cosine_bell, default_dt, edge_east_north, initial_st
 from .gpu import DeviceGrid, dsum, grid_dims, source_hash
 from .io import save as savefile
 from .atmosphere import AirPhysics
-from .constants import CP_DRY, GRAV, KAPPA, P0
+from .constants import CP_DRY, GRAV, KAPPA, P0, PLANET
 from .land import LandWater
 from .layers import DIV_DAMP, Layers
 from .transport import BETA, Transport
@@ -49,16 +49,23 @@ class World:
         """A world on level n from case `preset`. layers=K splits a one-layer case into K equal layers with
         g' = 0 (they then move as one: test REPRO). state=(h, b, u) starts from given arrays instead."""
         self.n, self.preset = n, preset
-        self.grid = gridmod.get(n)
-        self.dg = DeviceGrid(self.grid)
         spec = PRESETS[preset]
         self.params = dict(params or {})
         P = self.params
+        # the planet (V2-6e, #186): radius, rotation and gravity (Earth's unless the preset or params set them); the rest of its
+        # settings (day, year, sun, orbit, gases) are the air physics' own
+        pl = dict(spec.get('planet', {}), **P.get('planet', {}))
+        self.planet = dict(PLANET, **{k: v for k, v in pl.items() if k in PLANET})
+        self.grav = self.planet['grav']
+        self.grid = gridmod.for_planet(gridmod.get(n), **self.planet)
+        self.dg = DeviceGrid(self.grid)
         built = state if state is not None else spec['build'](self.grid)
         h, b, u = built[:3]
         extra = built[3] if len(built) > 3 else {}
         h, u = np.asarray(h, dtype=float), np.asarray(u, dtype=float)
         self.air = spec.get('air')                       # air layers (V2-2a): h is mass per area, θ per layer
+        if self.air and state is None and self.grav != GRAV:
+            h = h * (GRAV / self.grav)                   # (#186) the builders' pressures kept: their masses are Earth's
         if layers and layers != h.shape[0]:
             assert h.shape[0] == 1
             h, u = np.repeat(h / layers, layers, axis=0), np.repeat(u, layers, axis=0)
@@ -72,7 +79,7 @@ class World:
         nu4 = P.get('nu4', visc4(self.grid, P['visc4_U']) if 'visc4_U' in P else visc4(self.grid, spec.get('visc4_U', 0.0)))
         self.b = cp.asarray(b, dtype=float)
         floor = P.get('floor', 10.0 if self.air else 1.0)
-        self.core = Layers(self.dg, self.L, b=self.b, gprime=self.gprime, drag=P.get('drag', spec.get('drag', 0.0)),
+        self.core = Layers(self.dg, self.L, b=self.b, grav=self.grav, gprime=self.gprime, drag=P.get('drag', spec.get('drag', 0.0)),
                            stress=P.get('stress', spec.get('stress', 0.0)),
                            nu4=nu4, floor=floor, rotation=P.get('rotation', 1.0),
                            div_damp=P.get('div_damp', DIV_DAMP),
@@ -94,6 +101,10 @@ class World:
         self.STATE = World.STATE
         if self.air:
             phys = dict(self.air.get('physics', {}), floor_=floor, **P.get('physics', {}))
+            phys.update({k: v for k, v in pl.items() if k not in PLANET}, grav=self.grav)      # the planet's day, year, sun, orbit, gases (#186)
+            if self.grav != GRAV:
+                phys.setdefault('mu_ref', P0 / self.grav)
+                phys.setdefault('mu_bl', 1.0e4 / self.grav)
             phys = {k: (v(self.grid) if callable(v) else v) for k, v in phys.items()}     # e.g. θ* from the case
             self.physics = AirPhysics(self.dg, self.L, phys, mean_sun=P.get('mean_sun', self.air.get('mean_sun', False)),
                                       forcing=self.air.get('forcing', 'radiation'),
@@ -124,7 +135,8 @@ class World:
             self.soilcap = cp.asarray(p['soil_base'] + p['soil_per_m'] * np.maximum(cp.asarray(b).get(), 0.0))
             self.soil = 0.5 * self.soilcap
             self.pond, self.snow = cp.zeros(self.grid.N), cp.zeros(self.grid.N)
-            self.routing = LandWater(self.dg, self.b, self.land, self.soilcap, self.pond, self.soil, self.ice, rho_ice=p['rho_ice'])
+            self.routing = LandWater(self.dg, self.b, self.land, self.soilcap, self.pond, self.soil, self.ice, rho_ice=p['rho_ice'],
+                                     **({} if self.grav == GRAV else dict(grav=self.grav)))   # (Earth: the ice flow's own 9.81)
             self.mouth = self.routing.mouth
             self.STATE = self.STATE + ('soil', 'pond', 'snow', 'mouth')
             self.firn = None
@@ -143,7 +155,8 @@ class World:
             ocfg = dict(spec['ocean'], **P.get('ocean', {}))
             self.surface_drag = ocfg.pop('surface_drag')
             self.sea = Ocean(self.dg, ocfg, Tsurf=extra['Ts'], state=extra.get('ocean'), land=land,
-                             c_land=self.physics.p['c_land'], c_deep=self.physics.p['c_deep'])
+                             c_land=self.physics.p['c_land'], c_deep=self.physics.p['c_deep'], grav=self.grav,
+                             day_s=self.physics.p['day_s'] if self.air else 86400.0)
             ratio = self.sea.cfg['dt'] / self.dt
             if abs(ratio - round(ratio)) > 1e-9 or round(ratio) < 1:
                 raise ValueError(f'the ocean step {self.sea.cfg["dt"]} s must be a whole number of air steps ({self.dt} s)')
@@ -235,7 +248,7 @@ class World:
             if rec:
                 rec.post_couple()
             self.core.k['vmix_heat'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.sea.diss, g.cellEdge, g.le, g.de,
-                                                       g.areaCell, R(GRAV), R(CP_DRY), R(KAPPA), R(P0), self.theta))
+                                                       g.areaCell, R(self.grav), R(CP_DRY), R(KAPPA), R(P0), self.theta))
         if self.air:
             if rad:
                 self.physics.radiate(self.h, self.theta, self.Ts, self.time, self.rad_every * self.dt,
@@ -412,17 +425,17 @@ class World:
             return self.ice / self.physics.p['rho_ice']             # m
         if name == 'rh':
             T = self.field('T', layer)
-            p = GRAV * cp.cumsum(self.h, axis=0)
-            pt = p - GRAV * self.h
+            p = self.grav * cp.cumsum(self.h, axis=0)
+            pt = p - self.grav * self.h
             pk = CP_DRY * (p ** (KAPPA + 1) - pt ** (KAPPA + 1)) / ((KAPPA + 1) * (p - pt) * P0 ** KAPPA)
             pm = P0 * (pk[layer] / CP_DRY) ** (1 / KAPPA)           # the layer's pressure, as the column physics uses it
             qs = 0.622 * 611.0 * cp.exp(17.27 * (T - 273.15) / (T - 35.85)) / pm
             return self.q[layer] / qs
         if name == 'ps':
-            return GRAV * cp.sum(self.h, axis=0) / 100.0          # hPa
+            return self.grav * cp.sum(self.h, axis=0) / 100.0          # hPa
         if name == 'T':
-            p = GRAV * cp.cumsum(self.h, axis=0)
-            pt = p - GRAV * self.h
+            p = self.grav * cp.cumsum(self.h, axis=0)
+            pt = p - self.grav * self.h
             pib = CP_DRY * (p ** (KAPPA + 1) - pt ** (KAPPA + 1)) / ((KAPPA + 1) * (p - pt) * P0 ** KAPPA)
             return (pib * self.theta / CP_DRY)[layer]
         if name in ('speed', 'vort'):

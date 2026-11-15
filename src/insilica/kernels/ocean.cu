@@ -172,23 +172,28 @@ extern "C" __global__ void ocn_column(int N, int L, const real* h, real* T, real
   if (dm > up_max) dm = up_max > 0 ? up_max : (real)0;
   if (-dm > dn_max) dm = dn_max > 0 ? -dn_max : (real)0;
   wx[i] = dm;
-  real gave = dm > 0 ? dm : (real)0;                            // (what layer k already gives the layer above)
+  // (#170) what layer 1 lacks comes up through it from below: add[k], the water passing up across the interface below layer k.
+  // (#189) Taken first, so formation and mixing see it: across an interface water already passes up through, no layer's water
+  // forms downward (with ri_b's deep targets the two together emptied a layer below its floor: NaN in 3 days, earth7o5)
+  real add[LMAX + 1];
+  for (int k = 0; k <= LMAX; k++) add[k] = 0;
+  if (reach > 0 && dm > 0) {
+    real rem = dm - fmax(h1 - hmin, (real)0);
+    for (int k = 1; k < L - 1 && rem > 0; k++) {
+      add[k] = rem;
+      rem -= fmax(h[(size_t)(k + 1) * N + i] - hmin, (real)0);
+    }
+  }
+  real gave = dm > 0 ? dm - add[1] : (real)0;                   // (what layer k's own water already gives the layer above)
   for (int k = 1; k < L - 1; k++) {
     const real hk = h[(size_t)k * N + i], hb = h[(size_t)(k + 1) * N + i];
     real v = 0;
-    if (dwf > 0 && Bns < 0 && buoy(T[(size_t)k * N + i], S[(size_t)k * N + i], q) <= buoy(T[(size_t)(k + 1) * N + i], S[(size_t)(k + 1) * N + i], q))
+    if (dwf > 0 && Bns < 0 && add[k] <= 0 && buoy(T[(size_t)k * N + i], S[(size_t)k * N + i], q) <= buoy(T[(size_t)(k + 1) * N + i], S[(size_t)(k + 1) * N + i], q))
       v = -fmax(hk - hmin - gave, (real)0);                    // formed: down into the layer below
     else if (kappa_d > 0)
-      v = fmin(2 * kappa_d / (hk + hb) * dt, fmax(hb - hmin, (real)0));   // mixed: up from it
-    wx[(size_t)k * N + i] = v;
-    gave = v > 0 ? v : (real)0;
-  }
-  if (reach > 0 && dm > 0) {                                    // (#170) what layer 1 lacks comes up through it from below
-    real rem = dm - fmax(h1 - hmin, (real)0);
-    for (int k = 1; k < L - 1 && rem > 0; k++) {
-      wx[(size_t)k * N + i] += rem;
-      rem -= fmax(h[(size_t)(k + 1) * N + i] - hmin, (real)0);
-    }
+      v = fmin(2 * kappa_d / (hk + hb) * dt, fmax(hb - hmin - (add[k] - add[k + 1]), (real)0));   // mixed: up from it
+    wx[(size_t)k * N + i] = v + add[k];
+    gave = (v > 0 ? v : (real)0) + (add[k] - add[k + 1]);         // (the next layer's own water passed up through this one)
   }
 }
 

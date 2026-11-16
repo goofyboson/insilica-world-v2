@@ -64,13 +64,14 @@ extern "C" __global__ void land_scale(int N, const real* land, const real* z, co
   if (os > 0 && os > as) ss[i] = as / os;
 }
 
-// New pond and soil from the flows out of this cell and into it; a sea cell adds what it receives to mouth.
+// New pond and soil from the flows out of this cell and into it; a sea cell adds what it receives to mouth. qout (geology's
+// accumulators, #220, or NULL): a land cell's surface outflow, summed (kg/m^2 of its area).
 extern "C" __global__ void land_apply(int N, const real* land, const real* z, const real* pond, const real* zt, const real* soil,
                                       const real* soilcap, const int* cellEdge, const int* eI, const int* eJ, const real* le,
                                       const real* de, const real* area, real rho_w, real uflow, real kseep, const real* sp,
-                                      const real* ss, real* pond1, real* soil1, real* mouth) {
+                                      const real* ss, real* pond1, real* soil1, real* mouth, real* qout) {
   LOOP1(i, N)
-  real gp = 0, gs = 0;
+  real gp = 0, gs = 0, op = 0;
   const bool li = land[i] > (real)0.5;
   for (int m = 0; m < 6; m++) {
     const int e = cellEdge[i * 6 + m];
@@ -79,7 +80,7 @@ extern "C" __global__ void land_apply(int N, const real* land, const real* z, co
     real fp, fs;
     if (li) {
       edge_flows(i, o, e, land, z, pond, zt, soil, soilcap, le, de, area, rho_w, uflow, kseep, fp, fs);
-      gp -= fp * sp[i]; gs -= fs * ss[i];
+      gp -= fp * sp[i]; gs -= fs * ss[i]; op += fp * sp[i];
     }
     edge_flows(o, i, e, land, z, pond, zt, soil, soilcap, le, de, area, rho_w, uflow, kseep, fp, fs);
     gp += fp * sp[o]; gs += fs * ss[o];
@@ -87,6 +88,7 @@ extern "C" __global__ void land_apply(int N, const real* land, const real* z, co
   if (li) {
     pond1[i] = pond[i] + gp / area[i];
     soil1[i] = soil[i] + gs / area[i];
+    if (qout) qout[i] += op / area[i];
   } else {
     pond1[i] = 0; soil1[i] = 0;
     mouth[i] += (gp + gs) / area[i];
@@ -150,19 +152,20 @@ extern "C" __global__ void ice_scale(int N, const real* land, const real* s, con
 
 extern "C" __global__ void ice_apply(int N, const real* land, const real* s, const real* g2, const real* ice, const int* cellEdge,
                                      const int* eI, const int* eJ, const real* le, const real* de, const real* area, real rho_ice,
-                                     real gam, const real* si, real* ice1, real* ice_prev, real* calved) {
+                                     real gam, const real* si, real* ice1, real* ice_prev, real* calved, real* iout) {
   LOOP1(i, N)
-  real d = 0;
+  real d = 0, out = 0;
   const bool li = land[i] > (real)0.5;
   for (int m = 0; m < 6; m++) {
     const int e = cellEdge[i * 6 + m];
     if (e < 0) break;
     const int o = eI[e] == i ? eJ[e] : eI[e];
-    if (li) d -= ice_flow(i, o, e, land, s, g2, ice, le, de, area, rho_ice, gam) * si[i];
+    if (li) { const real f = ice_flow(i, o, e, land, s, g2, ice, le, de, area, rho_ice, gam) * si[i]; d -= f; out += f; }
     d += ice_flow(o, i, e, land, s, g2, ice, le, de, area, rho_ice, gam) * si[o];
   }
   d /= area[i];
   ice1[i] = ice[i] + d;
+  if (iout && li) iout[i] += out / area[i];                       // (geology's accumulators, #220: the ice flowing out)
   if (!li) {
     calved[i] += d;
     if (ice_prev) ice_prev[i] += d;

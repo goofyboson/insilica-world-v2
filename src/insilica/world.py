@@ -216,8 +216,32 @@ class World:
         self._graphs, self._tick0 = {}, 0                 # one captured graph per kind of tick (air; + ocean; + mixing; + radiation)
         self._rad0 = 0                                    # the tick radiation steps count from (the first after a build or load)
         self.recorder = None
+        self.geology = None                               # geology's accumulators (V2-6e, #220), off unless asked for
+        if P.get('geology'):
+            self._geology_on()
 
     STATE = ('h', 'u', 'M', 'psi')
+
+    def _geology_on(self):
+        from .geology import Geology
+        if not self.moist:
+            raise ValueError("geology's accumulators (geology) need moist air")
+        p = self.physics.p
+        self.geology = Geology(self.dg, self.dt, p['day_s'], self.Ts, p['Tf'], land=self.land)
+        self.geo, self.geo_ring, self.geo_clock = self.geology.acc, self.geology.ring, self.geology.clock
+        self.STATE = self.STATE + ('geo', 'geo_ring', 'geo_clock')
+        if self.routing is not None:
+            self.routing.geo = self.geology
+
+    def enable_geology(self):
+        """Geology's accumulators (V2-6e, #220) on in a built world, from zero; saved with it from now on, and the captured
+        step graphs dropped so the sums are in them."""
+        if self.geology is None:
+            self.params['geology'] = 1
+            self._geology_on()
+            self._graphs.clear()
+            self._tick0 = self.tick
+        return self.geology
 
     def _sync_sea(self):
         """The ocean's quantities derived from the state (after creation or loading): the mixed layer's heat capacity, and
@@ -291,6 +315,8 @@ class World:
                                 gx=self.gx if self.gas_on else None)
             if rec:
                 rec.post_column()
+            if self.geology is not None:
+                self.geology.column(self.physics.rain, self.physics.evap, ice=self.ice if self.land is not None else None)
             if self.sea is not None:
                 self.sea.ground(self.dt)
                 self.sea.accumulate(self.dt, self.physics.evap, self.physics.rain, self.ice, self.mouth)

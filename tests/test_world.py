@@ -218,7 +218,8 @@ def conserve_air(record):
     # (#218: the land column under the ground's skin in place of the deep ground: its conduction keeps the land's heat, and it reloads)
     from insilica.constants import SOIL_DZ
     air = {'physics': {'gases': dict(n2=0.9, co2=0.1), 'c_deep': 0.0, 'soil_dz': list(SOIL_DZ)}}
-    e = World(4, 'earth7', params=dict(air, gas_tracers=1))
+    # (#220: with geology's accumulators, each sum against the same kept here, the runoff against the water reaching the sea)
+    e = World(4, 'earth7', params=dict(air, gas_tracers=1, geology=1))
     e.gas_src[0, :100] = 1e-9
     gamt = lambda: [float(cp.sum(e.M * e.gx[j])) for j in range(e.gx.shape[0])]
     g0, gsrc = gamt(), 0.0
@@ -257,6 +258,39 @@ def conserve_air(record):
         soil['worst'] = max(soil['worst'], abs(column_heat()[0] - h0) / gross)
         soil['moved'] += float(cp.sum(A * lnd * cp.sum(dzc * cp.abs(sea.Tg - t0), axis=0))) / float(cp.sum(A * lnd)) / dt
     sea.ground = ground
+    from insilica.geology import CRACK, EA_WEATHER, FT_BAND, R_GAS, ROWS, T0_WEATHER
+    geo, lm = e.geology, lnd > 0.5
+    ref = {k: cp.zeros(e.grid.N) for k in ('rain', 'evap', 'tsum', 'frozen', 'crack', 'ftc', 'rx1', 'weather')}
+    gs = dict(fst=geo.row('fstate').copy(), bucket=cp.zeros(e.grid.N), ring=[], n=0, runoff=0.0, sent=0.0, below=0)
+
+    def gcol(rain, evap, ice=None, _c=geo.column):
+        T, dt, tf = geo.Ts.copy(), e.dt, geo.tf
+        _c(rain, evap, ice)
+        ref['rain'] += rain * dt; ref['evap'] += evap * dt; ref['tsum'] += T * dt
+        ref['frozen'] += cp.where(lm & (T < tf), dt, 0.0)
+        ref['crack'] += cp.where(lm & (T >= tf + CRACK[0]) & (T <= tf + CRACK[1]), dt, 0.0)
+        thaw = lm & (gs['fst'] > 0.5) & (T > tf + FT_BAND)
+        ref['ftc'] += thaw
+        gs['fst'] = cp.where(thaw, 0.0, cp.where(lm & (gs['fst'] < 0.5) & (T < tf - FT_BAND), 1.0, gs['fst']))
+        gs['bucket'] = gs['bucket'] + rain * dt
+        gs['n'] += 1
+        if gs['n'] % geo.slot == 0:
+            gs['ring'] = (gs['ring'] + [gs['bucket']])[-geo.nslot:]
+            gs['bucket'] = cp.zeros(e.grid.N)
+            ref['rx1'] = cp.maximum(ref['rx1'], sum(gs['ring']))
+    geo.column = gcol
+
+    def route(dt, _r=e.routing.step):
+        m0, a0, p0, i0 = e.mouth.copy(), geo.acc.copy(), e.pond.copy(), e.ice.copy()
+        _r(dt)
+        d = geo.acc - a0
+        run = d[ROWS.index('runoff')]
+        gs['runoff'] = max(gs['runoff'], abs(float(cp.sum(A * run)) - float(cp.sum(A * (e.mouth - m0)))) / float(cp.sum(A * cp.abs(run))))
+        gs['sent'] += float(cp.sum(A * (e.mouth - m0)))
+        ref['weather'] += run * cp.exp(EA_WEATHER / R_GAS * (1 / T0_WEATHER - 1 / e.Ts))
+        gs['below'] += int(cp.sum(lm & (d[ROWS.index('river')] < (p0 - e.pond) - 1e-12 * p0)))       # out at least its net loss
+        gs['below'] += int(cp.sum(lm & (d[ROWS.index('iceflow')] < (i0 - e.ice) - 1e-12 * i0)))
+    e.routing.step = route
     snow = 0.0                                            # the snow reaching the ground (#134): its freezing heat given aloft
     for t in range(48):
         W0, E0 = e.water(), e.energy()
@@ -271,6 +305,9 @@ def conserve_air(record):
         e4 = max(e4, abs(float(cp.sum(A * p.stored)) - float(cp.sum(A * (p.sw_abs - p.olr))) * e.dt) / abs(E0))
         e4w = max(e4w, abs(e.water() - W0 - float(cp.sum(A * (p.evap - p.rain))) * e.dt) / e.water())
     g1 = gamt()
+    gerr = max(float(cp.max(cp.abs(geo.row(k) - v)) / max(float(cp.max(cp.abs(v))), 1e-300)) for k, v in ref.items())
+    geo_ok = (gerr <= 1e-13 and gs['runoff'] <= 1e-13 and gs['below'] == 0 and float(ref['rx1'].max()) > 0 and float(ref['ftc'].sum()) > 0
+              and gs['sent'] > 0 and float(geo.row('iceflow').max()) > 0 and 'geo' in e.STATE)
     fs = os.path.join(tempfile.gettempdir(), f'soil{os.getpid()}.iw2')
     e.save(fs)
     reload_ok = World.load(fs).state_hash() == e.state_hash() and 'oTg' in e.STATE
@@ -279,7 +316,8 @@ def conserve_air(record):
     guni = max(float((e.gx[j].max() - e.gx[j].min()) / e.gx[j].mean()) for j in range(1, len(g0)))
     ok = (worst <= 1e-13 and water <= 1e-13 and mass <= 1e-13 and tracer <= 1e-13 and vapor <= 1e-13 and abs(drift) < 1e-4 and e4 <= 1e-13
           and e4w <= 1e-13 and snow > 0 and all(d['energy'] <= 1e-13 and d['gross'] > 0 for d in drag.values()) and drag['gw']['momentum'] <= 1e-13
-          and gbud <= 1e-13 and guni <= 1e-12 and olr_gx <= 1e-12 and soil['worst'] <= 1e-13 and soil['moved'] > 0 and reload_ok)
+          and gbud <= 1e-13 and guni <= 1e-12 and olr_gx <= 1e-12 and soil['worst'] <= 1e-13 and soil['moved'] > 0 and reload_ok
+          and geo_ok)
     record('CONSERVE air', f'moist column ledgers, 48 steps: energy worst {fmt(worst)} of the energy stored ({fmt(per_step)} of one step of sunlight), '
            f'water {fmt(water)}; moist aqua 10 d (3 layers; dynamics, radiation, crossings ~{crossed:.2f} kg/m² per step, convection, rain): '
            f'air mass {fmt(mass)}, tracer {fmt(tracer)}, vapor against evaporation − rain {fmt(vapor)}; adiabatic air (two layers), '
@@ -291,6 +329,8 @@ def conserve_air(record):
            f'gas tracers (#217): CO₂, N₂O, CH₄ against their sources (CO₂ {gsrc / g1[0]:.1e} of its amount from the surface) {fmt(gbud)}, '
            f'N₂O and CH₄ started uniform stay so to {fmt(guni)}, OLR reading them against the planet\'s values {fmt(olr_gx)}; '
            f'land column (#218, {len(SOIL_DZ)} layers to {sum(SOIL_DZ):.1f} m, {soil["moved"] / 48:.1f} W/m² changing its layers on land, mean over the steps): its heat {fmt(soil["worst"])} of its gross, '
+           f'geology’s accumulators (#220; rain, evaporation, temperature, frost, freeze-thaw, the day’s largest rain, weathering) against the same kept here {fmt(gerr)}, '
+           f'the land’s runoff against the water reaching the sea ({gs["sent"] / 1e12:.1f} Gt) {fmt(gs["runoff"])}, outflows below a cell’s net loss {gs["below"]}; '
            f'reload {"identical" if reload_ok else "DIFFERENT"}',
            '≤ 1e-13; ≤ 1e-13; drift < 1e-4; uniform ≤ 1e-12; reload identical', ok)
     return ok

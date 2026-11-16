@@ -71,6 +71,27 @@ struct Par {
   real ths[LMAX];                                  // the theta* of the interfaces above the lowest one, from the top (decision #101)
 };
 
+// The dry air's constants (V2-6e, #216): a world with its own gases compiles its values in (constants.air_props); otherwise
+// those the model has always used, bit for bit.
+#ifndef AIR_RD
+#define AIR_RD 287.0
+#endif
+#ifndef AIR_EPS
+#define AIR_EPS 0.622
+#endif
+#ifndef AIR_VF
+#define AIR_VF 0.61
+#endif
+#ifndef AIR_VFB
+#define AIR_VFB 0.608
+#endif
+#ifndef AIR_M
+#define AIR_M 28.9647
+#endif
+#ifndef AIR_MKG
+#define AIR_MKG 28.9647e-3
+#endif
+
 // The parameters arrive as an array in this order (atmosphere.PAR_ORDER).
 __device__ Par unpack(const real* a) {
   Par P;
@@ -112,7 +133,7 @@ __device__ void node_exner(int L, const real* mu, const Par& P, real* gx) {
 
 // Saturation specific humidity (v1's qsat: Tetens over water), at temperature T (K) and pressure p (Pa).
 __device__ __forceinline__ fast qsat(fast T, fast p) {
-  return (fast)0.622 * (fast)611.0 * (fast)FEXP((fast)17.27 * (T - (fast)273.15) / (T - (fast)35.85)) / p;
+  return (fast)AIR_EPS * (fast)611.0 * (fast)FEXP((fast)17.27 * (T - (fast)273.15) / (T - (fast)35.85)) / p;
 }
 // The liquid share of condensate at temperature T: 1 at freezing, 0 at -20 C (the clouds' rule, #95; IFS's mixed phase is 0 to -23 C).
 __device__ __forceinline__ fast liq_of(fast T) { return fmin((fast)1, fmax((fast)0, (T - (fast)253.15) / (fast)20)); }
@@ -121,7 +142,7 @@ __device__ __forceinline__ fast liq_of(fast T) { return fmin((fast)1, fmax((fast
 __device__ __forceinline__ fast qsat_a(fast T, fast p, real ice) {
   const fast w = qsat(T, p);
   if (!(ice > 0) || T >= (fast)273.15) return w;
-  const fast l = liq_of(T), si = (fast)0.622 * (fast)611.0 * (fast)FEXP((fast)21.875 * (T - (fast)273.16) / (T - (fast)7.66)) / p;
+  const fast l = liq_of(T), si = (fast)AIR_EPS * (fast)611.0 * (fast)FEXP((fast)21.875 * (T - (fast)273.16) / (T - (fast)7.66)) / p;
   return l * w + (1 - l) * si;
 }
 
@@ -513,7 +534,7 @@ __device__ void plume_ascent(int bot, const real* mu, const real* th, real th0, 
   lift(pi_);
   // buoy_v (#145): buoyancy in virtual theta, the plume's vapor against its surroundings' (the layer's), as the IFS's test parcel (Bechtold,
   // ECMWF lecture notes 3.2): over the sea the mixed layer's buoyancy is mostly its vapor's, ~1 K against the cumulus layer
-  auto vf = [&](real qv_) { return P.buoy_v > 0 ? (real)1 + (real)0.608 * qv_ : (real)1; };
+  auto vf = [&](real qv_) { return P.buoy_v > 0 ? (real)1 + (real)AIR_VFB * qv_ : (real)1; };
   auto qe_ = [&](int k_) { return q && k_ >= 0 ? q[k_] : (real)0; };
   real sum = (real)0.5 * mu[bot] * (tp * vf(qp) - tstar(bot - 1, L, P) * vf(qe_(bot - 1))), pt = pi_;
   A = 0; kd = -1; thd = tp; qd = qp;
@@ -555,10 +576,10 @@ __device__ void plume_ascent(int bot, const real* mu, const real* th, real th0, 
       // ent_cloud (V2-6b): through the layer above the bottom layer, the cloud layer, the updraft takes in its surroundings, its mass
       // growing as exp(ent_cloud z) (Tiedtke 1989's deep entrainment, 1e-4 per m), the air taken in mixed through it
       if (G && q && P.ent_cloud > 0 && ek) {
-        real dz = (real)287.0 * te * ex / P.grav * (P.grav * mu[k] / Mk) / pl;
+        real dz = (real)AIR_RD * te * ex / P.grav * (P.grav * mu[k] / Mk) / pl;
         if (P.ent_ifs > 0 && j == 0) dz *= (real)0.5;   // (#141: from cloud base the plume is followed to the first sub-level's middle, half of it)
         if (P.cu_dth > 0 && j == 0) dz += dzc;          // (#143: and from the middle of the layer below's last sub-level, the rest of that)
-        if (P.cu_dth > 0 && j == Mk - 1) dzc = (real)0.5 * (real)287.0 * te * ex / P.grav * (P.grav * mu[k] / Mk) / pl;
+        if (P.cu_dth > 0 && j == Mk - 1) dzc = (real)0.5 * (real)AIR_RD * te * ex / P.grav * (P.grav * mu[k] / Mk) / pl;
         if (P.ent_ifs > 0) {
           // ent_ifs (#139): the IFS's (Bechtold et al. 2008, 2014; Bechtold, ECMWF lecture notes eq. 3.19-3.20) entrainment 1.75e-3 /m (1.3 - RH)
           // (q_s(T) / q_s at cloud base)^3 and mixing detrainment 0.75e-4 /m: strong in dry air near cloud base, so a diluted plume stops low and
@@ -595,7 +616,7 @@ __device__ void plume_ascent(int bot, const real* mu, const real* th, real th0, 
       last = tpv > tev;
       if (lt) {
         const real Tp = tp * ex;
-        if (tpv > tev) cape += 287.0 * (tpv - tev) * ex * P.grav * mu[k] / Mk / pl;
+        if (tpv > tev) cape += AIR_RD * (tpv - tev) * ex * P.grav * mu[k] / Mk / pl;
         if (q0c < 0 && Tp < P.Tf) { q0c = qp; p0c = pl; }
         if (q40 < 0 && Tp < P.Tf - 40) { q40 = qp; p40 = pl; }
       }
@@ -672,8 +693,8 @@ __device__ void plume_out(int L, const Par& P, real* mu, real* th, real* q, real
 __device__ real storm_flashes(real mflux, const real* lt, const Par& P) {
   const real qi = lt[0], w = (real)0.5 * sqrt(2 * fmax((real)0, lt[3]));
   if (!(mflux > 0) || !(qi > 0) || !(w > P.graupel_v)) return 0;
-  const real rho = lt[1] / (287.0 * P.Tf), phi = rho * w * P.storm_area, lift = 1 - P.graupel_v * P.graupel_v / (w * w);
-  const real H = 287.0 * (P.Tf - 20) / P.grav * FLOG(lt[1] / lt[2]);
+  const real rho = lt[1] / (AIR_RD * P.Tf), phi = rho * w * P.storm_area, lift = 1 - P.graupel_v * P.graupel_v / (w * w);
+  const real H = AIR_RD * (P.Tf - 20) / P.grav * FLOG(lt[1] / lt[2]);
   const real up = phi * qi * lift, fnp = up * P.ice_small, fp = up * (1 - P.ice_small) * H / w * P.graupel_v;
   return mflux / phi * (real)9.0e-15 * fp * fnp / 60;       // flashes/s/m^2
 }
@@ -949,11 +970,11 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
     const real Ub = uabs[i] + P.bulk_gust, Ri = P.grav * P.bulk_z * (Tsa - Ts[i]) / (Tsa * Ub * Ub);
     stab = Ri > 0 ? 1 / (1 + 10 * Ri * (1 + 5 * Ri)) : 1 - 10 * Ri / (1 + 10 * sqrt(-Ri));
   }
-  real bulk = sfc ? ch[i] : P.bulk_c > 0 ? ps / (287.0 * Tsa) * P.bulk_c * stab * (uabs[i] + P.bulk_gust) : (real)0;
+  real bulk = sfc ? ch[i] : P.bulk_c > 0 ? ps / (AIR_RD * Tsa) * P.bulk_c * stab * (uabs[i] + P.bulk_gust) : (real)0;
   // a thin surface layer in series, quasi-steady (a test, decision #102): what the surface gives reaches the bottom layer's air only as turbulence carries it up,
   // at bulk_w (m/s) through a neutral or stable top, three times that when the ground heats the air; so conductances add as 1/g = 1/g_surface + 1/g_top
   if (!sfc && P.bulk_c > 0 && P.bulk_w > 0) {
-    const real gt = ps / (287.0 * Tsa) * P.bulk_w * (Ts[i] > Tsa ? (real)3 : (real)1);
+    const real gt = ps / (AIR_RD * Tsa) * P.bulk_w * (Ts[i] > Tsa ? (real)3 : (real)1);
     bulk = bulk * gt / (bulk + gt);
   }
   // (sfc: the air's side taken implicitly, as the surface's is: the exchange over a step can at most bring the air touching the ground,
@@ -1087,7 +1108,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
       const real f = swS / fmax(1 - alb, (real)0.05) / rsun;
       rs = r0 * (1 + f) / (r0 / P.rs_max + f);
     }
-    const real ra = ps / (287.0 * Tsa) / kex;
+    const real ra = ps / (AIR_RD * Tsa) / kex;
     rfac = ra / (ra + rs);
     rveg = rfac;
     if (lc) { fbare = lc[3 * N + i]; rfac = fbare + (1 - fbare) * rfac; }      // (#132: the bare share has none)
@@ -1284,7 +1305,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
       const real inc = f > (real)1e-6 ? cl[k] / f * fmax((real)1, mu[k] / P.mu_cloud) : (real)0, r = inc / P.q_auto;
       real pt_ = 0;
       for (int j = 0; j < k; j++) pt_ += P.grav * mu[j];
-      const real pm = pt_ + (real)0.5 * P.grav * mu[k], Tk = pib[k] * th[k] / P.cp, depth = mu[k] / (pm / (287.0 * Tk));
+      const real pm = pt_ + (real)0.5 * P.grav * mu[k], Tk = pib[k] * th[k] / P.cp, depth = mu[k] / (pm / (AIR_RD * Tk));
       const real rate = liq[k] * P.c_auto * OMEXP(r * r) + (1 - liq[k]) * P.v_ice / depth;
       const real loss = cl[k] * OMEXP(rate * dt);
       cl[k] -= loss;
@@ -1442,7 +1463,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
     }
     MLB(1) MLA()
     const real eka = reach_edge(ka);
-    const real Bf = H + (real)0.61 * P.cp * Tsa * E, jump = fmax((real)1, eka - th[bot]);
+    const real Bf = H + (real)AIR_VF * P.cp * Tsa * E, jump = fmax((real)1, eka - th[bot]);
     if (Bf > 0) {
       const real m = fmin(fmin(P.bl_ent * Bf * dt / (P.cp * jump), mu[ka] - P.floor_), P.ent_lcl > 0 ? (real)1e30 : fmax((real)0, mu_lcl - mu[bot]));
       if (m > 0) {
@@ -1503,10 +1524,10 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
         // root_q (#137): the thermals carry the layer's vapor plus their excess b (w'q')_0 / w_m, b = 8.5 and w_m = (u*^3 + 0.28 w*^3)^(1/3)
         // (Holtslag & Boville 1993; Troen & Mahrt 1986), u*^2 = C U^2 from the surface layer's exchange (its heat's C for the drag's), not the
         // moistest edge of the cloud scheme's spread (+(1 - rh_crit) q_s, ~3.6 g/kg over the tropical sea against a few tenths)
-        const real rho = ps / ((real)287.0 * Tsa), Ub = uabs[i] + P.bulk_gust;
+        const real rho = ps / ((real)AIR_RD * Tsa), Ub = uabs[i] + P.bulk_gust;
         const real us3 = sfc ? FPOW(fmax((real)0, ch[i] / rho * Ub), (real)1.5) : (real)0;
-        const real Bk = fmax((real)0, (H + (real)0.61 * P.cp * Tsa * E) / (rho * P.cp));
-        const real hb = (real)287.0 * Tsa / P.grav * log(ps / fmax(ps - P.grav * mu[bot], (real)1));
+        const real Bk = fmax((real)0, (H + (real)AIR_VF * P.cp * Tsa * E) / (rho * P.cp));
+        const real hb = (real)AIR_RD * Tsa / P.grav * log(ps / fmax(ps - P.grav * mu[bot], (real)1));
         const real wm = cbrt(us3 + (real)0.28 * P.grav / Tsa * Bk * hb);
         const real ex = wm > (real)1e-3 ? (real)8.5 * fmax((real)0, E) / (rho * wm) : (real)0;
         q0 += fmin(ex, fmax((real)0, qss - q0));
@@ -1536,8 +1557,8 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
         if (P.bl_mix > 0 && P.bl_q > 0) {
           real l_, f_, d_;
           if (mixed_cloud(bot, mu, th[bot], q[bot] + (cloudy ? cl[bot] : (real)0), P, l_, f_, d_, 0, P.cu_cloud > 0)) {
-            const real rho = ps / ((real)287.0 * Tsa), Bk = fmax((real)0, (H + (real)0.61 * P.cp * Tsa * E) / (rho * P.cp));
-            const real hb = (real)287.0 * Tsa / P.grav * log(ps / fmax(ps - P.grav * mu[bot], (real)1));
+            const real rho = ps / ((real)AIR_RD * Tsa), Bk = fmax((real)0, (H + (real)AIR_VF * P.cp * Tsa * E) / (rho * P.cp));
+            const real hb = (real)AIR_RD * Tsa / P.grav * log(ps / fmax(ps - P.grav * mu[bot], (real)1));
             const real ws = cbrt(P.grav / Tsa * Bk * hb);
             mc = fmin(mc, rho * f_ * ws * dt);
           }
@@ -1965,14 +1986,14 @@ extern "C" __global__ void surface_layer(int N, int L, const real* par, const re
   for (int k = 0; k < L; k++) ps += P.grav * mu_in[(size_t)k * N + i];
   const real mb = mu_in[(size_t)bot * N + i], th = theta[(size_t)bot * N + i];
   const real Ta = th * pow(ps / P.p0, P.kappa), T0 = Ts[i];
-  const real rho = ps / ((real)287.0 * Ta);
+  const real rho = ps / ((real)AIR_RD * Ta);
   const real qa = qv ? qv[(size_t)bot * N + i] : (real)0;
   const bool isl = land && land[i] > (real)0.5;
   const real q0 = qv && P.moist > 0 && !isl ? (P.q_sea > 0 ? P.q_sea : (real)1) * qsat(T0, ps) : qa;          // over land the surface's vapor is the air's (its wetness unknown here): dry buoyancy
   const real fice = qv && P.moist > 0 && ice && !isl ? fmin((real)1, ice[i] / P.rho_ice / P.ice_cover) : (real)0;
-  const real depth = (real)287.0 * Ta / P.grav * log(ps / fmax(ps - P.grav * mb, (real)1));
+  const real depth = (real)AIR_RD * Ta / P.grav * log(ps / fmax(ps - P.grav * mb, (real)1));
   const real zr = fmax((real)10, (real)0.1 * depth);
-  const real dthv = (Ta - T0) + (real)0.61 * Ta * (qa - q0);              // air minus surface, virtual (K)
+  const real dthv = (Ta - T0) + (real)AIR_VF * Ta * (qa - q0);              // air minus surface, virtual (K)
   const real K = 0.4, nu = 1.5e-5, b = 5, c = 5;
   real U = sqrt(uabs[i] * uabs[i] + P.bulk_gust * P.bulk_gust), Cd = 1e-3, Ch = 1e-3;
   for (int it = 0; it < 4; it++) {
@@ -2122,7 +2143,7 @@ extern "C" __global__ void lw_setup(int N, int L_in, const real* par, int NP, in
       fast x = (fast)((lp0 - log(pm)) / dlp), y = (fast)((Tm - t0) / dtt);
       x = fminf(fmaxf(x, 0.f), (fast)(NP - 1) - 1e-4f); y = fminf(fmaxf(y, 0.f), (fast)(NT - 1) - 1e-4f);
       W(s, 2) = x; W(s, 3) = y;
-      const fast ua = (fast)((b - a) / (P.grav * 28.9647e-3) * 6.02214076e23 / 1e4);    // air molecules / cm^2
+      const fast ua = (fast)((b - a) / (P.grav * AIR_MKG) * 6.02214076e23 / 1e4);    // air molecules / cm^2
       fast yo = (fast)((o3lp0 - log(pm)) / o3dlp);
       yo = fminf(fmaxf(yo, 0.f), (fast)(NO3 - 1) - 1e-4f);
       const int io = (int)yo;
@@ -2148,7 +2169,7 @@ extern "C" __global__ void lw_setup(int N, int L_in, const real* par, int NP, in
     for (int j = 0; j < NSUB; j++) {
       const int s = k * NSUB + j;
       const fast qj = qm > 0 ? (fast)q[k] * qs[j] / qm : (fast)q[k];
-      const fast x = qj / (1 - qj) * (fast)(28.9647 / 18.01528);                          // H2O volume mixing ratio
+      const fast x = qj / (1 - qj) * (fast)(AIR_M / 18.01528);                          // H2O volume mixing ratio
       W(s, 4) = (float)(x * uas[j]);
       W(s, 9) = (float)(x / (fast)0.04);
     }

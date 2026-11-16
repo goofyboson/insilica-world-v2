@@ -22,7 +22,7 @@ from .cases import PRESETS, cosine_bell, default_dt, edge_east_north, initial_st
 from .gpu import DeviceGrid, dsum, grid_dims, source_hash
 from .io import save as savefile
 from .atmosphere import AirPhysics
-from .constants import CP_DRY, GRAV, KAPPA, P0, PLANET
+from .constants import GRAV, P0, PLANET, air_props
 from .land import LandWater
 from .layers import DIV_DAMP, Layers
 from .transport import BETA, Transport
@@ -64,6 +64,8 @@ class World:
         extra = built[3] if len(built) > 3 else {}
         h, u = np.asarray(h, dtype=float), np.asarray(u, dtype=float)
         self.air = spec.get('air')                       # air layers (V2-2a): h is mass per area, θ per layer
+        # the dry air's gases (V2-6e, #216): by mole fraction, from the params' physics, the preset's or the planet; none, the old constants
+        self.gas = air_props((P.get('physics', {}) or {}).get('gases') or ((self.air or {}).get('physics', {}) or {}).get('gases') or pl.get('gases'))
         if self.air and state is None and self.grav != GRAV:
             h = h * (GRAV / self.grav)                   # (#186) the builders' pressures kept: their masses are Earth's
         if layers and layers != h.shape[0]:
@@ -83,7 +85,7 @@ class World:
                            stress=P.get('stress', spec.get('stress', 0.0)),
                            nu4=nu4, floor=floor, rotation=P.get('rotation', 1.0),
                            div_damp=P.get('div_damp', DIV_DAMP),
-                           air=dict(t_ref=self.air.get('t_ref', 288.0)) if self.air else None,
+                           air=dict(t_ref=self.air.get('t_ref', 288.0), cp=self.gas['cp'], kappa=self.gas['kappa'], rd=self.gas['rd']) if self.air else None,
                            vmix=P.get('vmix', spec.get('vmix', 0.0)),
                            thin_wind=P.get('thin_wind', THIN_WIND if spec.get('air') else 0.0),
                            shelf=P.get('shelf', spec.get('shelf', 0.0)))   # (air, V2-6b: a layer squeezed below it over terrain loses its pressure force, as the sea's over its floor, #97)
@@ -106,6 +108,8 @@ class World:
                 phys.setdefault('mu_ref', P0 / self.grav)
                 phys.setdefault('mu_bl', 1.0e4 / self.grav)
             phys = {k: (v(self.grid) if callable(v) else v) for k, v in phys.items()}     # e.g. θ* from the case
+            if self.gas['defs']:                                                          # (#216) the air's own constants
+                phys.update(cp=self.gas['cp'], kappa=self.gas['kappa'], air_rd=self.gas['rd_col'], air_defs=list(self.gas['defs']))
             self.physics = AirPhysics(self.dg, self.L, phys, mean_sun=P.get('mean_sun', self.air.get('mean_sun', False)),
                                       forcing=self.air.get('forcing', 'radiation'),
                                       longwave=P.get('longwave', self.air.get('longwave', 'gray')))
@@ -250,7 +254,7 @@ class World:
             if rec:
                 rec.post_couple()
             self.core.k['vmix_heat'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.sea.diss, g.cellEdge, g.le, g.de,
-                                                       g.areaCell, R(self.grav), R(CP_DRY), R(KAPPA), R(P0), self.theta))
+                                                       g.areaCell, R(self.grav), R(self.core.cpa), R(self.core.kap), R(P0), self.theta))
         if self.air:
             if rad:
                 self.physics.radiate(self.h, self.theta, self.Ts, self.time, self.rad_every * self.dt,
@@ -429,17 +433,19 @@ class World:
             T = self.field('T', layer)
             p = self.grav * cp.cumsum(self.h, axis=0)
             pt = p - self.grav * self.h
-            pk = CP_DRY * (p ** (KAPPA + 1) - pt ** (KAPPA + 1)) / ((KAPPA + 1) * (p - pt) * P0 ** KAPPA)
-            pm = P0 * (pk[layer] / CP_DRY) ** (1 / KAPPA)           # the layer's pressure, as the column physics uses it
-            qs = 0.622 * 611.0 * cp.exp(17.27 * (T - 273.15) / (T - 35.85)) / pm
+            c_, k_ = self.core.cpa, self.core.kap
+            pk = c_ * (p ** (k_ + 1) - pt ** (k_ + 1)) / ((k_ + 1) * (p - pt) * P0 ** k_)
+            pm = P0 * (pk[layer] / c_) ** (1 / k_)                   # the layer's pressure, as the column physics uses it
+            qs = self.gas['eps'] * 611.0 * cp.exp(17.27 * (T - 273.15) / (T - 35.85)) / pm
             return self.q[layer] / qs
         if name == 'ps':
             return self.grav * cp.sum(self.h, axis=0) / 100.0          # hPa
         if name == 'T':
             p = self.grav * cp.cumsum(self.h, axis=0)
             pt = p - self.grav * self.h
-            pib = CP_DRY * (p ** (KAPPA + 1) - pt ** (KAPPA + 1)) / ((KAPPA + 1) * (p - pt) * P0 ** KAPPA)
-            return (pib * self.theta / CP_DRY)[layer]
+            c_, k_ = self.core.cpa, self.core.kap
+            pib = c_ * (p ** (k_ + 1) - pt ** (k_ + 1)) / ((k_ + 1) * (p - pt) * P0 ** k_)
+            return (pib * self.theta / c_)[layer]
         if name in ('speed', 'vort'):
             uh = self.u[layer].get()
             if name == 'speed':

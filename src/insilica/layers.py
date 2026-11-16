@@ -59,6 +59,8 @@ class Layers:
         self.stress = cp.asarray(np.broadcast_to(np.asarray(stress, dtype=float), (layers,)), dtype=dt)
         self.fV = dg.fV * rotation
         self.air = air
+        # the dry air's constants (#216: a world's own gases; else cp 1004.6, kappa, R 287.04)
+        self.cpa, self.kap, self.rda = (air or {}).get('cp', CP_DRY), (air or {}).get('kappa', KAPPA), (air or {}).get('rd', R_DRY)
         self.vmix = vmix                    # interfacial stress coefficient c (decision #39), h-units/s
         self.vmix_cd = vmix_cd              # (#167) its quadratic part: c = vmix_cd |Δu|
         self.zero = z(N)
@@ -101,7 +103,7 @@ class Layers:
         """For air: each cell's fast-mode coefficient R·T_s/μ from the current state."""
         if self.air:
             g, i32, R = self.dg, np.int32, self.real
-            self.k['air_gfast'](*grid_dims(g.N), (i32(g.N), i32(self.L), h, theta, R(self.grav), R(KAPPA), R(P0), R(R_DRY),
+            self.k['air_gfast'](*grid_dims(g.N), (i32(g.N), i32(self.L), h, theta, R(self.grav), R(self.kap), R(P0), R(self.rda),
                                                  R(self.floor), self.Gc))
 
     def lap_max(self, iters=30):
@@ -128,7 +130,7 @@ class Layers:
         c1, e1 = grid_dims(g.N), grid_dims(g.E)
         cL, eL = grid_dims(g.N, L), grid_dims(g.E, L)
         if self.air:
-            k['air_bern'](*c1, (N, E, i32(L), hs, us, theta, self.b, R(self.grav), R(CP_DRY), R(KAPPA), R(P0), self.S,
+            k['air_bern'](*c1, (N, E, i32(L), hs, us, theta, self.b, R(self.grav), R(self.cpa), R(self.kap), R(P0), self.S,
                                 g.cellEdge, g.le, g.de, g.rA, self.B, self.pibar))
         else:
             k['lay_bern'](*c1, (N, E, i32(L), hs, us, self.b, self.gp, g.cellEdge, g.le, g.de, g.areaCell, self.B,
@@ -183,7 +185,7 @@ class Layers:
         g, k, i32, L = self.dg, self.k, np.int32, self.L
         if self.air:
             R = self.real
-            k['air_stiff'](*grid_dims(g.N), (i32(g.N), i32(L), h, theta, R(self.grav), R(CP_DRY), R(KAPPA), R(P0), self.S))
+            k['air_stiff'](*grid_dims(g.N), (i32(g.N), i32(L), h, theta, R(self.grav), R(self.cpa), R(self.kap), R(P0), self.S))
         else:
             k['lay_eta'](*grid_dims(g.N), (i32(g.N), i32(L), h, self.b, self.eta0))
             if self.ob is not None:
@@ -204,7 +206,7 @@ class Layers:
             if self.air:
                 R = self.real
                 k['vmix_heat'](*grid_dims(g.N), (i32(g.N), i32(L), h, self.diss, g.cellEdge, g.le, g.de, g.areaCell, R(self.grav),
-                                                 R(CP_DRY), R(KAPPA), R(P0), theta))
+                                                 R(self.cpa), R(self.kap), R(P0), theta))
 
     def exchange(self, wx, h, u, M, psi, theta=None, seq=False):
         """Move thickness wx (L−1, N; m, positive upward across the interface below layer k) between layers with
@@ -224,7 +226,7 @@ class Layers:
         if heat:
             R = self.real
             k['vmix_heat'](*grid_dims(g.N), (i32(g.N), i32(self.L), h, self.diss, g.cellEdge, g.le, g.de, g.areaCell, R(self.grav),
-                                             R(CP_DRY), R(KAPPA), R(P0), theta))
+                                             R(self.cpa), R(self.kap), R(P0), theta))
 
     def energy(self, h, u, theta=None):
         """Total energy per unit density (J/ρ0): Σ_k Σ_i A h_k K_k + Σ_i A [g(η² − b²)/2 + Σ_k≥1 g'_{k−1}(z_k² − b²)/2]."""
@@ -238,7 +240,7 @@ class Layers:
             th = theta.get()
             p = np.cumsum(self.grav * hh, axis=0)
             pt = np.vstack([np.zeros((1, hh.shape[1])), p[:-1]])
-            pib = CP_DRY * (p ** (KAPPA + 1) - pt ** (KAPPA + 1)) / ((KAPPA + 1) * (p - pt) * P0 ** KAPPA)
+            pib = self.cpa * (p ** (self.kap + 1) - pt ** (self.kap + 1)) / ((self.kap + 1) * (p - pt) * P0 ** self.kap)
             return float(kin + np.sum(gh.areaCell * (np.sum(hh * pib * th, axis=0) + self.grav * b * hh.sum(0))))
         z = b + np.cumsum(hh[::-1], axis=0)[::-1]             # z[k] = top of layer k; z[0] = η
         gp = self.gp.get()

@@ -45,7 +45,7 @@ class OroDrag:
         self.dg, self.L = dg, L
         self.op, self.nrm = cp.asarray(op.reshape(-1), dtype=R), cp.asarray(nrm.reshape(-1), dtype=R)
         self.sso = cp.asarray(np.stack([np.asarray(x, dtype=float) for x in sso]).reshape(-1), dtype=R)
-        self.p = [p.get('grav', GRAV), P0, KAPPA, RD, p['oro_g'], p['oro_cd'], p['oro_hnc'], p['oro_ric'], dt, 1.0]
+        self.p = [p.get('grav', GRAV), P0, p.get('kappa', KAPPA), p.get('air_rd', RD), p['oro_g'], p['oro_cd'], p['oro_hnc'], p['oro_ric'], dt, 1.0]
         self.par = cp.asarray(self.p, dtype=R)
         self.beta, self.F = cp.zeros((L, g.N), dtype=R), cp.zeros((2 * L, g.N), dtype=R)
         self.k = {n: dg.kernel(n, 'drag.cu') for n in ('oro_cell', 'oro_edge')}
@@ -70,7 +70,7 @@ class WaveDrag:
         self.dg, self.L, self.dt = dg, L, dt
         self.op, self.nrm = cp.asarray(op.reshape(-1), dtype=R), cp.asarray(nrm.reshape(-1), dtype=R)
         self.lat = cp.asarray(np.degrees(g.lat), dtype=R)
-        self.par = cp.asarray([p.get('grav', GRAV), P0, KAPPA, RD, p['gw_bt'], p['gw_cw'], 2 * np.pi / p['gw_lambda'], p['gw_psrc'],
+        self.par = cp.asarray([p.get('grav', GRAV), P0, p.get('kappa', KAPPA), p.get('air_rd', RD), p['gw_bt'], p['gw_cw'], 2 * np.pi / p['gw_lambda'], p['gw_psrc'],
                                p['gw_cmax'], p['gw_dc'], dt, p.get('gw_conv', 0.0)], dtype=R)
         self.F, self.zero = cp.zeros((2 * L, g.N), dtype=R), cp.zeros((L, g.N), dtype=R)
         self.k = {n: dg.kernel(n, 'drag.cu') for n in ('gw_cell', 'oro_edge', 'gw_mean')}

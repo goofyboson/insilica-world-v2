@@ -77,7 +77,8 @@ class AirPhysics:
         z = lambda *s: cp.zeros(s)
         self.uabs, self.wx, self.olr, self.sw_abs, self.stored = z(N), z(max(layers - 1, 1), N), z(N), z(N), z(N)
         # compiled for this many layers: the column's arrays then fit in registers, not local memory (V2-5)
-        self.k = {n: dg.kernel(n, 'air.cu', (f'-DNL={layers}',)) for n in ('air_column', 'advance_time', 'cell_speed', 'cell_speed_perot', 'hs_column', 'surface_layer')}
+        self.defs = (f'-DNL={layers}',) + tuple(self.p.get('air_defs') or ())   # (#216: the air's constants)
+        self.k = {n: dg.kernel(n, 'air.cu', self.defs) for n in ('air_column', 'advance_time', 'cell_speed', 'cell_speed_perot', 'hs_column', 'surface_layer')}
         # the surface's wind (#135): 0 the bottom layer's edges' kinetic energy, 1 Perot's reconstructed cell wind
         self.perot = None
         if self.p['sfc_wind'] > 0:
@@ -99,9 +100,9 @@ class AirPhysics:
         self.lw = self.sw = None
         if longwave == 'ktables':                     # (with the k-tables' shortwave)
             from .radiation import Longwave, Shortwave
-            self.lw = Longwave(dg, layers, self.par, **{k: self.p[k] for k in ('co2', 'n2o', 'ch4', 'tmode') if k in self.p})
+            self.lw = Longwave(dg, layers, self.par, defs=self.defs[1:], **{k: self.p[k] for k in ('co2', 'n2o', 'ch4', 'tmode') if k in self.p})
             self.sw = Shortwave(dg, layers, self.par, self.lw, **({'inhom': self.p['cloud_inhom']} if 'cloud_inhom' in self.p else {}),
-                                ice_re=self.p['re_ice'] if self.p.get('ice_sw', 0) > 0 else None)
+                                ice_re=self.p['re_ice'] if self.p.get('ice_sw', 0) > 0 else None, defs=self.defs[1:])
             self.swalb = cp.full(N, self.p['alb'])
 
     def _speed(self, u):

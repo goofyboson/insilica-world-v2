@@ -272,8 +272,12 @@ def test_earth_budget(record):
 
 @pytest.mark.xdist_group('grid4')
 def test_orbit(record):
-    """ORBIT Earth's elliptical orbit (V2-6e, SPEC #184): the kernels' Kepler solution against the orbit's own numbers"""
+    """ORBIT Earth's elliptical orbit (V2-6e, SPEC #184): the kernels' Kepler solution against the orbit's own numbers; the air's
+    constants from its gases (#216): Earth's mixture against the standard dry air's"""
     from insilica.atmosphere import PAR_ORDER
+    from insilica.constants import EARTH_AIR, air_props
+    ea, std = air_props(EARTH_AIR), dict(cp=1004.6, rd=287.04, mair=28.9647)
+    gas = {k: ea[k] / v - 1 for k, v in std.items()}
     e, lp, Y = 0.0167, np.radians(282.9), 365.0
 
     def lon(t):                                       # reference: Kepler's equation, Newton to convergence
@@ -295,9 +299,11 @@ def test_orbit(record):
         w.step(1, graph=False)
         sun.append(float(cp.asnumpy(w.physics.sw_abs) @ w.grid.areaCell))
     ratio, want = sun[1] / sun[0], float(lon(np.zeros(1))[1][0])
-    ok = abs(sep - 186.4) <= 0.5 and abs(peri - 76) <= 1.5 and abs(ratio / want - 1) <= 1e-6
+    ok = abs(sep - 186.4) <= 0.5 and abs(peri - 76) <= 1.5 and abs(ratio / want - 1) <= 1e-6 and all(abs(x) <= 1e-3 for x in gas.values())
     record('ORBIT', f'March to September equinox {sep:.1f} days (186.4), perihelion {peri:.1f} days before the March equinox (~76, 3 January), '
-           f'(a/r)² {f.min():.4f}–{f.max():.4f}; the kernels\' sunlight at the equinox ×{ratio:.7f} against ×{want:.7f}',
-           'equinox interval within 0.5 day; perihelion within 1.5 days; kernels within 1e-6', ok,
-           title="ORBIT Earth's elliptical orbit (V2-6e, SPEC #184)")
+           f'(a/r)² {f.min():.4f}–{f.max():.4f}; the kernels\' sunlight at the equinox ×{ratio:.7f} against ×{want:.7f}; '
+           f'Earth\'s air from its gases (#216): cp {ea["cp"]:.2f} (1004.6), R {ea["rd"]:.2f} (287.04), M {ea["mair"]:.4f} (28.9647), '
+           f'worst {max(abs(x) for x in gas.values()):.1e}',
+           'equinox interval within 0.5 day; perihelion within 1.5 days; kernels within 1e-6; the air within 1e-3', ok,
+           title="ORBIT Earth's elliptical orbit (V2-6e, SPEC #184) and the air from its gases (#216)")
     assert ok

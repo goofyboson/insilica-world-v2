@@ -113,12 +113,12 @@ class AirPhysics:
         else:
             self.k['cell_speed'](*grid_dims(g.N), (i32(g.N), u[self.L - 1], g.cellEdge, g.le, g.de, g.areaCell, self.uabs))
 
-    def radiate(self, mu, theta, Ts, t, interval, q=None, cw=None):
+    def radiate(self, mu, theta, Ts, t, interval, q=None, cw=None, gx=None):
         """The k-tables' longwave and shortwave from the present state (the sun over the coming interval, s), saved for the
         column steps until the next call."""
         if self.lw is not None:
             co = self.cloudo if cw is not None else None
-            self.lw(mu, theta, q, co, Ts)
+            self.lw(mu, theta, q, co, Ts, gx)
             self.sw(self.mode, t, interval, self.pos, self.swalb, co)
 
     def surface(self, mu, theta, Ts, u, q=None, ice=None, land=None):
@@ -130,7 +130,7 @@ class AirPhysics:
                                              ice if ice is not None else NULL, land if land is not None else NULL, self.cd, self.ch,
                                              self.cover if self.cover is not None else NULL))
 
-    def column(self, mu, theta, Ts, u, t, dt, q=None, ice=None, cap=None, qocean=None, qsw=None, land=None, soilcap=None, soil=None, pond=None, snow=None, cw=None, elev=None, firn=None):
+    def column(self, mu, theta, Ts, u, t, dt, q=None, ice=None, cap=None, qocean=None, qsw=None, land=None, soilcap=None, soil=None, pond=None, snow=None, cw=None, elev=None, firn=None, gx=None):
         """Radiation, surface exchange, heating, (moist: evaporation, condensation, sea ice, convection) and the θ*
         crossing for one step; the masses moved up go to self.wx (moved with momentum and tracers by Layers.exchange),
         rain and evaporation (kg/m²/s) to self.rain, self.evap. cap: the surface water's heat capacity per cell (J/m²/K;
@@ -152,7 +152,8 @@ class AirPhysics:
                                           soilcap if soilcap is not None else NULL, soil if soil is not None else NULL, pond if pond is not None else NULL, snow if snow is not None else NULL, cw if cw is not None else NULL, self.cloudo if cw is not None else NULL, elev if elev is not None else NULL, self.flash,
                                           self.lw.radf if self.lw is not None else NULL,
                                           self.sw.swf if self.sw is not None else NULL, self.swalb if self.sw is not None else NULL,
-                                          self.ch if self.sfc else NULL, self.cover if self.cover is not None else NULL, firn if firn is not None else NULL))
+                                          self.ch if self.sfc else NULL, self.cover if self.cover is not None else NULL, firn if firn is not None else NULL,
+                                          gx if gx is not None else NULL))
         k['advance_time']((1,), (1,), (t, R(dt)))
 
 

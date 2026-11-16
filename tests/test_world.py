@@ -214,7 +214,12 @@ def conserve_air(record):
     drift = (j.energy() - e0) / e0
     # the seven-layer earth's columns (V2-6b; earth6 since #142, earth7 since #153): the mixed layer, deep plumes taking in the cloud layer's air, their downdrafts, the land
     # (#216: in an air of its own, nine parts N₂ to one of CO₂, its constants compiled in: the ledgers close on the air's own cp)
-    e = World(4, 'earth7', params={'physics': {'gases': dict(n2=0.9, co2=0.1)}})
+    # (#217: carrying CO₂, N₂O and CH₄ as tracers, CO₂ with a surface source on 100 cells)
+    air = {'physics': {'gases': dict(n2=0.9, co2=0.1)}}
+    e = World(4, 'earth7', params=dict(air, gas_tracers=1))
+    e.gas_src[0, :100] = 1e-9
+    gamt = lambda: [float(cp.sum(e.M * e.gx[j])) for j in range(e.gx.shape[0])]
+    g0, gsrc = gamt(), 0.0
     e4 = e4w = 0.0
     lede, ge = cp.asarray(e.grid.le * e.grid.de), e.grid
     he = lambda h: 0.5 * (h[:, ge.eI] + h[:, ge.eJ])
@@ -236,15 +241,24 @@ def conserve_air(record):
         return apply
     e.oro.apply, e.gw.apply = ledger('oro', e.oro.apply), ledger('gw', e.gw.apply)
     snow = 0.0                                            # the snow reaching the ground (#134): its freezing heat given aloft
-    for _ in range(48):
+    for t in range(48):
         W0, E0 = e.water(), e.energy()
         e.step(1, graph=False)                            # (the drag's ledger reads the host every step)
         p = e.physics
+        gsrc += float(cp.sum(A * e.gas_src[0])) * e.dt
+        if t == 0:                                        # (#217) the k-tables reading the carried gases, all at the planet's values
+            f = World(4, 'earth7', params=air)
+            f.step(1, graph=False)
+            olr_gx = abs(float(cp.sum(A * p.olr)) / float(cp.sum(A * f.physics.olr)) - 1)
         snow += float(cp.sum(A * p.rainp[3])) / float(cp.sum(A)) * e.dt
         e4 = max(e4, abs(float(cp.sum(A * p.stored)) - float(cp.sum(A * (p.sw_abs - p.olr))) * e.dt) / abs(E0))
         e4w = max(e4w, abs(e.water() - W0 - float(cp.sum(A * (p.evap - p.rain))) * e.dt) / e.water())
+    g1 = gamt()
+    gbud = max(abs(g1[0] - g0[0] - gsrc) / g1[0], *(abs(g1[j] - g0[j]) / g0[j] for j in range(1, len(g0))))
+    guni = max(float((e.gx[j].max() - e.gx[j].min()) / e.gx[j].mean()) for j in range(1, len(g0)))
     ok = (worst <= 1e-13 and water <= 1e-13 and mass <= 1e-13 and tracer <= 1e-13 and vapor <= 1e-13 and abs(drift) < 1e-4 and e4 <= 1e-13
-          and e4w <= 1e-13 and snow > 0 and all(d['energy'] <= 1e-13 and d['gross'] > 0 for d in drag.values()) and drag['gw']['momentum'] <= 1e-13)
+          and e4w <= 1e-13 and snow > 0 and all(d['energy'] <= 1e-13 and d['gross'] > 0 for d in drag.values()) and drag['gw']['momentum'] <= 1e-13
+          and gbud <= 1e-13 and guni <= 1e-12 and olr_gx <= 1e-12)
     record('CONSERVE air', f'moist column ledgers, 48 steps: energy worst {fmt(worst)} of the energy stored ({fmt(per_step)} of one step of sunlight), '
            f'water {fmt(water)}; moist aqua 10 d (3 layers; dynamics, radiation, crossings ~{crossed:.2f} kg/m² per step, convection, rain): '
            f'air mass {fmt(mass)}, tracer {fmt(tracer)}, vapor against evaporation − rain {fmt(vapor)}; adiabatic air (two layers), '
@@ -252,8 +266,10 @@ def conserve_air(record):
            f'freezing heat aloft, {snow * 86400 / (48 * e.dt):.3f} kg/m² of snow a day reaching the ground): '
            f'column energy {fmt(e4)} of the energy stored, water {fmt(e4w)}; kinetic energy removed against heat booked: mountain drag (#127) '
            f'{fmt(drag["oro"]["energy"])}, waves (#128) {fmt(drag["gw"]["energy"])} of the kinetic energy ({drag["oro"]["gross"] / 48:.2e}, '
-           f'{drag["gw"]["gross"] / 48:.2e} J a step); the waves\' column momentum {fmt(drag["gw"]["momentum"])} of the gross',
-           '≤ 1e-13; ≤ 1e-13; drift < 1e-4', ok)
+           f'{drag["gw"]["gross"] / 48:.2e} J a step); the waves\' column momentum {fmt(drag["gw"]["momentum"])} of the gross; '
+           f'gas tracers (#217): CO₂, N₂O, CH₄ against their sources (CO₂ {gsrc / g1[0]:.1e} of its amount from the surface) {fmt(gbud)}, '
+           f'N₂O and CH₄ started uniform stay so to {fmt(guni)}, OLR reading them against the planet\'s values {fmt(olr_gx)}',
+           '≤ 1e-13; ≤ 1e-13; drift < 1e-4; uniform ≤ 1e-12', ok)
     return ok
 
 

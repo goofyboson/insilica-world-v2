@@ -30,13 +30,14 @@ class Longwave:
         self.ks = dg.kernel('lw_setup', 'air.cu', (f'-DNL={layers}',) + tuple(defs))
         self.k = dg.kernel('lw_column', 'air.cu', (f'-DNL={layers}',) + tuple(defs))
 
-    def __call__(self, mu, theta, q, cloudo, Ts):
-        """cloudo: AirPhysics.cloudo (the clouds' cover and longwave optical depth at the column's last step), or None."""
+    def __call__(self, mu, theta, q, cloudo, Ts, gx=None):
+        """cloudo: AirPhysics.cloudo (the clouds' cover and longwave optical depth at the column's last step), or None. gx: the
+        carried CO2, N2O and CH4 (3, L, N; #217), or None for the planet's own."""
         g, i32, R = self.dg, np.int32, self.dg.dtype.type
         from .gpu import NULL, BLOCK
         self.ks(((g.N + BLOCK - 1) // BLOCK, self.L), (BLOCK,),
                 (i32(g.N), i32(self.L), self.par, i32(self.NP), i32(self.NT), R(self.lp0), R(self.dlp), R(self.t0),
-                 R(self.dtt), self.o3, i32(len(self.o3)), R(self.lp0), R(self.dlp), *(R(x) for x in self.gases), mu, theta,
+                 R(self.dtt), self.o3, i32(len(self.o3)), R(self.lp0), R(self.dlp), *(R(x) for x in self.gases), gx if gx is not None else NULL, mu, theta,
                  q if q is not None else NULL, cloudo if cloudo is not None else NULL, R(HAZE_SCALE), i32(self.tmode), self.sub))
         self.k((g.N,), (self.block,), (i32(g.N), i32(self.L), self.par, i32(self.NG), self.logk, self.planck,
                                         i32(self.NP), i32(self.NT), i32(self.planck.shape[0]), R(self.tp0), self.sub, Ts,

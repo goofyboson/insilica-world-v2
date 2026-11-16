@@ -28,6 +28,9 @@ from .layers import DIV_DAMP, Layers
 from .transport import BETA, Transport
 
 THIN_WIND = 100.0     # kg/m² (~1 hPa): below it an air layer takes its neighbours' wind, fully at the floor (#83)
+# the gases carried as tracers (V2-6e, #217), in the k-tables' order, and their starting mole fractions where the planet gives none
+GAS_TRACERS = (('co2', 400e-6), ('n2o', 0.32e-6), ('ch4', 1.8e-6))
+
 FIELDS = ('h', 'z', 'eta', 'psi', 'speed', 'vort', 'theta', 'T', 'Ts', 'Tsurf', 'ps', 'q', 'rh', 'rain', 'evap', 'lightning', 'ice',
           'sst', 'sss', 'mld', 'tthermo', 'tdeep', 'current', 'land', 'elev', 'soil', 'pond', 'snow')
 # z: height of the layer's top; eta: the free surface; theta, T, Ts, ps: air (potential temperature, temperature,
@@ -96,7 +99,9 @@ class World:
             if nu4 * lam * lam * self.dt > 1.0:
                 raise ValueError(f'nu4 {nu4:.3g} m^4/s is unstable at dt {self.dt:g} s on n = {n} (nu4*lambda^2*dt = '
                                  f'{nu4 * lam * lam * self.dt:.2f}; keep it <= 1: nu4 <= {1.0 / (lam * lam * self.dt):.3g})')
-        self.tr = Transport(self.dg, layers=self.L, beta=P.get('beta', BETA), tracers=4)
+        # gas tracers (V2-6e, #217): CO2, N2O and CH4 carried by the air, per layer, with exact budgets; the k-tables read them
+        self.gas_on = bool(self.air) and P.get('gas_tracers', spec.get('gas_tracers', 0)) > 0
+        self.tr = Transport(self.dg, layers=self.L, beta=P.get('beta', BETA), tracers=4 + (len(GAS_TRACERS) if self.gas_on else 0))
         self.h, self.u = cp.asarray(h), cp.asarray(u)
         self.M = self.h * cp.asarray(self.grid.areaCell)[None, :]
         self.psi = cp.asarray(np.tile(cosine_bell(self.grid), (self.L, 1)))
@@ -110,6 +115,8 @@ class World:
             phys = {k: (v(self.grid) if callable(v) else v) for k, v in phys.items()}     # e.g. θ* from the case
             if self.gas['defs']:                                                          # (#216) the air's own constants
                 phys.update(cp=self.gas['cp'], kappa=self.gas['kappa'], air_rd=self.gas['rd_col'], air_defs=list(self.gas['defs']))
+            if self.gas_on:                                                               # (#217) the column records its moves
+                phys['air_defs'] = list(phys.get('air_defs') or []) + ['-DGASX']
             self.physics = AirPhysics(self.dg, self.L, phys, mean_sun=P.get('mean_sun', self.air.get('mean_sun', False)),
                                       forcing=self.air.get('forcing', 'radiation'),
                                       longwave=P.get('longwave', self.air.get('longwave', 'gray')))
@@ -119,6 +126,11 @@ class World:
             self.Ts = cp.asarray(np.asarray(extra['Ts'], dtype=float))
             self.time = cp.zeros(1)
             self.STATE = World.STATE + ('theta', 'Ts', 'time')
+            if self.gas_on:                               # (#217) each gas's mole fraction per layer, starting uniform
+                self.gx = cp.stack([cp.full((self.L, self.grid.N), float(self.physics.p.get(k, v))) for k, v in GAS_TRACERS])
+                self.gas_src = cp.zeros((len(GAS_TRACERS), self.grid.N))   # surface sources, mole fraction x kg/m^2/s of air
+                self.k_gas = {n: self.dg.kernel(n, 'air.cu', self.physics.defs) for n in ('gas_src',)}
+                self.STATE = self.STATE + ('gx',)
             self.moist = self.physics.moist
             if self.moist:                                # vapor per layer (kg/kg) and sea ice (kg/m²): V2-2b
                 self.q = cp.asarray(np.asarray(extra['q'], dtype=float))
@@ -235,6 +247,8 @@ class World:
             moved = ([self.psi] if self.tracer else []) + ([self.theta] if self.air else [])
             if self.moist:
                 moved += [self.q] + ([self.cw] if self.cw is not None else [])
+            if self.gas_on:
+                moved += [self.gx[j] for j in range(len(GAS_TRACERS))]
             if moved:
                 self.tr.step_many(self.M, self._M1, self._Fm, moved, order=3)
             cp.copyto(self.M, self._M1)
@@ -258,7 +272,8 @@ class World:
         if self.air:
             if rad:
                 self.physics.radiate(self.h, self.theta, self.Ts, self.time, self.rad_every * self.dt,
-                                     q=self.q if self.moist else None, cw=self.cw if self.moist else None)
+                                     q=self.q if self.moist else None, cw=self.cw if self.moist else None,
+                                     gx=self.gx if self.gas_on else None)
             if rec:
                 rec.pre_column()
             self.physics.column(self.h, self.theta, self.Ts, self.u, self.time, self.dt,
@@ -267,7 +282,8 @@ class World:
                                 qocean=self.sea.qocean if self.sea is not None else None,
                                 qsw=self.sea.qsw if self.sea is not None else None,
                                 land=self.land, soilcap=self.soilcap, soil=self.soil, pond=self.pond, snow=self.snow,
-                                cw=self.cw if self.moist else None, elev=self.b, firn=getattr(self, 'firn', None))
+                                cw=self.cw if self.moist else None, elev=self.b, firn=getattr(self, 'firn', None),
+                                gx=self.gx if self.gas_on else None)
             if rec:
                 rec.post_column()
             if self.sea is not None:
@@ -275,6 +291,10 @@ class World:
                 self.sea.accumulate(self.dt, self.physics.evap, self.physics.rain, self.ice, self.mouth)
             if self.L > 1:
                 self.core.exchange(self.physics.wx, self.h, self.u, self.M, self.psi, theta=self.theta)
+                if self.gas_on:                            # (#217) the exchange's own moves already carried them in the column; their sources
+                    gN, i32, R = grid_dims(self.grid.N), np.int32, self.dg.dtype.type
+                    G = i32(len(GAS_TRACERS))
+                    self.k_gas['gas_src'](*gN, (i32(self.grid.N), i32(self.L), G, self.gas_src, self.h, R(self.dt), self.gx))
         if kind:
             if rec and kind == 2:
                 rec.pre_mix()
@@ -485,6 +505,8 @@ class World:
         w = cls(n=meta['n'], preset=meta['preset'], params=meta['params'],
                 state=(arrays['h'], arrays['b'], arrays['u'], extra))
         for k in w.STATE:
+            if k in ('firn', 'gx') and k not in arrays:          # (#217: a save without gas tracers starts them uniform)
+                continue
             if k == 'firn' and k not in arrays:                  # (a save from before the firn: it starts at freezing)
                 continue
             a = arrays[k]

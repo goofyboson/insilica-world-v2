@@ -56,6 +56,7 @@ struct Par {
   real liq_cold;
   real sub_mix;                                   // (#213) the compensating subsidence at cloud base brings the cumulus layer's air, sub_mix of the way from its bottom slice to its mean
   real ent_lcl;                                   // (#211) the mixed layer's entrainment not stopped at its cloud base (#124's rule then sends the excess up)
+  real* xf;                                       // (#217, GASX) the column's gas tracers, xf[g * LMAX + k] (mole fractions), carried by every move
   real cw_qs;                                     // (#205) a cloud's typical water content at most cw_qs of its layer's saturation (cold clouds hold less); 0: q_auto, l_ice everywhere                                  // (#201) the clouds' phase for radiation and cover: all ice this far (K) below freezing (20; observed supercooled liquid: 40)
   real ecc, lam_peri;                             // Earth's orbit (V2-6e, #184): eccentricity (0: circular) and the sun's longitude at perihelion (rad)
   real ent_loc;                                   // (#180) the plume's surroundings hold their layer's vapor at the layer's relative humidity, level by level
@@ -73,6 +74,7 @@ struct Par {
 
 // The dry air's constants (V2-6e, #216): a world with its own gases compiles its values in (constants.air_props); otherwise
 // those the model has always used, bit for bit.
+#define GASN 3                                   // (#217) the gas tracers carried: CO2, N2O, CH4
 #ifndef AIR_RD
 #define AIR_RD 287.0
 #endif
@@ -100,7 +102,7 @@ __device__ Par unpack(const real* a) {
   P.kappa = a[15]; P.p0 = a[16]; P.tilt = a[17]; P.year_s = a[18]; P.day_s = a[19]; P.tau_lin = a[20]; P.theta_star2 = a[21];
   P.moist = a[22]; P.Lv = a[23]; P.Lf = a[24]; P.Tf = a[25]; P.k_evap = a[26]; P.tau_conv = a[27]; P.alb_ice = a[28];
   P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32]; P.sat_layer = a[33]; P.sw_tau = a[34];
-  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; P.plume_ent = a[78]; P.l_ice = a[79]; P.storm_area = a[80]; P.graupel_v = a[81]; P.ice_small = a[82]; P.q_shape = a[83]; P.edge_heat = a[84]; P.freeze_dry = a[85]; P.edge_vap = a[86]; P.conv_revap = a[87]; P.plume_root = a[88]; P.bl_q = a[89]; P.sfc = a[90]; P.z0_land = a[91]; P.downdraft = a[92]; P.ent_cloud = a[93]; P.c_deep = a[94]; P.rs_max = a[95]; P.rs_sun = a[96]; P.q_sea = a[97]; P.bl_reach = a[98]; P.dry_edge = a[99]; P.bl_lcl = a[100]; P.edge_k = (int)a[101]; P.ice_air = a[102]; P.revap = a[103]; P.revap_rhs = a[104]; P.revap_rhl = a[105]; P.revap_area = a[106]; P.root_q = a[107]; P.ent_det = a[108]; P.ent_ifs = a[109]; P.shallow = a[110]; P.cu_dth = a[111]; P.cu_dp = a[112]; P.buoy_v = a[113]; P.cu_sub = a[114]; P.bare_fx = a[115]; P.det_all = a[116]; P.cl_float = a[117]; P.ml_clear = a[118]; P.cu_cloud = a[119]; P.firn = a[120]; P.k_firn = a[121]; P.rho_firn = a[122]; P.c_ice = a[123]; P.lw_refl = a[124]; P.ent_loc = a[125]; P.ecc = a[126]; P.lam_peri = a[127]; P.liq_cold = a[128]; P.cw_qs = a[129]; P.ent_lcl = a[130]; P.sub_mix = a[131]; P.bl_room = (real)1e30; for (int j = 0; j < LMAX; j++) P.ths[j] = a[132 + j];
+  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; P.plume_ent = a[78]; P.l_ice = a[79]; P.storm_area = a[80]; P.graupel_v = a[81]; P.ice_small = a[82]; P.q_shape = a[83]; P.edge_heat = a[84]; P.freeze_dry = a[85]; P.edge_vap = a[86]; P.conv_revap = a[87]; P.plume_root = a[88]; P.bl_q = a[89]; P.sfc = a[90]; P.z0_land = a[91]; P.downdraft = a[92]; P.ent_cloud = a[93]; P.c_deep = a[94]; P.rs_max = a[95]; P.rs_sun = a[96]; P.q_sea = a[97]; P.bl_reach = a[98]; P.dry_edge = a[99]; P.bl_lcl = a[100]; P.edge_k = (int)a[101]; P.ice_air = a[102]; P.revap = a[103]; P.revap_rhs = a[104]; P.revap_rhl = a[105]; P.revap_area = a[106]; P.root_q = a[107]; P.ent_det = a[108]; P.ent_ifs = a[109]; P.shallow = a[110]; P.cu_dth = a[111]; P.cu_dp = a[112]; P.buoy_v = a[113]; P.cu_sub = a[114]; P.bare_fx = a[115]; P.det_all = a[116]; P.cl_float = a[117]; P.ml_clear = a[118]; P.cu_cloud = a[119]; P.firn = a[120]; P.k_firn = a[121]; P.rho_firn = a[122]; P.c_ice = a[123]; P.lw_refl = a[124]; P.ent_loc = a[125]; P.ecc = a[126]; P.lam_peri = a[127]; P.liq_cold = a[128]; P.cw_qs = a[129]; P.ent_lcl = a[130]; P.sub_mix = a[131]; P.xf = 0; P.bl_room = (real)1e30; for (int j = 0; j < LMAX; j++) P.ths[j] = a[132 + j];
   return P;
 }
 
@@ -477,6 +479,13 @@ __device__ void move_mass(int L, const Par& P, real* mu, real* th, real* q, real
   const real Eb = column_energy(L, mu, pib, th, q, P);
   for (int k = 0; k < L; k++) { mu2[k] = mu[k]; th2[k] = th[k]; q2[k] = q[k]; }
   mu2[from] -= m; mu2[to] += m;
+#ifdef GASX
+  if (P.xf) {                                    // (#217) the gases move with the air, the donor's mole fraction into the receiver's
+    const int d = m > 0 ? from : to, r = m > 0 ? to : from;
+    const real am = m > 0 ? m : -m;
+    for (int g = 0; g < GASN; g++) P.xf[g * LMAX + r] = (mu[r] * P.xf[g * LMAX + r] + am * P.xf[g * LMAX + d]) / mu2[r];
+  }
+#endif
   layer_exner(L, mu2, P, pb2, pib2);
   th2[from] = (mu[from] * th[from] - m * th_leave) / mu2[from];
   th2[to] = (mu[to] * th[to] + m * th_arrive) / mu2[to];
@@ -849,7 +858,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
                                       real* wx, real* olr, real* sw_abs, real* stored, real* rain, real* evap, real* conv,
                                       real* tsurf, real* rainp, real* dgo, real* cap, real* qocean,
                                       real* qsw, const real* land, const real* soilcap, real* soil, real* pond, real* snow, real* cloudw, real* cloudo, const real* elev, real* flash,
-                                      const real* radf, const real* swf, real* swalb, const real* ch, const real* lc, real* firn) {
+                                      const real* radf, const real* swf, real* swalb, const real* ch, const real* lc, real* firn, real* xfer) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= N) return;
 #ifdef NL
@@ -858,6 +867,11 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   const int L = L_in;
 #endif
   Par P = unpack(par);
+#ifdef GASX
+  real xfl[GASN * LMAX];                         // (#217) the column's gas tracers, carried by every move of its air
+  for (int g = 0; g < GASN; g++) for (int k = 0; k < L; k++) xfl[g * LMAX + k] = xfer ? xfer[((size_t)g * L + k) * N + i] : (real)0;
+  P.xf = xfer ? xfl : (real*)0;
+#endif
   // the bottom layer's upper edge rises with the ground (decision #96): air over high ground is warmer in theta, so the layer keeps its mass there, bent over the mountain
   if (elev && P.theta_rise > 0 && elev[i] > 0) P.theta_star += P.theta_rise * elev[i];
   const real ts_base = P.theta_star;
@@ -1852,6 +1866,9 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   SNAP(9)
   if (conv) conv[i] = mc;
   for (int j = 0; j + 1 < L; j++) wx[(size_t)j * N + i] = wxo[j];
+#ifdef GASX
+  if (xfer) for (int g = 0; g < GASN; g++) for (int k = 0; k < L; k++) xfer[((size_t)g * L + k) * N + i] = xfl[g * LMAX + k];
+#endif
   rain[i] = R / dt;
   // ice_air (#134): snow (S of R) carries its freezing heat already given to the air: on frozen ground it lies as it is; on ground above
   // freezing, and into the sea, it melts with the surface's heat
@@ -2092,10 +2109,17 @@ __device__ __forceinline__ fast lw_through(fast I, fast tau, fast Bn, fast Bf) {
 // CO2, O3, N2O, CH4; molecules / cm^2), H2O's place between its two tables, cloud longwave optical depth and cover, air
 // (molecules / cm^2), the haze's share. A layer's cloud sits in one sub-level (CLOUD_SUB: the bottom layer's middle, a
 // middle layer's top, where the plumes' outflow is, the top layer's bottom), so its cover mixes once in each stream.
+// and each gas's surface source (src, G x N: mole fraction times kg/m^2/s of air) into the bottom layer over dt
+extern "C" __global__ void gas_src(int N, int L, int G, const real* src, const real* h, real dt, real* x) {
+  const int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= N) return;
+  for (int g = 0; g < G; g++) x[((size_t)g * L + L - 1) * N + i] += src[(size_t)g * N + i] * dt / h[(size_t)(L - 1) * N + i];
+}
+
 #define NV 14
 __device__ __forceinline__ int cloud_sub(int k, int L) { return k == L - 1 ? 1 : (k == 0 ? NSUB - 1 : 1); }
 extern "C" __global__ void lw_setup(int N, int L_in, const real* par, int NP, int NT, real lp0, real dlp, real t0, real dtt,
-                                    const float* o3, int NO3, real o3lp0, real o3dlp, real co2, real n2o, real ch4,
+                                    const float* o3, int NO3, real o3lp0, real o3dlp, real co2, real n2o, real ch4, const real* gx,
                                     const real* mu_in, const real* theta, const real* qv, const real* cloudo, real hs, int tmode, float* sub) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x, k = blockIdx.y;
   if (i >= N) return;
@@ -2148,7 +2172,9 @@ extern "C" __global__ void lw_setup(int N, int L_in, const real* par, int NP, in
       yo = fminf(fmaxf(yo, 0.f), (fast)(NO3 - 1) - 1e-4f);
       const int io = (int)yo;
       const fast xo3 = o3[io] + (o3[io + 1] - o3[io]) * (yo - (fast)io);
-      W(s, 5) = (float)((fast)co2 * ua); W(s, 6) = (float)(xo3 * ua); W(s, 7) = (float)((fast)n2o * ua); W(s, 8) = (float)((fast)ch4 * ua);
+      // (#217) the layer's own CO2, N2O and CH4 when they are carried as tracers (gx: 3 x L x N, mole fractions), else the planet's
+      const real xc = gx ? gx[(size_t)k * N + i] : co2, xn = gx ? gx[(size_t)(L + k) * N + i] : n2o, xm = gx ? gx[(size_t)(2 * L + k) * N + i] : ch4;
+      W(s, 5) = (float)((fast)xc * ua); W(s, 6) = (float)(xo3 * ua); W(s, 7) = (float)((fast)xn * ua); W(s, 8) = (float)((fast)xm * ua);
       W(s, 10) = 0.f; W(s, 11) = (float)fcl;
       W(s, 12) = (float)ua;
       W(s, 13) = (float)(FPOW(b / pb[L - 1], (real)8000 / hs) - FPOW(a / pb[L - 1], (real)8000 / hs));

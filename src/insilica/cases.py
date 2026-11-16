@@ -591,6 +591,23 @@ PRESETS['earth7o5'] = dict(PRESETS['earth7'], ocean=dict(PRESETS['earth7']['ocea
 # close to it; the currents from each layer's own density (#166), the interfacial stress from the shear (#167), shear mixing at
 # the mixed layer's base (#168), the mixed layer reaching through emptied classes (#170), interior mixing κ_d 1e-5
 _C8 = (26.0, 22.0, 18.0, 14.0, 10.0, 6.0, 2.0)
+# V2-6h (#214, trial): earth7 with its 305-330 K layer split at 315 K, the lower free troposphere (~800-650 hPa in the tropics) as air of
+# its own: the plumes passing the cumulus layer detrain there, not into one ~390 hPa layer whose condensation heated it from above.
+def earth8(g, lo=310.0, hi=322.0):
+    """The eight-layer start: earth7's with its 305-330 K layer split at 315 K, the lower part's theta lo and the upper part's hi, their
+    masses so that the two keep the layer's mean theta (each at least a tenth of it), their vapor the layer's."""
+    h7, b, u7, x = earth7(g)
+    th7, q7 = x['theta'], x['q']
+    f = np.clip((th7[3] - lo) / (hi - lo), 0.1, 0.9)
+    h = np.concatenate([h7[:3], (f * h7[3])[None], ((1 - f) * h7[3])[None], h7[4:]])
+    th = np.concatenate([th7[:3], np.full((1, g.N), hi), np.full((1, g.N), lo), th7[4:]])
+    q = np.concatenate([q7[:4], q7[3:]])
+    return h, b, np.concatenate([u7[:4], u7[3:]]), dict(x, theta=th, q=q)
+
+
+PRESETS['earth8'] = dict(PRESETS['earth7'], build=earth8, stress=[0.0] * 8,
+                         air=dict(PRESETS['earth7']['air'], physics=dict(PRESETS['earth7']['air']['physics'], theta_stars=[500.0, 380.0, 330.0, 315.0, 305.0, 204.0, 200.0])))
+
 PRESETS['earth7o8'] = dict(PRESETS['earth7'], ocean=dict(PRESETS['earth7']['ocean'], gprime=(0.0096, 0.0115, 0.0099, 0.0083, 0.0067, 0.0052, 0.0036),
                                                          h_layers=(50.0, 50.0, 75.0, 100.0, 150.0, 200.0, 400.0), T_layers=tuple(273.15 + t for t in _C8[:-1]),
                                                          T_deep=273.15 + _C8[-1], T_classes=tuple(273.15 + t for t in _C8), fw_local=1.0, kappa_h=1000.0,

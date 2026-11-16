@@ -217,10 +217,11 @@ def test_earth_budget(record):
         i = max(s, key=lambda j: U[k, j])
         return U[k, i], cen[i]
     ek = int(w.physics.p['edge_k'])                                # ek: the 305–380 K layer, the stratosphere's layers above it (#129)
-    if 330.0 in list(w.physics.p['theta_stars']):                  # (#153: its two parts, 330–380 and 305–330 K, as one, mass-weighted)
-        hj = H[ek] + H[ek + 1]
-        U = np.concatenate([U[:ek], ((U[ek] * H[ek] + U[ek + 1] * H[ek + 1]) / hj)[None], U[ek + 2:]])
-        H = np.concatenate([H[:ek], hj[None], H[ek + 2:]])
+    nf = sum(1 for t in w.physics.p['theta_stars'] if 305.0 < t < 380.0)   # (#153, #214: its parts between 305 and 380 K as one, mass-weighted)
+    if nf:
+        hj = H[ek:ek + nf + 1].sum(0)
+        U = np.concatenate([U[:ek], ((U[ek:ek + nf + 1] * H[ek:ek + nf + 1]).sum(0) / hj)[None], U[ek + nf + 1:]])
+        H = np.concatenate([H[:ek], hj[None], H[ek + nf + 1:]])
     o, bl = WINDS_OBS, U.shape[0] - 1
     U = np.concatenate([(np.sum(U[:ek] * H[:ek], 0) / np.sum(H[:ek], 0))[None], U])      # row 0: the stratosphere, mass-weighted
     S0 = ek + 1                                                                          # (U's row of the 305–380 K layer)

@@ -22,7 +22,7 @@ from .cases import PRESETS, cosine_bell, default_dt, edge_east_north, initial_st
 from .gpu import DeviceGrid, dsum, grid_dims, source_hash
 from .io import save as savefile
 from .atmosphere import AirPhysics
-from .constants import GRAV, P0, PLANET, air_props
+from .constants import C_SOIL, GRAV, K_SOIL, P0, PLANET, air_props
 from .land import LandWater
 from .layers import DIV_DAMP, Layers
 from .transport import BETA, Transport
@@ -172,7 +172,9 @@ class World:
             self.surface_drag = ocfg.pop('surface_drag')
             self.sea = Ocean(self.dg, ocfg, Tsurf=extra['Ts'], state=extra.get('ocean'), land=land,
                              c_land=self.physics.p['c_land'], c_deep=self.physics.p['c_deep'], grav=self.grav,
-                             day_s=self.physics.p['day_s'] if self.air else 86400.0)
+                             day_s=self.physics.p['day_s'] if self.air else 86400.0,
+                             soil=dict(dz=self.physics.p.get('soil_dz') or (), c=self.physics.p.get('c_soil', C_SOIL),
+                                       k=self.physics.p.get('k_soil', K_SOIL)) if self.air else None)
             ratio = self.sea.cfg['dt'] / self.dt
             if abs(ratio - round(ratio)) > 1e-9 or round(ratio) < 1:
                 raise ValueError(f'the ocean step {self.sea.cfg["dt"]} s must be a whole number of air steps ({self.dt} s)')
@@ -182,6 +184,9 @@ class World:
             self.Ts = self.sea.T[0]                          # a view: the air's surface physics heats the mixed layer
             self.oh, self.ou, self.oT, self.oM, self.oS = self.sea.h, self.sea.u, self.sea.T, self.sea.M, self.sea.S
             self.STATE = tuple(k for k in self.STATE if k != 'Ts') + ('oh', 'ou', 'oT', 'oM', 'oS')
+            if self.sea.soil is not None:                    # (#218) the land column's temperatures
+                self.oTg = self.sea.Tg
+                self.STATE = self.STATE + ('oTg',)
             self._sync_sea()
         # the mountains' drag (V2-6b, #127): Lott & Miller (1997) from the sub-grid orography
         self.oro = None
@@ -506,6 +511,9 @@ class World:
                 state=(arrays['h'], arrays['b'], arrays['u'], extra))
         for k in w.STATE:
             if k in ('firn', 'gx') and k not in arrays:          # (#217: a save without gas tracers starts them uniform)
+                continue
+            if k == 'oTg' and k not in arrays:                   # (#218: a save without the land column starts it at its deep ground's)
+                w.oTg[...] = cp.asarray(arrays['oT'][1] if w.sea.land is not None else arrays['oT'][0])[None, :]
                 continue
             if k == 'firn' and k not in arrays:                  # (a save from before the firn: it starts at freezing)
                 continue

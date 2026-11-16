@@ -215,7 +215,9 @@ def conserve_air(record):
     # the seven-layer earth's columns (V2-6b; earth6 since #142, earth7 since #153): the mixed layer, deep plumes taking in the cloud layer's air, their downdrafts, the land
     # (#216: in an air of its own, nine parts N₂ to one of CO₂, its constants compiled in: the ledgers close on the air's own cp)
     # (#217: carrying CO₂, N₂O and CH₄ as tracers, CO₂ with a surface source on 100 cells)
-    air = {'physics': {'gases': dict(n2=0.9, co2=0.1)}}
+    # (#218: the land column under the ground's skin in place of the deep ground: its conduction keeps the land's heat, and it reloads)
+    from insilica.constants import SOIL_DZ
+    air = {'physics': {'gases': dict(n2=0.9, co2=0.1), 'c_deep': 0.0, 'soil_dz': list(SOIL_DZ)}}
     e = World(4, 'earth7', params=dict(air, gas_tracers=1))
     e.gas_src[0, :100] = 1e-9
     gamt = lambda: [float(cp.sum(e.M * e.gx[j])) for j in range(e.gx.shape[0])]
@@ -240,6 +242,21 @@ def conserve_air(record):
             d['momentum'] = max(d['momentum'], float(cp.sum(lede * cp.abs(dm)) / cp.sum(lede * cp.sum(he(h) * cp.abs(u), axis=0))))
         return apply
     e.oro.apply, e.gw.apply = ledger('oro', e.oro.apply), ledger('gw', e.gw.apply)
+    sea, lnd, soil = e.sea, e.land, {'worst': 0.0, 'moved': 0.0}
+    dzc = cp.asarray(SOIL_DZ)[:, None] * sea.soil['c']
+
+    def column_heat():
+        """The land's skin and column (J), and its gross relative to freezing."""
+        x = sea.cap * (sea.T[0] - 273.15) + cp.sum(dzc * (sea.Tg - 273.15), axis=0)
+        return float(cp.sum(A * lnd * x)), float(cp.sum(A * lnd * (sea.cap * cp.abs(sea.T[0] - 273.15) + cp.sum(dzc * cp.abs(sea.Tg - 273.15), axis=0))))
+
+    def ground(dt, _g=sea.ground):
+        h0, gross = column_heat()
+        t0 = sea.Tg.copy()
+        _g(dt)
+        soil['worst'] = max(soil['worst'], abs(column_heat()[0] - h0) / gross)
+        soil['moved'] += float(cp.sum(A * lnd * cp.sum(dzc * cp.abs(sea.Tg - t0), axis=0))) / float(cp.sum(A * lnd)) / dt
+    sea.ground = ground
     snow = 0.0                                            # the snow reaching the ground (#134): its freezing heat given aloft
     for t in range(48):
         W0, E0 = e.water(), e.energy()
@@ -254,11 +271,15 @@ def conserve_air(record):
         e4 = max(e4, abs(float(cp.sum(A * p.stored)) - float(cp.sum(A * (p.sw_abs - p.olr))) * e.dt) / abs(E0))
         e4w = max(e4w, abs(e.water() - W0 - float(cp.sum(A * (p.evap - p.rain))) * e.dt) / e.water())
     g1 = gamt()
+    fs = os.path.join(tempfile.gettempdir(), f'soil{os.getpid()}.iw2')
+    e.save(fs)
+    reload_ok = World.load(fs).state_hash() == e.state_hash() and 'oTg' in e.STATE
+    os.remove(fs)
     gbud = max(abs(g1[0] - g0[0] - gsrc) / g1[0], *(abs(g1[j] - g0[j]) / g0[j] for j in range(1, len(g0))))
     guni = max(float((e.gx[j].max() - e.gx[j].min()) / e.gx[j].mean()) for j in range(1, len(g0)))
     ok = (worst <= 1e-13 and water <= 1e-13 and mass <= 1e-13 and tracer <= 1e-13 and vapor <= 1e-13 and abs(drift) < 1e-4 and e4 <= 1e-13
           and e4w <= 1e-13 and snow > 0 and all(d['energy'] <= 1e-13 and d['gross'] > 0 for d in drag.values()) and drag['gw']['momentum'] <= 1e-13
-          and gbud <= 1e-13 and guni <= 1e-12 and olr_gx <= 1e-12)
+          and gbud <= 1e-13 and guni <= 1e-12 and olr_gx <= 1e-12 and soil['worst'] <= 1e-13 and soil['moved'] > 0 and reload_ok)
     record('CONSERVE air', f'moist column ledgers, 48 steps: energy worst {fmt(worst)} of the energy stored ({fmt(per_step)} of one step of sunlight), '
            f'water {fmt(water)}; moist aqua 10 d (3 layers; dynamics, radiation, crossings ~{crossed:.2f} kg/m² per step, convection, rain): '
            f'air mass {fmt(mass)}, tracer {fmt(tracer)}, vapor against evaporation − rain {fmt(vapor)}; adiabatic air (two layers), '
@@ -268,8 +289,10 @@ def conserve_air(record):
            f'{fmt(drag["oro"]["energy"])}, waves (#128) {fmt(drag["gw"]["energy"])} of the kinetic energy ({drag["oro"]["gross"] / 48:.2e}, '
            f'{drag["gw"]["gross"] / 48:.2e} J a step); the waves\' column momentum {fmt(drag["gw"]["momentum"])} of the gross; '
            f'gas tracers (#217): CO₂, N₂O, CH₄ against their sources (CO₂ {gsrc / g1[0]:.1e} of its amount from the surface) {fmt(gbud)}, '
-           f'N₂O and CH₄ started uniform stay so to {fmt(guni)}, OLR reading them against the planet\'s values {fmt(olr_gx)}',
-           '≤ 1e-13; ≤ 1e-13; drift < 1e-4; uniform ≤ 1e-12', ok)
+           f'N₂O and CH₄ started uniform stay so to {fmt(guni)}, OLR reading them against the planet\'s values {fmt(olr_gx)}; '
+           f'land column (#218, {len(SOIL_DZ)} layers to {sum(SOIL_DZ):.1f} m, {soil["moved"] / 48:.1f} W/m² changing its layers on land, mean over the steps): its heat {fmt(soil["worst"])} of its gross, '
+           f'reload {"identical" if reload_ok else "DIFFERENT"}',
+           '≤ 1e-13; ≤ 1e-13; drift < 1e-4; uniform ≤ 1e-12; reload identical', ok)
     return ok
 
 

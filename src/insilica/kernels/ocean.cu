@@ -431,6 +431,39 @@ extern "C" __global__ void ocn_ground(int N, const real* land, real* T, const re
   T[(size_t)N + i] = Te - d * Cs / (Cs + c_deep);
 }
 
+// The land column (V2-6e, #218), on land cells: under the ground's skin T0 (capacity cap, J/m^2/K) K soil layers, thickness dz (m),
+// volumetric heat capacity c_soil (J/m^3/K) and conductivity k_soil (W/m/K), their temperatures Tg (K x N). Heat is conducted between
+// neighbours across their centres, the skin as thick as its capacity in soil (cap / c_soil); none passes the bottom. Stepped
+// implicitly (backward Euler, one tridiagonal solve per column): stable however thin the layers, the column's heat kept to rounding.
+#define KSOIL 16
+extern "C" __global__ void land_column(int N, int K, const real* land, real* T, const real* cap, real* Tg, const real* dz, real c_soil,
+                                       real k_soil, real dt) {
+  LOOP1(i, N)
+  if (!(land[i] > (real)0.5)) return;
+  const int n = K + 1;
+  real C[KSOIL + 1], G[KSOIL + 1], x[KSOIL + 1], cp_[KSOIL + 1], dp[KSOIL + 1];
+  C[0] = cap[i]; x[0] = T[i];
+  real half = cap[i] / c_soil / 2;
+  for (int k = 1; k < n; k++) {
+    const real d = dz[k - 1];
+    C[k] = c_soil * d; x[k] = Tg[(size_t)(k - 1) * N + i];
+    G[k - 1] = dt * k_soil / (half + d / 2);                     // (times dt) between node k-1 and k
+    half = d / 2;
+  }
+  G[n - 1] = 0;
+  // (C_k + G_{k-1} + G_k) x'_k - G_{k-1} x'_{k-1} - G_k x'_{k+1} = C_k x_k  (Thomas)
+  for (int k = 0; k < n; k++) {
+    const real a = k ? G[k - 1] : (real)0, c = G[k];
+    const real den = C[k] + a + c - (k ? a * cp_[k - 1] : (real)0);
+    cp_[k] = c / den;
+    dp[k] = (C[k] * x[k] + (k ? a * dp[k - 1] : (real)0)) / den;
+  }
+  x[n - 1] = dp[n - 1];
+  for (int k = n - 2; k >= 0; k--) x[k] = dp[k] + cp_[k] * x[k + 1];
+  T[i] = x[0];
+  for (int k = 1; k < n; k++) Tg[(size_t)(k - 1) * N + i] = x[k];
+}
+
 // The mixed layer's heat capacity per cell for the air's surface physics: rho_w c_w h0 (J/m^2/K).
 extern "C" __global__ void ocn_cap(int N, const real* h, real rho_cw, real* cap, const real* land, real c_land) {
   LOOP1(i, N)

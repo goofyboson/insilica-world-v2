@@ -39,3 +39,9 @@ def air_props(gases=None):
     vf = 1 / eps - 1
     defs = (f'-DAIR_RD={R!r}', f'-DAIR_EPS={eps!r}', f'-DAIR_VF={vf!r}', f'-DAIR_VFB={vf!r}', f'-DAIR_M={M!r}', f'-DAIR_MKG={M * 1e-3!r}')
     return dict(cp=cp_, kappa=R / cp_, rd=R, rd_col=R, eps=eps, mair=M, defs=defs)
+
+# The land column (V2-6e, #218): moist mineral soil, volumetric heat capacity (J/m^3/K) and conductivity (W/m/K) (Hillel 1982; Oke
+# 1987: 1.2-3.0e6 and 0.25-2.2 from dry sand to wet clay; damping depth sqrt(2 k / (c omega)) 2.2 m for the year, 0.12 m for the day),
+# and its layers (m) under the skin, doubling to 6.3 m, three annual damping depths
+C_SOIL, K_SOIL = 2.0e6, 1.0
+SOIL_DZ = (0.1, 0.2, 0.4, 0.8, 1.6, 3.2)

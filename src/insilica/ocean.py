@@ -47,11 +47,12 @@ def wall_mask(g, walls):
 
 
 class Ocean:
-    def __init__(self, dg, cfg=None, Tsurf=None, state=None, land=None, c_land=2.0e6, c_deep=0.0, grav=GRAV, day_s=86400.0):
+    def __init__(self, dg, cfg=None, Tsurf=None, state=None, land=None, c_land=2.0e6, c_deep=0.0, grav=GRAV, day_s=86400.0, soil=None):
         """cfg overrides OCEAN; Tsurf (N, K) starts the mixed layer's temperature (from the air case's surface);
         state = (h, u, T) restores one; land (N, 0/1): cells with no water (#84), walled off, their T[0] the ground's
         temperature with heat capacity c_land; with c_deep > 0 (#118) that is the ground's skin, and T[1] there is the deep
-        ground's temperature (capacity c_deep) under it."""
+        ground's temperature (capacity c_deep) under it. soil (#218): dict(dz, c, k), the land column under the skin in its place:
+        layers dz (m) of soil with volumetric heat capacity c (J/m³/K) and conductivity k (W/m/K), their temperatures Tg (K, N)."""
         self.dg = dg
         self.cfg = c = dict(OCEAN, **(cfg or {}))
         N, E = dg.N, dg.E
@@ -73,6 +74,10 @@ class Ocean:
         # sides carry no water — a basin's coasts, with no land cells (the air still sees open water there)
         self.wall = wall_mask(g, c['walls']) if len(c['walls']) else None
         self.c_land, self.c_deep = c_land, c_deep
+        self.soil = dict(soil) if soil and len(soil.get('dz') or ()) else None
+        if self.soil is not None:
+            assert c_deep == 0, 'the land column (#218) replaces the deep ground (c_deep)'
+            assert len(self.soil['dz']) <= 16, 'at most 16 soil layers'
         self.grav, self.day_s = grav, day_s                     # the planet's (#186)
         self.land = None
         if land is not None:
@@ -114,6 +119,9 @@ class Ocean:
         self.h, self.u, self.T = cp.asarray(h, dtype=float), cp.asarray(u, dtype=float), cp.asarray(T, dtype=float)
         if state is None and land is not None and c_deep > 0:   # the deep ground starts at its skin's temperature
             self.T[1] = cp.where(self.land > 0.5, self.T[0], self.T[1])
+        if self.soil is not None:                               # (#218) the column starts at the skin's temperature
+            self.soil_dz = cp.asarray([float(d) for d in self.soil['dz']])
+            self.Tg = cp.repeat(self.T[0][None, :], len(self.soil['dz']), axis=0)
         self.core.mask(self.u, L)
         self.S = cp.asarray(S, dtype=float)                     # salinity (psu, decision #76)
         self.M = self.h * cp.asarray(g.areaCell)[None, :]
@@ -134,7 +142,7 @@ class Ocean:
         self.mix_every = int(round(ratio))
         k = lambda n: dg.kernel(n, 'ocean.cu')
         self.k = {n: k(n) for n in ('couple_stress', 'ek_spread', 'ocn_column', 'ocn_cap', 'ocn_overturn', 'ocn_pen', 'ocn_fresh', 'ocn_xch_salt',
-                                    'ocn_heat', 'ocn_ground', 'ocn_diffuse', 'ocn_sigma', 'ocn_classes',
+                                    'ocn_heat', 'ocn_ground', 'land_column', 'ocn_diffuse', 'ocn_sigma', 'ocn_classes',
                                     'ice_flux', 'ice_limit', 'ice_move')}
         self._iF = None
         if c['ice_drift'] > 0:
@@ -167,7 +175,11 @@ class Ocean:
                                             g.dtype.type(sign), self.conv))
 
     def ground(self, dt):
-        """The deep ground's exchange with its skin over dt (#118); nothing unless c_deep > 0."""
+        """The deep ground's exchange with its skin over dt (#118), or the land column's conduction (#218); nothing without either."""
+        if self.soil is not None and self.land is not None:
+            g, R = self.dg, self.dg.dtype.type
+            self.k['land_column'](*grid_dims(g.N), (np.int32(g.N), np.int32(len(self.soil['dz'])), self.land, self.T, self.cap, self.Tg,
+                                                    self.soil_dz, R(self.soil['c']), R(self.soil['k']), R(dt)))
         if self.c_deep > 0 and self.land is not None:
             g = self.dg
             self.k['ocn_ground'](*grid_dims(g.N), (np.int32(g.N), self.land, self.T, self.cap, g.dtype.type(self.c_deep), g.dtype.type(dt),
@@ -309,6 +321,8 @@ class Ocean:
         if self.land is None:
             return float(cp.sum(A * cp.sum(self.h * (self.T - 273.15), axis=0))) * rc
         ground = self.cap * (self.T[0] - 273.15) + (self.c_deep * (self.T[1] - 273.15) if self.c_deep > 0 else 0.0)
+        if self.soil is not None:                               # (#218) the land column's layers
+            ground = ground + self.soil['c'] * cp.sum(self.soil_dz[:, None] * (self.Tg - 273.15), axis=0)
         return float(cp.sum(A * ((1 - self.land) * rc * cp.sum(self.h * (self.T - 273.15), axis=0) + self.land * ground)))
 
     def salt(self):

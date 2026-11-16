@@ -151,6 +151,8 @@ class World:
             self.soilcap = cp.asarray(p['soil_base'] + p['soil_per_m'] * np.maximum(cp.asarray(b).get(), 0.0))
             self.soil = 0.5 * self.soilcap
             self.pond, self.snow = cp.zeros(self.grid.N), cp.zeros(self.grid.N)
+            if p.get('snow_start', 0) > 0 and state is None and self.moist:  # (#222) an ice sheet starts under its firn, as snow
+                self.snow[...] = cp.minimum(self.ice * self.land, p['rho_firn'] * p['firn'] if p['firn'] > 0 else p['snow_cover'])
             self.routing = LandWater(self.dg, self.b, self.land, self.soilcap, self.pond, self.soil, self.ice, rho_ice=p['rho_ice'],
                                      **({} if self.grav == GRAV else dict(grav=self.grav)))   # (Earth: the ice flow's own 9.81)
             self.mouth = self.routing.mouth

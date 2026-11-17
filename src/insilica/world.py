@@ -191,6 +191,16 @@ class World:
                 self.oTg = self.sea.Tg
                 self.STATE = self.STATE + ('oTg',)
             self._sync_sea()
+        # Moon and tides (V2-6f, #228): the tide-generating force on the ocean and the mixing its dissipation drives
+        self.tides = None
+        tides = P.get('tides', spec.get('tides'))
+        if tides is not None and tides is not False:
+            if self.sea is None or not self.air:
+                raise ValueError('tides need the coupled ocean under air')
+            from .tides import Tides
+            self.tides = Tides(self.dg, self.sea, self.physics.p, self.planet['radius'], tides,
+                               rough=spec['rough'](self.grid) if spec.get('rough') is not None else None,
+                               nbot=spec['nbot'](self.grid) if spec.get('nbot') is not None else None)
         # the mountains' drag (V2-6b, #127): Lott & Miller (1997) from the sub-grid orography
         self.oro = None
         if self.air and self.physics.p['oro'] > 0:
@@ -332,7 +342,11 @@ class World:
         if kind:
             if rec and kind == 2:
                 rec.pre_mix()
+            if self.tides is not None:                                     # (#228) the force at the ocean step's middle
+                self.tides.force(self.time, 0.5 * self.sea.cfg['dt'])
             self.sea.step(mix=kind == 2)
+            if self.tides is not None:
+                self.tides.mix(self.sea.cfg['dt'])
             if self.moist and self.sea.cfg['ice_drift'] > 0:              # sea-ice drift (V2-6e, #185)
                 self.sea.drift_ice(self.ice, self.u, self.physics.p['rho_ice'])
         if self.routing is not None and (kind or self.sea is None):     # on the ocean's step (1 h), or every step

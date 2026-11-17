@@ -372,6 +372,40 @@ def earth_land(g):
 _SSO = {}
 
 
+_ROUGH = {}
+
+
+def earth_rough(g):
+    """The deep sea floor's roughness h^2 (m^2) per grid cell for the internal-tide drag (V2-6f, #228; tools/make_earth_rough.py):
+    each 1-degree cell's to its nearest grid cell, area-weighted, the shelves and land 0."""
+    if g.N not in _ROUGH:
+        d = np.load(Path(__file__).parent / 'data' / 'earth_rough_1deg.npz')
+        lat, lon = np.radians(np.arange(180) - 89.5), np.radians(np.arange(360) - 179.5)
+        la, lo = np.meshgrid(lat, lon, indexing='ij')
+        xyz = np.stack([np.cos(la) * np.cos(lo), np.cos(la) * np.sin(lo), np.sin(la)], axis=-1).reshape(-1, 3)
+        near = np.concatenate([np.argmax(xyz[i:i + 2000] @ g.pos.T, axis=1) for i in range(0, len(xyz), 2000)])
+        w = np.cos(la).ravel()
+        _ROUGH[g.N] = np.bincount(near, w * d['h2'].ravel().astype(float), g.N) / np.maximum(np.bincount(near, w, g.N), 1e-30)
+    return _ROUGH[g.N]
+
+
+_NBOT = {}
+
+
+def earth_nbot(g):
+    """The buoyancy frequency above the sea floor (1/s) per grid cell, from WOA23 (tools/make_earth_nbot.py), for the internal-tide
+    drag (V2-6f, #228): the model's abyss is one mixed layer, so it cannot give it; each 1-degree cell's to its nearest grid cell."""
+    if g.N not in _NBOT:
+        d = np.load(Path(__file__).parent / 'data' / 'earth_nbot_1deg.npz')
+        lat, lon = np.radians(np.arange(180) - 89.5), np.radians(np.arange(360) - 179.5)
+        la, lo = np.meshgrid(lat, lon, indexing='ij')
+        xyz = np.stack([np.cos(la) * np.cos(lo), np.cos(la) * np.sin(lo), np.sin(la)], axis=-1).reshape(-1, 3)
+        near = np.concatenate([np.argmax(xyz[i:i + 2000] @ g.pos.T, axis=1) for i in range(0, len(xyz), 2000)])
+        w = np.cos(la).ravel() * (d['n'].ravel() > 0)
+        _NBOT[g.N] = np.bincount(near, w * d['n'].ravel().astype(float), g.N) / np.maximum(np.bincount(near, w, g.N), 1e-30)
+    return _NBOT[g.N]
+
+
 def earth_sso(g):
     """The sub-grid orography of each grid cell for the mountain drag (V2-6b, #127; Lott & Miller 1997 with Baines & Palmer 1990's
     statistics), from ETOPO1's 1-arc-minute heights (the sea at its surface; tools/make_earth_sso.py), each 1-degree cell going to its
@@ -473,7 +507,7 @@ def earth_bed(g):
 # Modern Earth's land and sea floor over the coupled ocean. Its physics is V2-4c's and V2-4e's (#88, #91, #94, #95), the rest of the worlds still without; land_drag 8 goes with land_exch 2.
 # V2-6a (#109-#112): the k-tables' radiation, and the moist physics that put its troposphere on the observed profile (owner: option C):
 # the surface air's vapor (q_shape), freeze-drying, edge vapor, plumes rooted at the surface, entraining 0.1 per 100 hPa, their rain evaporating.
-PRESETS['earth'] = dict(PRESETS['coupled'], build=earth, land=lambda g: earth_land(g)[0], ocean=dict(surface_drag=SURFACE_DRAG, bed=earth_bed, land_drag=8.0, ice_drift=0.02),
+PRESETS['earth'] = dict(PRESETS['coupled'], build=earth, land=lambda g: earth_land(g)[0], rough=earth_rough, nbot=earth_nbot, ocean=dict(surface_drag=SURFACE_DRAG, bed=earth_bed, land_drag=8.0, ice_drift=0.02),
                         air=dict(AIR, longwave='ktables', physics=dict(AIR3, moist=1.0, k_evap=4.8e-3, firn=2.0, ecc=0.0167, lam_peri=math.radians(282.9), plume_deep=1.0, sat_prof=1.0, bl_bot=0.25, cloud=1.0, tau0=1.3, land_exch=2.0,
                                                                               q_shape=1.0, freeze_dry=1.0, edge_vap=1.0, plume_root=1.0, plume_ent=1e-5, conv_revap=0.05,
                                                                               cw_qs=0.025)))   # (#206) cold clouds' water spread wider

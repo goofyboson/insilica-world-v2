@@ -215,9 +215,9 @@ def conserve_air(record):
     # the seven-layer earth's columns (V2-6b; earth6 since #142, earth7 since #153): the mixed layer, deep plumes taking in the cloud layer's air, their downdrafts, the land
     # (#216: in an air of its own, nine parts N₂ to one of CO₂, its constants compiled in: the ledgers close on the air's own cp)
     # (#217: carrying CO₂, N₂O and CH₄ as tracers, CO₂ with a surface source on 100 cells)
-    # (#218: the land column under the ground's skin in place of the deep ground: its conduction keeps the land's heat, and it reloads)
+    # (#218: with earth7's land column under the ground's skin: its conduction keeps the land's heat, and it reloads)
     from insilica.constants import SOIL_DZ
-    air = {'physics': {'gases': dict(n2=0.9, co2=0.1), 'c_deep': 0.0, 'soil_dz': list(SOIL_DZ)}}
+    air = {'physics': {'gases': dict(n2=0.9, co2=0.1)}}
     # (#220: with geology's accumulators, each sum against the same kept here, the runoff against the water reaching the sea)
     e = World(4, 'earth7', params=dict(air, gas_tracers=1, geology=1))
     e.gas_src[0, :100] = 1e-9

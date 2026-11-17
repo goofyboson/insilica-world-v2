@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .constants import CP_DRY, GRAV, KAPPA, OMEGA, P0, R_PLANET
+from .constants import CP_DRY, GRAV, KAPPA, OMEGA, P0, R_PLANET, SOIL_DZ
 from .grid import planet_of
 
 
@@ -577,8 +577,10 @@ def earth7(g, lo=318.0, hi=350.0):
 # against ~20), so the air absorbed too little sunlight (70 W/m2 against 79) and the surface evaporated the rest.
 # V2-6c (#154): ice clouds with their own sunlight optics (Ebert & Curry 1992), not the drops'
 # V2-6c (#155): the deep plume's IFS entrainment and detrainment through every tropospheric layer it crosses
+# #218: the land column (six soil layers to 6.3 m under the skin) in place of the force-restore deep ground (c_deep, #118)
 PRESETS['earth7'] = dict(PRESETS['earth6'], build=earth7, stress=[0.0] * 7,
-                         air=dict(PRESETS['earth6']['air'], physics=dict(PRESETS['earth6']['air']['physics'], theta_stars=[500.0, 380.0, 330.0, 305.0, 204.0, 200.0], ice_sw=1.0, det_all=1.0, ml_clear=1.0, cu_cloud=2.0)))
+                         air=dict(PRESETS['earth6']['air'], physics=dict(PRESETS['earth6']['air']['physics'], theta_stars=[500.0, 380.0, 330.0, 305.0, 204.0, 200.0], ice_sw=1.0, det_all=1.0, ml_clear=1.0, cu_cloud=2.0,
+                                                                        c_deep=0.0, soil_dz=list(SOIL_DZ))))
 
 # V2-6d (#165, trial): earth7 over a five-layer ocean: the mixed layer (50 m at the start), the upper thermocline (150 m, 20 °C), the
 # lower thermocline (300 m, 12 °C), intermediate water (500 m, 6 °C) and the deep water (0 °C); density steps g' from the observed

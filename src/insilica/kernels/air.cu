@@ -93,6 +93,26 @@ struct Par {
 #ifndef AIR_MKG
 #define AIR_MKG 28.9647e-3
 #endif
+// (#226) the radiation's air: O2's mole fraction, Rayleigh scattering's factor on Earth air's, lines read at the pressure times
+// the air's broadening, ozone's factor; AIR_CIA: collision-induced absorption's weights in the sub-levels (constants.air_props)
+#ifndef AIR_O2
+#define AIR_O2 0.2095
+#endif
+#ifdef AIR_RAY
+#define RAYF(x) ((x) * (fast)AIR_RAY)
+#else
+#define RAYF(x) (x)
+#endif
+#ifdef AIR_BROAD
+#define BROADP(p) ((p) * (real)AIR_BROAD)
+#else
+#define BROADP(p) (p)
+#endif
+#ifdef AIR_O3
+#define O3F(x) ((x) * (fast)AIR_O3)
+#else
+#define O3F(x) (x)
+#endif
 
 // The parameters arrive as an array in this order (atmosphere.PAR_ORDER).
 __device__ Par unpack(const real* a) {
@@ -2116,7 +2136,7 @@ extern "C" __global__ void gas_src(int N, int L, int G, const real* src, const r
   for (int g = 0; g < G; g++) x[((size_t)g * L + L - 1) * N + i] += src[(size_t)g * N + i] * dt / h[(size_t)(L - 1) * N + i];
 }
 
-#define NV 14
+#define NV 15
 __device__ __forceinline__ int cloud_sub(int k, int L) { return k == L - 1 ? 1 : (k == 0 ? NSUB - 1 : 1); }
 extern "C" __global__ void lw_setup(int N, int L_in, const real* par, int NP, int NT, real lp0, real dlp, real t0, real dtt,
                                     const float* o3, int NO3, real o3lp0, real o3dlp, real co2, real n2o, real ch4, const real* gx,
@@ -2164,20 +2184,25 @@ extern "C" __global__ void lw_setup(int N, int L_in, const real* par, int NP, in
       qs[j] = (k < P.edge_k && L >= 3) || (P.bl_q > 0 && k == L - 1 && k > 0) ? (fast)1 : (Tq < 160 ? (fast)0 : qsat_a((fast)Tq, (fast)pm, P.ice_air));   // (bl_q: the bottom layer's even)
       qm += qs[j] * (fast)((b - a) / (pbk - pt));
       // table position: log pressure down from the table's top pressure, temperature up from t0
-      fast x = (fast)((lp0 - log(pm)) / dlp), y = (fast)((Tm - t0) / dtt);
+      fast x = (fast)((lp0 - log(BROADP(pm))) / dlp), y = (fast)((Tm - t0) / dtt);
       x = fminf(fmaxf(x, 0.f), (fast)(NP - 1) - 1e-4f); y = fminf(fmaxf(y, 0.f), (fast)(NT - 1) - 1e-4f);
       W(s, 2) = x; W(s, 3) = y;
       const fast ua = (fast)((b - a) / (P.grav * AIR_MKG) * 6.02214076e23 / 1e4);    // air molecules / cm^2
       fast yo = (fast)((o3lp0 - log(pm)) / o3dlp);
       yo = fminf(fmaxf(yo, 0.f), (fast)(NO3 - 1) - 1e-4f);
       const int io = (int)yo;
-      const fast xo3 = o3[io] + (o3[io + 1] - o3[io]) * (yo - (fast)io);
+      const fast xo3 = O3F(o3[io] + (o3[io + 1] - o3[io]) * (yo - (fast)io));
       // (#217) the layer's own CO2, N2O and CH4 when they are carried as tracers (gx: 3 x L x N, mole fractions), else the planet's
       const real xc = gx ? gx[(size_t)k * N + i] : co2, xn = gx ? gx[(size_t)(L + k) * N + i] : n2o, xm = gx ? gx[(size_t)(2 * L + k) * N + i] : ch4;
       W(s, 5) = (float)((fast)xc * ua); W(s, 6) = (float)(xo3 * ua); W(s, 7) = (float)((fast)xn * ua); W(s, 8) = (float)((fast)xm * ua);
       W(s, 10) = 0.f; W(s, 11) = (float)fcl;
       W(s, 12) = (float)ua;
       W(s, 13) = (float)(FPOW(b / pb[L - 1], (real)8000 / hs) - FPOW(a / pb[L - 1], (real)8000 / hs));
+#ifdef AIR_CIA
+      W(s, 14) = (float)((real)ua * 1e-20 * (pm / (1.380649e-23 * Tm) * 1e-6) * 1e-20);   // (#226) molecules x number density / 1e40
+#else
+      W(s, 14) = 0.f;
+#endif
       uas[j] = ua;
     }
     // the layer's cloud sits in the sub-level holding the median of its vapor (condensate forms where the vapor is: with
@@ -2205,7 +2230,7 @@ extern "C" __global__ void lw_setup(int N, int L_in, const real* par, int NP, in
 
 extern "C" __global__ void lw_column(int N, int L_in, const real* par, int NG, const float* lk, const float* pg,
                                      int NP, int NT, int NTP, real tp0,
-                                     const float* sub, const real* Ts, real* radf) {
+                                     const float* sub, const real* Ts, real* radf, const float* cia) {
   const int i = blockIdx.x, g = threadIdx.x;
   const fast refl = par[124] > 0 ? (fast)(1 - par[4]) : (fast)0;   // lw_refl: the share of the longwave the surface reflects, 1 - eps_s (PAR_ORDER 124, 4)
 #ifdef NL
@@ -2213,7 +2238,7 @@ extern "C" __global__ void lw_column(int N, int L_in, const real* par, int NG, c
 #else
   const int L = L_in;
 #endif
-  __shared__ fast su[NSMAX][NCOMP - 1], sfh[NSMAX], sfp[NSMAX], sft[NSMAX], sTt[NSMAX], sTb[NSMAX], stc[NSMAX], sfc[NSMAX];
+  __shared__ fast su[NSMAX][NCOMP - 1], sfh[NSMAX], sfp[NSMAX], sft[NSMAX], sTt[NSMAX], sTb[NSMAX], stc[NSMAX], sfc[NSMAX], scia[NSMAX];
   __shared__ int sip[NSMAX], sit[NSMAX];
   __shared__ float red[3 * (LMAX + 1) + 3 + 6 * LMAX][144];   // per g-point (32-bit, NG <= 144), summed in 64-bit
   __shared__ real sums[3 * (LMAX + 1) + 3 + 6 * LMAX];
@@ -2224,7 +2249,7 @@ extern "C" __global__ void lw_column(int N, int L_in, const real* par, int NG, c
     const fast x = R_(2), y = R_(3);
     sip[s] = (int)x; sfp[s] = x - (fast)sip[s]; sit[s] = (int)y; sft[s] = y - (fast)sit[s];
     for (int c = 0; c < NCOMP - 1; c++) su[s][c] = R_(4 + c);
-    sfh[s] = R_(9); stc[s] = R_(10); sfc[s] = R_(11);
+    sfh[s] = R_(9); stc[s] = R_(10); sfc[s] = R_(11); scia[s] = R_(14);
     #undef R_
   }
   __syncthreads();
@@ -2245,6 +2270,10 @@ extern "C" __global__ void lw_column(int N, int L_in, const real* par, int NG, c
       }
       tau[s] = fmax((fast)0, su[s][0] * (lkc[0] + (lkc[1] - lkc[0]) * sfh[s]) + su[s][1] * lkc[2] + su[s][2] * lkc[3] +
                              su[s][3] * lkc[4] + su[s][4] * lkc[5]);
+      if (cia) {                                  // (#226) collision-induced absorption: the pairs' weighted table, linear in T
+        const float* C = cia + (size_t)sit[s] * NG + g;
+        tau[s] += scia[s] * (C[0] + (C[NG] - C[0]) * sft[s]);
+      }
     }
     auto Bof = [&](fast T) -> fast {
       fast y = T - (fast)tp0;
@@ -2352,14 +2381,15 @@ __device__ void sw_layer(fast tau, fast ssa, fast g, fast mu0, fast& Rd, fast& T
 extern "C" __global__ void sw_column(int N, int L_in, const real* par, int NG, const float* lk, int NP, int NT, real yscale,
                                      const float* sun, const float* ray, const float* hzf, const float* cssa,
                                      real tau550, real hssa, real hg, real inhom, const float* sub, int mode, const real* t, real interval,
-                                     const real* pos, const real* alb, const float* cssa_i, const float* g_i, const real* cloudo, real* swf) {
+                                     const real* pos, const real* alb, const float* cssa_i, const float* g_i, const real* cloudo, real* swf,
+                                     const float* cia) {
   const int i = blockIdx.x, g = threadIdx.x;
 #ifdef NL
   const int L = NL;
 #else
   const int L = L_in;
 #endif
-  __shared__ fast su[NSMAX][7], sfh[NSMAX], sfp[NSMAX], sft[NSMAX], sr[NSMAX], sh[NSMAX], stc[NSMAX], sfc[NSMAX], sli[NSMAX];
+  __shared__ fast su[NSMAX][7], sfh[NSMAX], sfp[NSMAX], sft[NSMAX], sr[NSMAX], sh[NSMAX], stc[NSMAX], sfc[NSMAX], sli[NSMAX], scia[NSMAX];
   __shared__ int sip[NSMAX], sit[NSMAX];
   __shared__ fast smu;
   __shared__ float red[3 * LMAX + 2][144];
@@ -2371,8 +2401,8 @@ extern "C" __global__ void sw_column(int N, int L_in, const real* par, int NG, c
     const fast x = R_(2), y = fminf((fast)R_(3) * (fast)yscale, (fast)(NT - 1) - 1e-4f);
     sip[s] = (int)x; sfp[s] = x - (fast)sip[s]; sit[s] = (int)y; sft[s] = y - (fast)sit[s];
     for (int c = 0; c < 5; c++) su[s][c] = R_(4 + c);
-    su[s][5] = (fast)0.2095 * R_(12);                         // O2
-    sfh[s] = R_(9); sr[s] = R_(12); sh[s] = R_(13);
+    su[s][5] = (fast)AIR_O2 * R_(12);                         // O2 (#226: the air's own)
+    sfh[s] = R_(9); sr[s] = R_(12); sh[s] = R_(13); scia[s] = R_(14);
     const bool cs = R_(10) > 0 && cloudo;                    // the layer's cloud sub-level (lw_setup's)
     sfc[s] = cs ? (fast)cloudo[(size_t)k * N + i] : (fast)0;
     stc[s] = cs ? (fast)(inhom * cloudo[(size_t)(2 * L + 3 + k) * N + i]) : (fast)0;   // uneven within the cell (#111)
@@ -2409,9 +2439,13 @@ extern "C" __global__ void sw_column(int N, int L_in, const real* par, int NG, c
         const fast v00 = K[0], v01 = K[NG], v10 = K[(size_t)NT * NG], v11 = K[(size_t)NT * NG + NG];
         lkc[c] = (fast)FEXP(v00 + (v10 - v00) * fp + (v01 - v00) * ft + (v00 - v01 - v10 + v11) * fp * ft);
       }
-      const fast tg = fmax((fast)0, su[s][0] * (lkc[0] + (lkc[1] - lkc[0]) * sfh[s]) + su[s][1] * lkc[2] + su[s][2] * lkc[3] +
+      fast tg = fmax((fast)0, su[s][0] * (lkc[0] + (lkc[1] - lkc[0]) * sfh[s]) + su[s][1] * lkc[2] + su[s][2] * lkc[3] +
                                     su[s][3] * lkc[4] + su[s][4] * lkc[5] + su[s][5] * lkc[6]);
-      const fast tr = ray[g] * sr[s], th = (fast)tau550 * hzf[g] * sh[s];
+      if (cia) {                                  // (#226) collision-induced absorption, as the longwave's
+        const float* C = cia + (size_t)sit[s] * NG + g;
+        tg += scia[s] * (C[0] + (C[NG] - C[0]) * sft[s]);
+      }
+      const fast tr = RAYF(ray[g] * sr[s]), th = (fast)tau550 * hzf[g] * sh[s];
       const fast tt = tg + tr + th, sc = tr + (fast)hssa * th;
       const fast ssa = tt > 0 ? fmin(sc / tt, (fast)(1 - 1e-6)) : (fast)0, ga = sc > 0 ? (fast)hg * (fast)hssa * th / sc : (fast)0;
       sw_layer(tt, ssa, ga, mu0, cRd[s], cTd[s], cRs[s], cTs[s], cTdd[s]);

@@ -100,9 +100,10 @@ class AirPhysics:
         self.lw = self.sw = None
         if longwave == 'ktables':                     # (with the k-tables' shortwave)
             from .radiation import Longwave, Shortwave
-            self.lw = Longwave(dg, layers, self.par, defs=self.defs[1:], **{k: self.p[k] for k in ('co2', 'n2o', 'ch4', 'tmode') if k in self.p})
+            cia = self.p.get('air_cia')                       # (#226) another air: its tables and collision-induced absorption
+            self.lw = Longwave(dg, layers, self.par, defs=self.defs[1:], cia=cia, **{k: self.p[k] for k in ('co2', 'n2o', 'ch4', 'tmode') if k in self.p})
             self.sw = Shortwave(dg, layers, self.par, self.lw, **({'inhom': self.p['cloud_inhom']} if 'cloud_inhom' in self.p else {}),
-                                ice_re=self.p['re_ice'] if self.p.get('ice_sw', 0) > 0 else None, defs=self.defs[1:])
+                                ice_re=self.p['re_ice'] if self.p.get('ice_sw', 0) > 0 else None, defs=self.defs[1:], cia=cia)
             self.swalb = cp.full(N, self.p['alb'])
 
     def _speed(self, u):

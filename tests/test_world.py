@@ -288,8 +288,10 @@ def conserve_air(record):
         gs['runoff'] = max(gs['runoff'], abs(float(cp.sum(A * run)) - float(cp.sum(A * (e.mouth - m0)))) / float(cp.sum(A * cp.abs(run))))
         gs['sent'] += float(cp.sum(A * (e.mouth - m0)))
         ref['weather'] += run * cp.exp(EA_WEATHER / R_GAS * (1 / T0_WEATHER - 1 / e.Ts))
-        gs['below'] += int(cp.sum(lm & (d[ROWS.index('river')] < (p0 - e.pond) - 1e-12 * p0)))       # out at least its net loss
-        gs['below'] += int(cp.sum(lm & (d[ROWS.index('iceflow')] < (i0 - e.ice) - 1e-12 * i0)))
+        # out at least its net loss, to rounding of the amounts and of the flows through the cell (#226: a nearly empty pond passing water on)
+        dr, di = d[ROWS.index('river')], d[ROWS.index('iceflow')]
+        gs['below'] += int(cp.sum(lm & (dr < (p0 - e.pond) - 1e-12 * (cp.abs(p0) + cp.abs(e.pond) + 2 * cp.abs(dr)))))
+        gs['below'] += int(cp.sum(lm & (di < (i0 - e.ice) - 1e-12 * (cp.abs(i0) + cp.abs(e.ice) + 2 * cp.abs(di)))))
     e.routing.step = route
     snow = 0.0                                            # the snow reaching the ground (#134): its freezing heat given aloft
     for t in range(48):

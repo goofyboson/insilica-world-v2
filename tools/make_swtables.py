@@ -188,7 +188,7 @@ def has_lines(g, b):
     return bool(((nu > BANDS[b][0][0] - 25) & (nu < min(BANDS[b][-1][1], 20000) + 25)).any())
 
 
-def build_tables():
+def build_tables(out='sw.npz'):
     m = np.load(OUT / 'swmap.npz')
     comps = [('H2O', X_H2O[0]), ('H2O', X_H2O[1])] + [(g, 0.0) for g in GASES[1:]]
     ng = sum(NG)
@@ -209,7 +209,7 @@ def build_tables():
                     k = gas_k(g, seg, T, p, x)
                     K[c, g0:g0 + NG[b], i, j] = (cp.bincount(lab, weights=k.astype(cp.float64) * wc, minlength=NG[b]) / W).get()
         print(f'band {b}: {time.time() - t:.0f}s', flush=True)
-    np.savez(OUT / 'sw.npz', K=K, P=P_TAB, T=T_TAB, x_h2o=np.array(X_H2O), ng=np.array(NG),
+    np.savez(OUT / out, K=K, P=P_TAB, T=T_TAB, x_h2o=np.array(X_H2O), ng=np.array(NG),
              comps=np.array([f'{g}{x}' for g, x in comps]),
              sun=np.concatenate([m[f'sun{b}'] for b in range(len(BANDS))]) / SUN,
              ray=np.concatenate([m[f'ray{b}'] for b in range(len(BANDS))]),
@@ -388,10 +388,10 @@ def check():
         print(c[0], f'{c[1] * 1e6:.0f}', c[2], '\n   ' + '\n   '.join(rows))
 
 
-def export():
-    """The fitted tables as the model reads them (src/insilica/data/sw_ktables.npz)."""
-    t = dict(np.load(OUT / 'sw.npz'))
-    path = lbl.ROOT / 'src' / 'insilica' / 'data' / 'sw_ktables.npz'
+def export(src='sw.npz', name='sw_ktables.npz'):
+    """The fitted tables as the model reads them (src/insilica/data/sw_ktables.npz; #226: src, name for other air's)."""
+    t = dict(np.load(OUT / src))
+    path = lbl.ROOT / 'src' / 'insilica' / 'data' / name
     np.savez_compressed(path, logk=np.log(np.maximum(t['K'], 1e-40)).transpose(0, 2, 3, 1).astype(np.float32),
                         P=P_TAB, T=T_TAB, sun=t['sun'], ray=t['ray'], haze=t['haze'], ng=t['ng'], comps=t['comps'],
                         haze_par=np.array([swlbl.HAZE[k] for k in ('tau550', 'ssa', 'g', 'scale')]))

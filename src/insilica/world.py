@@ -114,7 +114,8 @@ class World:
                 phys.setdefault('mu_bl', 1.0e4 / self.grav)
             phys = {k: (v(self.grid) if callable(v) else v) for k, v in phys.items()}     # e.g. θ* from the case
             if self.gas['defs']:                                                          # (#216) the air's own constants
-                phys.update(cp=self.gas['cp'], kappa=self.gas['kappa'], air_rd=self.gas['rd_col'], air_defs=list(self.gas['defs']))
+                phys.update(cp=self.gas['cp'], kappa=self.gas['kappa'], air_rd=self.gas['rd_col'], air_defs=list(self.gas['defs']),
+                            air_cia=list(self.gas['rad']['cia']))                   # (#226) its radiation
             if self.gas_on:                                                               # (#217) the column records its moves
                 phys['air_defs'] = list(phys.get('air_defs') or []) + ['-DGASX']
             self.physics = AirPhysics(self.dg, self.L, phys, mean_sun=P.get('mean_sun', self.air.get('mean_sun', False)),

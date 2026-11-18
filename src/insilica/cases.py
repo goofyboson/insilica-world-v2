@@ -9,7 +9,8 @@ from pathlib import Path
 
 import numpy as np
 
-from .constants import CP_DRY, GRAV, KAPPA, OMEGA, P0, R_PLANET
+from .constants import CP_DRY, GRAV, KAPPA, OMEGA, P0, R_PLANET, SOIL_DZ
+from .grid import planet_of
 
 
 def edge_east_north(g):
@@ -42,20 +43,20 @@ def default_dt(n):
 def initial_state(g, preset):
     """One layer (h, b, u): Williamson 2 (steady zonal flow), Williamson 5 (zonal flow over an isolated mountain),
     Williamson 6 / 'rh4' (Rossby–Haurwitz wave 4) or the Galewsky jet (a balanced jet with a small bump)."""
-    a, Om = R_PLANET, OMEGA
+    a, Om, G = planet_of(g)                 # the grid's planet (#186): Earth's unless the world sets another
     lat_e, lon_e, en, nn = edge_east_north(g)
     b = np.zeros(g.N)
     if preset == 'w2':
         u0, gh0 = 2 * math.pi * a / (12 * 86400), 2.94e4
         s = np.sin(g.lat)
-        h = (gh0 - (a * Om * u0 + u0 * u0 / 2) * s * s) / GRAV
+        h = (gh0 - (a * Om * u0 + u0 * u0 / 2) * s * s) / G
         u = u0 * np.cos(lat_e) * en
     elif preset == 'w5':
         u0, h0, Rm, lc, pc = 20.0, 5960.0, math.pi / 9, -math.pi / 2, math.pi / 6
         s = np.sin(g.lat)
         dl = np.arctan2(np.sin(g.lon - lc), np.cos(g.lon - lc))
         b = 2000 * (1 - np.minimum(Rm, np.hypot(dl, g.lat - pc)) / Rm)
-        h = h0 - (a * Om * u0 + u0 * u0 / 2) * s * s / GRAV - b
+        h = h0 - (a * Om * u0 + u0 * u0 / 2) * s * s / G - b
         u = u0 * np.cos(lat_e) * en
     elif preset == 'rh4':
         om = Kk = 7.848e-6
@@ -64,7 +65,7 @@ def initial_state(g, preset):
         A = om / 2 * (2 * Om + om) * c * c + 0.25 * Kk * Kk * c ** (2 * R) * ((R + 1) * c * c + (2 * R * R - R - 2) - 2 * R * R / (c * c))
         B = 2 * (Om + om) * Kk / ((R + 1) * (R + 2)) * c ** R * ((R * R + 2 * R + 2) - (R + 1) ** 2 * c * c)
         C = 0.25 * Kk * Kk * c ** (2 * R) * ((R + 1) * c * c - (R + 2))
-        h = h0 + a * a * (A + B * np.cos(R * g.lon) + C * np.cos(2 * R * g.lon)) / GRAV
+        h = h0 + a * a * (A + B * np.cos(R * g.lon) + C * np.cos(2 * R * g.lon)) / G
         ce, se = np.cos(lat_e), np.sin(lat_e)
         ue = a * om * ce + a * Kk * ce ** (R - 1) * (R * se * se - ce * ce) * np.cos(R * lon_e)
         vn = -a * Kk * R * ce ** (R - 1) * se * np.sin(R * lon_e)
@@ -88,7 +89,7 @@ def initial_state(g, preset):
         gh = np.concatenate([[0.0], np.cumsum(-a * uu * (2 * Om * np.sin(ph) + np.tan(ph) * uu / a) * dphi)])
         x = (g.lat + math.pi / 2) / dphi
         k = np.minimum(M - 1, np.floor(x).astype(int))
-        h = (gh[k] + (x - k) * (gh[k + 1] - gh[k])) / GRAV
+        h = (gh[k] + (x - k) * (gh[k + 1] - gh[k])) / G
         h = h + 10000 - np.sum(h * g.areaCell) / np.sum(g.areaCell)
         h = h + 120 * np.cos(g.lat) * np.exp(-((g.lon / (1 / 3)) ** 2)) * np.exp(-(((math.pi / 4 - g.lat) / (1 / 15)) ** 2))
         u = ujet(lat_e) * en
@@ -371,6 +372,40 @@ def earth_land(g):
 _SSO = {}
 
 
+_ROUGH = {}
+
+
+def earth_rough(g):
+    """The deep sea floor's roughness h^2 (m^2) per grid cell for the internal-tide drag (V2-6f, #228; tools/make_earth_rough.py):
+    each 1-degree cell's to its nearest grid cell, area-weighted, the shelves and land 0."""
+    if g.N not in _ROUGH:
+        d = np.load(Path(__file__).parent / 'data' / 'earth_rough_1deg.npz')
+        lat, lon = np.radians(np.arange(180) - 89.5), np.radians(np.arange(360) - 179.5)
+        la, lo = np.meshgrid(lat, lon, indexing='ij')
+        xyz = np.stack([np.cos(la) * np.cos(lo), np.cos(la) * np.sin(lo), np.sin(la)], axis=-1).reshape(-1, 3)
+        near = np.concatenate([np.argmax(xyz[i:i + 2000] @ g.pos.T, axis=1) for i in range(0, len(xyz), 2000)])
+        w = np.cos(la).ravel()
+        _ROUGH[g.N] = np.bincount(near, w * d['h2'].ravel().astype(float), g.N) / np.maximum(np.bincount(near, w, g.N), 1e-30)
+    return _ROUGH[g.N]
+
+
+_NBOT = {}
+
+
+def earth_nbot(g):
+    """The buoyancy frequency above the sea floor (1/s) per grid cell, from WOA23 (tools/make_earth_nbot.py), for the internal-tide
+    drag (V2-6f, #228): the model's abyss is one mixed layer, so it cannot give it; each 1-degree cell's to its nearest grid cell."""
+    if g.N not in _NBOT:
+        d = np.load(Path(__file__).parent / 'data' / 'earth_nbot_1deg.npz')
+        lat, lon = np.radians(np.arange(180) - 89.5), np.radians(np.arange(360) - 179.5)
+        la, lo = np.meshgrid(lat, lon, indexing='ij')
+        xyz = np.stack([np.cos(la) * np.cos(lo), np.cos(la) * np.sin(lo), np.sin(la)], axis=-1).reshape(-1, 3)
+        near = np.concatenate([np.argmax(xyz[i:i + 2000] @ g.pos.T, axis=1) for i in range(0, len(xyz), 2000)])
+        w = np.cos(la).ravel() * (d['n'].ravel() > 0)
+        _NBOT[g.N] = np.bincount(near, w * d['n'].ravel().astype(float), g.N) / np.maximum(np.bincount(near, w, g.N), 1e-30)
+    return _NBOT[g.N]
+
+
 def earth_sso(g):
     """The sub-grid orography of each grid cell for the mountain drag (V2-6b, #127; Lott & Miller 1997 with Baines & Palmer 1990's
     statistics), from ETOPO1's 1-arc-minute heights (the sea at its surface; tools/make_earth_sso.py), each 1-degree cell going to its
@@ -472,9 +507,10 @@ def earth_bed(g):
 # Modern Earth's land and sea floor over the coupled ocean. Its physics is V2-4c's and V2-4e's (#88, #91, #94, #95), the rest of the worlds still without; land_drag 8 goes with land_exch 2.
 # V2-6a (#109-#112): the k-tables' radiation, and the moist physics that put its troposphere on the observed profile (owner: option C):
 # the surface air's vapor (q_shape), freeze-drying, edge vapor, plumes rooted at the surface, entraining 0.1 per 100 hPa, their rain evaporating.
-PRESETS['earth'] = dict(PRESETS['coupled'], build=earth, land=lambda g: earth_land(g)[0], ocean=dict(surface_drag=SURFACE_DRAG, bed=earth_bed, land_drag=8.0),
-                        air=dict(AIR, longwave='ktables', physics=dict(AIR3, moist=1.0, k_evap=4.8e-3, firn=2.0, plume_deep=1.0, sat_prof=1.0, bl_bot=0.25, cloud=1.0, tau0=1.3, land_exch=2.0,
-                                                                              q_shape=1.0, freeze_dry=1.0, edge_vap=1.0, plume_root=1.0, plume_ent=1e-5, conv_revap=0.05)))
+PRESETS['earth'] = dict(PRESETS['coupled'], build=earth, land=lambda g: earth_land(g)[0], rough=earth_rough, nbot=earth_nbot, ocean=dict(surface_drag=SURFACE_DRAG, bed=earth_bed, land_drag=8.0, ice_drift=0.02),
+                        air=dict(AIR, longwave='ktables', physics=dict(AIR3, moist=1.0, k_evap=4.8e-3, firn=2.0, ecc=0.0167, lam_peri=math.radians(282.9), plume_deep=1.0, sat_prof=1.0, bl_bot=0.25, cloud=1.0, tau0=1.3, land_exch=2.0,
+                                                                              q_shape=1.0, freeze_dry=1.0, edge_vap=1.0, plume_root=1.0, plume_ent=1e-5, conv_revap=0.05,
+                                                                              cw_qs=0.025)))   # (#206) cold clouds' water spread wider
 def earth4(g, rise=5.0e-3, bl=1.0e4):
     """The four-layer start (V2-6b, #113): earth's three layers with its bottom layer split, its lowest bl (Pa) the mixed
     boundary layer (theta as the bottom layer's, the air above it 4 K warmer, below 305 K); vapor 80% of saturation in the
@@ -575,8 +611,11 @@ def earth7(g, lo=318.0, hi=350.0):
 # against ~20), so the air absorbed too little sunlight (70 W/m2 against 79) and the surface evaporated the rest.
 # V2-6c (#154): ice clouds with their own sunlight optics (Ebert & Curry 1992), not the drops'
 # V2-6c (#155): the deep plume's IFS entrainment and detrainment through every tropospheric layer it crosses
+# #218: the land column (six soil layers to 6.3 m under the skin) in place of the force-restore deep ground (c_deep, #118)
 PRESETS['earth7'] = dict(PRESETS['earth6'], build=earth7, stress=[0.0] * 7,
-                         air=dict(PRESETS['earth6']['air'], physics=dict(PRESETS['earth6']['air']['physics'], theta_stars=[500.0, 380.0, 330.0, 305.0, 204.0, 200.0], ice_sw=1.0, det_all=1.0, ml_clear=1.0, cu_cloud=2.0)))
+                         air=dict(PRESETS['earth6']['air'], physics=dict(PRESETS['earth6']['air']['physics'], theta_stars=[500.0, 380.0, 330.0, 305.0, 204.0, 200.0], ice_sw=1.0, det_all=1.0, ml_clear=1.0, cu_cloud=2.0,
+                                                                        c_deep=0.0, soil_dz=list(SOIL_DZ))),
+                         tides=True)                                    # #229 (trial): the Moon's and the Sun's tides (#228)
 
 # V2-6d (#165, trial): earth7 over a five-layer ocean: the mixed layer (50 m at the start), the upper thermocline (150 m, 20 °C), the
 # lower thermocline (300 m, 12 °C), intermediate water (500 m, 6 °C) and the deep water (0 °C); density steps g' from the observed
@@ -589,6 +628,23 @@ PRESETS['earth7o5'] = dict(PRESETS['earth7'], ocean=dict(PRESETS['earth7']['ocea
 # close to it; the currents from each layer's own density (#166), the interfacial stress from the shear (#167), shear mixing at
 # the mixed layer's base (#168), the mixed layer reaching through emptied classes (#170), interior mixing κ_d 1e-5
 _C8 = (26.0, 22.0, 18.0, 14.0, 10.0, 6.0, 2.0)
+# V2-6h (#214, trial): earth7 with its 305-330 K layer split at 315 K, the lower free troposphere (~800-650 hPa in the tropics) as air of
+# its own: the plumes passing the cumulus layer detrain there, not into one ~390 hPa layer whose condensation heated it from above.
+def earth8(g, lo=310.0, hi=322.0):
+    """The eight-layer start: earth7's with its 305-330 K layer split at 315 K, the lower part's theta lo and the upper part's hi, their
+    masses so that the two keep the layer's mean theta (each at least a tenth of it), their vapor the layer's."""
+    h7, b, u7, x = earth7(g)
+    th7, q7 = x['theta'], x['q']
+    f = np.clip((th7[3] - lo) / (hi - lo), 0.1, 0.9)
+    h = np.concatenate([h7[:3], (f * h7[3])[None], ((1 - f) * h7[3])[None], h7[4:]])
+    th = np.concatenate([th7[:3], np.full((1, g.N), hi), np.full((1, g.N), lo), th7[4:]])
+    q = np.concatenate([q7[:4], q7[3:]])
+    return h, b, np.concatenate([u7[:4], u7[3:]]), dict(x, theta=th, q=q)
+
+
+PRESETS['earth8'] = dict(PRESETS['earth7'], build=earth8, stress=[0.0] * 8,
+                         air=dict(PRESETS['earth7']['air'], physics=dict(PRESETS['earth7']['air']['physics'], theta_stars=[500.0, 380.0, 330.0, 315.0, 305.0, 204.0, 200.0])))
+
 PRESETS['earth7o8'] = dict(PRESETS['earth7'], ocean=dict(PRESETS['earth7']['ocean'], gprime=(0.0096, 0.0115, 0.0099, 0.0083, 0.0067, 0.0052, 0.0036),
                                                          h_layers=(50.0, 50.0, 75.0, 100.0, 150.0, 200.0, 400.0), T_layers=tuple(273.15 + t for t in _C8[:-1]),
                                                          T_deep=273.15 + _C8[-1], T_classes=tuple(273.15 + t for t in _C8), fw_local=1.0, kappa_h=1000.0,

@@ -32,7 +32,8 @@ OCEAN = dict(depth=4000.0, h_mixed=100.0, h_thermo=600.0, T_thermo=293.15, T_dee
              gprime=(0.016, 0.016),
              hmin=10.0, hmax=1000.0, dTmin=0.1, m_kt=0.5, n_kt=0.2, visc4_U=0.5, bottom_stress=2.5e-4,
              interface_stress=5.0e-4, thin=2.0, walls=(), sw_R=0.58, sw_z1=0.35, sw_z2=23.0, land_drag=1.0, bed=None, bed_min=50.0, shelf=50.0, h_layers=None,
-             kappa_d=0.0, dwf=0.0, kappa_h=0.0, fw_local=0.0, eos_currents=0.0, interface_cd=0.0, ri_b=0.0, T_classes=None, classes_top=1.0, reach=0.0, h_ent=0.0, shelf_bed=0.0)   # crossing the interior interfaces (V2-6d, #163: mixing m2/s, deep-water formation), mixing along the layers (#164, m2/s), fresh water with its volume (#165); all off
+             kappa_d=0.0, dwf=0.0, kappa_h=0.0, fw_local=0.0, eos_currents=0.0, interface_cd=0.0, ri_b=0.0, T_classes=None, classes_top=1.0, reach=0.0, h_ent=0.0, shelf_bed=0.0,
+             ice_drift=0.0, ice_turn=25.0, ice_hmax=4.0, sw_up=0.0, det_class=0.0, S_classes=None, ek_depth=0.0)   # crossing the interior interfaces (V2-6d, #163: mixing m2/s, deep-water formation), mixing along the layers (#164, m2/s), fresh water with its volume (#165); sea-ice drift (V2-6e, #185: the wind's share, its turn in degrees, the thickness that stops convergence in m); all off
 
 
 def wall_mask(g, walls):
@@ -46,11 +47,12 @@ def wall_mask(g, walls):
 
 
 class Ocean:
-    def __init__(self, dg, cfg=None, Tsurf=None, state=None, land=None, c_land=2.0e6, c_deep=0.0):
+    def __init__(self, dg, cfg=None, Tsurf=None, state=None, land=None, c_land=2.0e6, c_deep=0.0, grav=GRAV, day_s=86400.0, soil=None):
         """cfg overrides OCEAN; Tsurf (N, K) starts the mixed layer's temperature (from the air case's surface);
         state = (h, u, T) restores one; land (N, 0/1): cells with no water (#84), walled off, their T[0] the ground's
         temperature with heat capacity c_land; with c_deep > 0 (#118) that is the ground's skin, and T[1] there is the deep
-        ground's temperature (capacity c_deep) under it."""
+        ground's temperature (capacity c_deep) under it. soil (#218): dict(dz, c, k), the land column under the skin in its place:
+        layers dz (m) of soil with volumetric heat capacity c (J/m³/K) and conductivity k (W/m/K), their temperatures Tg (K, N)."""
         self.dg = dg
         self.cfg = c = dict(OCEAN, **(cfg or {}))
         N, E = dg.N, dg.E
@@ -72,13 +74,18 @@ class Ocean:
         # sides carry no water — a basin's coasts, with no land cells (the air still sees open water there)
         self.wall = wall_mask(g, c['walls']) if len(c['walls']) else None
         self.c_land, self.c_deep = c_land, c_deep
+        self.soil = dict(soil) if soil and len(soil.get('dz') or ()) else None
+        if self.soil is not None:
+            assert c_deep == 0, 'the land column (#218) replaces the deep ground (c_deep)'
+            assert len(self.soil['dz']) <= 16, 'at most 16 soil layers'
+        self.grav, self.day_s = grav, day_s                     # the planet's (#186)
         self.land = None
         if land is not None:
             m = self.wall if self.wall is not None else np.ones(g.E)
             m[(land[g.eI] > 0.5) | (land[g.eJ] > 0.5)] = 0.0
             self.wall = m
             self.land = cp.asarray(np.asarray(land, dtype=float))
-        self.core = Layers(dg, L, b=self.b, gprime=list(c['gprime']), stress=[0.0] * (L - 1) + [c['bottom_stress']], nu4=nu4,
+        self.core = Layers(dg, L, b=self.b, grav=grav, gprime=list(c['gprime']), stress=[0.0] * (L - 1) + [c['bottom_stress']], nu4=nu4,
                            floor=c['hmin'], vmix=c['interface_stress'], vmix_cd=c['interface_cd'], thin=c['thin'], wall=self.wall, shelf=c['shelf'] if c['bed'] is not None else 0.0,
                            shelf_bed=c['shelf_bed'] > 0)
         if nu4:
@@ -112,6 +119,9 @@ class Ocean:
         self.h, self.u, self.T = cp.asarray(h, dtype=float), cp.asarray(u, dtype=float), cp.asarray(T, dtype=float)
         if state is None and land is not None and c_deep > 0:   # the deep ground starts at its skin's temperature
             self.T[1] = cp.where(self.land > 0.5, self.T[0], self.T[1])
+        if self.soil is not None:                               # (#218) the column starts at the skin's temperature
+            self.soil_dz = cp.asarray([float(d) for d in self.soil['dz']])
+            self.Tg = cp.repeat(self.T[0][None, :], len(self.soil['dz']), axis=0)
         self.core.mask(self.u, L)
         self.S = cp.asarray(S, dtype=float)                     # salinity (psu, decision #76)
         self.M = self.h * cp.asarray(g.areaCell)[None, :]
@@ -131,12 +141,19 @@ class Ocean:
         assert abs(ratio - round(ratio)) < 1e-9 and round(ratio) >= 1, 'mix_dt must be a whole number of ocean steps'
         self.mix_every = int(round(ratio))
         k = lambda n: dg.kernel(n, 'ocean.cu')
-        self.k = {n: k(n) for n in ('couple_stress', 'ocn_column', 'ocn_cap', 'ocn_overturn', 'ocn_pen', 'ocn_fresh', 'ocn_xch_salt',
-                                    'ocn_heat', 'ocn_ground', 'ocn_diffuse', 'ocn_sigma', 'ocn_classes')}
-        self.Tc = None
+        self.k = {n: k(n) for n in ('couple_stress', 'ek_spread', 'ocn_column', 'ocn_cap', 'ocn_overturn', 'ocn_pen', 'ocn_fresh', 'ocn_xch_salt',
+                                    'ocn_heat', 'ocn_ground', 'land_column', 'ocn_diffuse', 'ocn_sigma', 'ocn_classes',
+                                    'ice_flux', 'ice_limit', 'ice_move')}
+        self._iF = None
+        if c['ice_drift'] > 0:
+            self.enable_ice_drift(c['ice_drift'])
+        self._u0b = cp.zeros(E) if c['ek_depth'] > 0 else None   # (#200)
+        self.Tc = self.Sc = None
         if c.get('T_classes'):                                  # (#169) density classes for layers 1 … L−1, by temperature at S_ref
             assert len(c['T_classes']) == L - 1, 'one class temperature per layer below the mixed layer'
             self.Tc = cp.asarray(np.array([0.0] + list(c['T_classes']), dtype=float))
+            # (#198) each class's salinity (psu), from the observed water of its temperature; S_ref when not given
+            self.Sc = cp.asarray(np.array([0.0] + list(c['S_classes']), dtype=float)) if c.get('S_classes') else None
             self._wc, self._Tsc = z(L - 1, N), z(L, N)
         if c['eos_currents'] > 0:                                # (#166) the currents feel each layer's own density
             self.core.sig, self.core.zm = z(L, N), z(L, N)
@@ -158,10 +175,15 @@ class Ocean:
                                             g.dtype.type(sign), self.conv))
 
     def ground(self, dt):
-        """The deep ground's exchange with its skin over dt (#118); nothing unless c_deep > 0."""
+        """The deep ground's exchange with its skin over dt (#118), or the land column's conduction (#218); nothing without either."""
+        if self.soil is not None and self.land is not None:
+            g, R = self.dg, self.dg.dtype.type
+            self.k['land_column'](*grid_dims(g.N), (np.int32(g.N), np.int32(len(self.soil['dz'])), self.land, self.T, self.cap, self.Tg,
+                                                    self.soil_dz, R(self.soil['c']), R(self.soil['k']), R(dt)))
         if self.c_deep > 0 and self.land is not None:
             g = self.dg
-            self.k['ocn_ground'](*grid_dims(g.N), (np.int32(g.N), self.land, self.T, self.cap, g.dtype.type(self.c_deep), g.dtype.type(dt)))
+            self.k['ocn_ground'](*grid_dims(g.N), (np.int32(g.N), self.land, self.T, self.cap, g.dtype.type(self.c_deep), g.dtype.type(dt),
+                                                  g.dtype.type(self.day_s)))
 
     def update_cap(self):
         g = self.dg
@@ -172,10 +194,26 @@ class Ocean:
         """The wind stress over one air step (exactly, momentum conserved); the kinetic energy it removed is left in
         self.diss (J/m² per edge) for the air to take as heat."""
         g, i32, R = self.dg, np.int32, self.dg.dtype.type
+        self.mark()
         self.k['couple_stress'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(air_h.shape[0]), air_h, air_u, self.h, self.u,
                                                   g.eI, g.eJ, R(c), R(self.cfg['rho']), R(dt), self.diss, self.tau_acc,
                                                   self.core.wall if self.core.wall is not None else NULL, R(self.cfg['land_drag']),
                                                   cd if cd is not None else NULL))
+        self.spread(self.diss)
+
+    def spread(self, diss):
+        """(#200) Spread the stress just given to the mixed layer over the top ek_depth metres (when it is thinner); needs
+        mark() before the stress."""
+        if self.cfg['ek_depth'] <= 0:
+            return
+        g, i32, R = self.dg, np.int32, self.dg.dtype.type
+        self.k['ek_spread'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(self.L), self.h, self.u, self._u0b, g.eI, g.eJ, R(self.cfg['ek_depth']),
+                                              R(self.cfg['rho']), self.core.wall if self.core.wall is not None else NULL, diss if diss is not None else NULL))
+
+    def mark(self):
+        """(#200) Remember the mixed layer's velocity before a stress (for spread)."""
+        if self.cfg['ek_depth'] > 0:
+            cp.copyto(self._u0b, self.u[0])
 
     def _land(self):
         return self.land if self.land is not None else NULL
@@ -183,7 +221,7 @@ class Ocean:
     def eos(self):
         """The column physics' equation of state as kernel arguments: g, α, α2, β (decision #76)."""
         c, R = self.cfg, self.dg.dtype.type
-        return R(GRAV), R(c['alpha']), R(c['alpha2']), R(c['beta'])
+        return R(self.grav), R(c['alpha']), R(c['alpha2']), R(c['beta'])
 
     def accumulate(self, dt, evap=None, rain=None, ice=None, mouth=None):
         """Pass the air step's sunlight below the mixed layer's base to the layers below, add the fluxes the mixed layer
@@ -194,7 +232,8 @@ class Ocean:
                                                  R(c['rho']), R(dt), self.fw_acc, self._land(), mouth if mouth is not None else NULL, R(c['fw_local']),
                                                  self.h, self.M, g.areaCell))
         self.k['ocn_pen'](*grid_dims(g.N), (np.int32(g.N), np.int32(self.L), self.h, self.T, self.qocean, self.qsw, R(c['rho'] * c['cw']),
-                                           R(c['sw_R']), R(c['sw_z1']), R(c['sw_z2']), R(dt), self.q_acc, self.sun_acc, self._land()))
+                                           R(c['sw_R']), R(c['sw_z1']), R(c['sw_z2']), R(dt), self.q_acc, self.sun_acc, self._land(),
+                                           self.wx if c['sw_up'] > 0 else NULL))
 
     def step(self, mix=True):
         """One ocean step: the layers move and T is carried; with mix, the mixed layer then overturns / entrains /
@@ -235,13 +274,16 @@ class Ocean:
                                                self.sun_acc) + self.eos() + (R(c['S_ref']), R(ALPHA_REF), R(c['rho']), R(c['cw']),
                                                R(c['m_kt']), R(c['n_kt']), R(c['hmin']), R(c['hmax']), R(c['dTmin']), R(c['sw_R']),
                                                R(c['sw_z1']), R(c['sw_z2']), R(dt), self.wx, self._land(), R(c['kappa_d']), R(c['dwf']),
-                                               self.shear if self.shear is not None else NULL, R(c['ri_b']), R(c['reach']), R(c['h_ent'])))
+                                               self.shear if self.shear is not None else NULL, R(c['ri_b']), R(c['reach']), R(c['h_ent']),
+                                               self.Tc if (self.Tc is not None and c['det_class'] > 0) else NULL, R(c['det_class']),
+                                               self.Sc if self.Sc is not None else NULL))
         seq = c['reach'] > 0
         self.k['ocn_xch_salt'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.wx, self.h, self.S, i32(1 if seq else 0)))
         self.core.exchange(self.wx, self.h, self.u, self.M, self.T, seq=seq)
         if self.Tc is not None:                                 # (#169) water crossing into the class its density now belongs to
             self.k['ocn_classes'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.T, self.S, self.Tc) + self.eos()
-                                  + (R(c['S_ref']), R(c['hmin']), R(271.0), self._land(), self._wc, self._Tn, self._Sn, R(c['classes_top'])))
+                                  + (R(c['S_ref']), R(c['hmin']), R(271.0), self._land(), self._wc, self._Tn, self._Sn, R(c['classes_top']),
+                                     self.Sc if self.Sc is not None else NULL))
             cp.copyto(self._Tsc, self.T)
             self.core.exchange(self._wc, self.h, self.u, self.M, self._Tsc)
             cp.copyto(self.T, self._Tn)
@@ -252,6 +294,24 @@ class Ocean:
         self.fw_acc.fill(0)
         self.update_cap()
 
+    def enable_ice_drift(self, wind):
+        """Sea-ice drift (#185) on, with wind its share of the bottom wind: per edge the turn's sine, signed by hemisphere."""
+        g, dg = self.dg.host, self.dg
+        self.cfg['ice_drift'] = wind
+        t = math.radians(self.cfg['ice_turn'])
+        self._isn = cp.asarray(math.sin(t) * np.sign(g.lat[g.eI] + g.lat[g.eJ]), dtype=dg.dtype)
+        self._ics = math.cos(t)
+        self._iF, self._isi = cp.zeros(dg.E), cp.zeros(dg.N)
+
+    def drift_ice(self, ice, air_u, rho_ice):
+        """Sea-ice drift over one ocean step (#185): free drift with the mixed layer's current and ice_drift of the bottom wind."""
+        g, c, i32, R = self.dg, self.cfg, np.int32, self.dg.dtype.type
+        wall = self.core.wall if self.core.wall is not None else NULL
+        self.k['ice_flux'](*grid_dims(g.E), (i32(g.E), i32(air_u.shape[0]), air_u, self.u, g.eI, g.eJ, g.eoeStart, g.eoe, g.w, self._isn,
+                                             R(self._ics), R(c['ice_drift']), wall, ice, g.le, R(rho_ice), R(c['ice_hmax']), R(c['dt']), self._iF))
+        self.k['ice_limit'](*grid_dims(g.N), (i32(g.N), self._iF, g.cellEdge, g.eI, ice, g.areaCell, self._isi))
+        self.k['ice_move'](*grid_dims(g.N), (i32(g.N), self._iF, self._isi, g.cellEdge, g.eI, g.eJ, g.areaCell, ice, self.ice_prev))
+
     def heat(self):
         """The ocean's heat content (J): ρ_w c_w Σ A h (T − 273.15 K). Relative to T_REF (v1 §18 #12), so water arriving or leaving
         with its volume (#165: rain, evaporation, rivers, sea ice; 0 K made each kilogram of melt water 1.1 MJ) carries only its
@@ -261,6 +321,8 @@ class Ocean:
         if self.land is None:
             return float(cp.sum(A * cp.sum(self.h * (self.T - 273.15), axis=0))) * rc
         ground = self.cap * (self.T[0] - 273.15) + (self.c_deep * (self.T[1] - 273.15) if self.c_deep > 0 else 0.0)
+        if self.soil is not None:                               # (#218) the land column's layers
+            ground = ground + self.soil['c'] * cp.sum(self.soil_dz[:, None] * (self.Tg - 273.15), axis=0)
         return float(cp.sum(A * ((1 - self.land) * rc * cp.sum(self.h * (self.T - 273.15), axis=0) + self.land * ground)))
 
     def salt(self):

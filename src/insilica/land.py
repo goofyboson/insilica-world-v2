@@ -14,7 +14,7 @@ GRAV = 9.81           # m/s²
 
 
 class LandWater:
-    def __init__(self, dg, b, land, soilcap, pond, soil, ice, rho_ice=917.0, uflow=RIVER_SPEED, kseep=K_SEEP):
+    def __init__(self, dg, b, land, soilcap, pond, soil, ice, rho_ice=917.0, uflow=RIVER_SPEED, kseep=K_SEEP, grav=GRAV):
         """b, land, soilcap: terrain (m), mask and capacity; pond, soil, ice: the world's buffers (kg/m²), changed in place."""
         self.dg, self.b, self.land, self.soilcap = dg, b, land, soilcap
         self.pond, self.soil, self.ice = pond, soil, ice
@@ -25,7 +25,8 @@ class LandWater:
         self.z, self.zt, self.sp, self.ss, self.pond1, self.soil1 = z(), z(), z(), z(), z(), z()
         self.s, self.g2, self.si, self.ice1, self.calved = z(), z(), z(), z(), z()    # calved: ice given to each sea cell, summed (kg/m²)
         self.ice_prev = None                              # the ocean's, when there is one
-        self.gam = 2.0 * GLEN_A * (rho_ice * GRAV) ** 3 / 5.0
+        self.geo = None                                   # geology's accumulators (#220), when on
+        self.gam = 2.0 * GLEN_A * (rho_ice * grav) ** 3 / 5.0
         self.k = {n: dg.kernel(n, 'land.cu') for n in ('land_heights', 'land_scale', 'land_apply', 'ice_surface', 'ice_slope', 'ice_scale', 'ice_apply')}
 
     def step(self, dt):
@@ -37,7 +38,11 @@ class LandWater:
                                                  self.z, self.zt))
         flow = (self.land, self.z, self.pond, self.zt, self.soil, self.soilcap, g.cellEdge, g.eI, g.eJ, g.le, g.de, g.areaCell, rw, u, ks)
         self.k['land_scale'](*grid_dims(g.N), (i32,) + flow + (self.sp, self.ss))
-        self.k['land_apply'](*grid_dims(g.N), (i32,) + flow + (self.sp, self.ss, self.pond1, self.soil1, self.mouth))
+        geo = self.geo
+        self.k['land_apply'](*grid_dims(g.N), (i32,) + flow + (self.sp, self.ss, self.pond1, self.soil1, self.mouth,
+                                                               geo.row('river') if geo else NULL))
+        if geo:
+            geo.runoff(self.land, self.pond, self.pond1, self.soil, self.soil1)
         cp.copyto(self.pond, self.pond1)
         cp.copyto(self.soil, self.soil1)
         self.ice_step(dt)
@@ -50,5 +55,6 @@ class LandWater:
         self.k['ice_slope'](*grid_dims(g.N), (i32, self.land, self.s, g.cellEdge, g.eI, g.eJ, g.le, g.de, g.areaCell, self.g2))
         flow = (self.land, self.s, self.g2, self.ice, g.cellEdge, g.eI, g.eJ, g.le, g.de, g.areaCell, ri, gam)
         self.k['ice_scale'](*grid_dims(g.N), (i32,) + flow + (self.si,))
-        self.k['ice_apply'](*grid_dims(g.N), (i32,) + flow + (self.si, self.ice1, self.ice_prev if self.ice_prev is not None else NULL, self.calved))
+        self.k['ice_apply'](*grid_dims(g.N), (i32,) + flow + (self.si, self.ice1, self.ice_prev if self.ice_prev is not None else NULL, self.calved,
+                                                              self.geo.row('iceflow') if self.geo else NULL))
         cp.copyto(self.ice, self.ice1)

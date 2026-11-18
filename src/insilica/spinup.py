@@ -97,13 +97,20 @@ class OceanOnly:
         dt = c['dt']
         hdr = (self.time, R(f['year']), i32(f['nslot']))
         hh = s.core.ob is not None
+        s.mark()
         self.k['play_edge'](*grid_dims(g.E), (i32(g.E),) + hdr + (f['du'], f['tau'], R(dt), s.u[0], s.tau_acc, s.h if hh else NULL, g.eI, g.eJ))
+        s.spread(None)
         self.k['play_cell'](*grid_dims(g.N), (i32(g.N),) + hdr + (f['Q'], f['T'], f['qns'], f['sun'], f['fw'], R(self.lam),
                             R(c['S_ref']), R(c['rho']), R(dt), s.h, s.cap, s.T, s.S, s.qocean, s.qsw, s.fw_acc, s._land(), R(c['fw_local']),
                             s.h, s.M, g.areaCell, R(273.15 if c['fw_local'] > 0 else 0.0)))
         s.k['ocn_pen'](*grid_dims(g.N), (i32(g.N), i32(s.L), s.h, s.T, s.qocean, s.qsw, R(c['rho'] * c['cw']), R(c['sw_R']),
-                                        R(c['sw_z1']), R(c['sw_z2']), R(dt), s.q_acc, s.sun_acc, s._land()))
+                                        R(c['sw_z1']), R(c['sw_z2']), R(dt), s.q_acc, s.sun_acc, s._land(),
+                                        s.wx if c['sw_up'] > 0 else NULL))
+        if w.tides is not None:                                    # (#228) the tide's force at the step's middle (its clock still at the start)
+            w.tides.force(self.time, -0.5 * dt)
         s.step(mix=mix)
+        if w.tides is not None:
+            w.tides.mix(dt)
         self.k['play_time']((1,), (1,), (self.time, R(dt)))
 
     def run(self, years):

@@ -8,12 +8,26 @@ import cupy as cp
 import numpy as np
 
 DATA = Path(__file__).resolve().parent / 'data' / 'lw_ktables.npz'
+# (#226) another air's: the tables keeping the weak lines of large CO2 and CH4 columns, and collision-induced absorption per g-point
+DATA_WIDE = Path(__file__).resolve().parent / 'data' / 'lw_ktables_wide.npz'
+CIA_DATA = Path(__file__).resolve().parent / 'data' / 'cia_ktables.npz'
+
+
+def cia_table(weights, which):
+    """The CIA pairs' tables (T x g, x 1e40) summed with weights x_a x_b (constants.CIA_PAIRS' order), float32 on the GPU."""
+    from .constants import CIA_PAIRS
+    t = np.load(CIA_DATA)
+    assert tuple(str(x) for x in t['pairs']) == CIA_PAIRS
+    a = np.tensordot(np.asarray(weights, float), t[which].astype(float), axes=1)
+    return cp.asarray(a.astype(np.float32))
 HAZE_SCALE = 1500.0                         # m, the haze's scale height (tools/swlbl.HAZE)
 
 
 class Longwave:
-    def __init__(self, dg, layers, par, co2=400e-6, n2o=0.32e-6, ch4=1.8e-6, tmode=2):
-        t = np.load(DATA)
+    def __init__(self, dg, layers, par, co2=400e-6, n2o=0.32e-6, ch4=1.8e-6, tmode=2, defs=(), cia=None):
+        """cia (#226): another air's CIA pair weights (constants.air_radiation): the wide tables and the pairs' absorption."""
+        t = np.load(DATA if cia is None else DATA_WIDE)
+        self.cia = None if cia is None else cia_table(cia, 'lw')
         self.dg, self.L, self.par, self.tmode = dg, layers, par, int(tmode)
         self.logk = cp.asarray(np.ascontiguousarray(t['logk']))
         self.planck = cp.asarray(np.ascontiguousarray(t['planck']))
@@ -26,24 +40,26 @@ class Longwave:
         assert self.NG <= 144
         self.block = (self.NG + 31) // 32 * 32
         self.radf = cp.zeros((3 * (layers + 1) + 3 + 6 * layers, dg.N), dtype=dg.dtype)   # edges; clear sky; the Planck sum; each layer's edge sub-levels
-        self.sub = cp.zeros((4 * layers * 14, dg.N), dtype=cp.float32)        # the sub-levels' properties (lw_setup)
-        self.ks = dg.kernel('lw_setup', 'air.cu', (f'-DNL={layers}',))
-        self.k = dg.kernel('lw_column', 'air.cu', (f'-DNL={layers}',))
+        self.sub = cp.zeros((4 * layers * 15, dg.N), dtype=cp.float32)        # the sub-levels' properties (lw_setup)
+        self.ks = dg.kernel('lw_setup', 'air.cu', (f'-DNL={layers}',) + tuple(defs))
+        self.k = dg.kernel('lw_column', 'air.cu', (f'-DNL={layers}',) + tuple(defs))
 
-    def __call__(self, mu, theta, q, cloudo, Ts):
-        """cloudo: AirPhysics.cloudo (the clouds' cover and longwave optical depth at the column's last step), or None."""
+    def __call__(self, mu, theta, q, cloudo, Ts, gx=None):
+        """cloudo: AirPhysics.cloudo (the clouds' cover and longwave optical depth at the column's last step), or None. gx: the
+        carried CO2, N2O and CH4 (3, L, N; #217), or None for the planet's own."""
         g, i32, R = self.dg, np.int32, self.dg.dtype.type
         from .gpu import NULL, BLOCK
         self.ks(((g.N + BLOCK - 1) // BLOCK, self.L), (BLOCK,),
                 (i32(g.N), i32(self.L), self.par, i32(self.NP), i32(self.NT), R(self.lp0), R(self.dlp), R(self.t0),
-                 R(self.dtt), self.o3, i32(len(self.o3)), R(self.lp0), R(self.dlp), *(R(x) for x in self.gases), mu, theta,
+                 R(self.dtt), self.o3, i32(len(self.o3)), R(self.lp0), R(self.dlp), *(R(x) for x in self.gases), gx if gx is not None else NULL, mu, theta,
                  q if q is not None else NULL, cloudo if cloudo is not None else NULL, R(HAZE_SCALE), i32(self.tmode), self.sub))
         self.k((g.N,), (self.block,), (i32(g.N), i32(self.L), self.par, i32(self.NG), self.logk, self.planck,
                                         i32(self.NP), i32(self.NT), i32(self.planck.shape[0]), R(self.tp0), self.sub, Ts,
-                                        self.radf))
+                                        self.radf, self.cia if self.cia is not None else NULL))
 
 
 SW_DATA = Path(__file__).resolve().parent / 'data' / 'sw_ktables.npz'
+SW_DATA_WIDE = Path(__file__).resolve().parent / 'data' / 'sw_ktables_wide.npz'
 # the clouds' single-scattering albedo per shortwave band (cm-1 ranges of tools/make_swtables.BANDS; estimates for drops of
 # about 10 um: water absorbs strongly from 2.5 um, weakly at 1.2-2.5 um, hardly below; after Slingo 1989's bands)
 CLOUD_SSA = (0.60, 0.75, 0.98, 0.994, 0.9995, 0.9998, 0.99999, 0.99999, 0.99999, 0.99999)
@@ -70,8 +86,9 @@ def ice_optics(re_um):
 
 
 class Shortwave:
-    def __init__(self, dg, layers, par, lw, inhom=CLOUD_INHOM, ice_re=None):
-        t = np.load(SW_DATA)
+    def __init__(self, dg, layers, par, lw, inhom=CLOUD_INHOM, ice_re=None, defs=(), cia=None):
+        t = np.load(SW_DATA if cia is None else SW_DATA_WIDE)
+        self.cia = None if cia is None else cia_table(cia, 'sw')
         self.dg, self.L, self.par, self.lwm, self.inhom = dg, layers, par, lw, inhom
         self.logk = cp.asarray(np.ascontiguousarray(t['logk']))
         self.NC, self.NP, self.NT, self.NG = self.logk.shape
@@ -86,7 +103,7 @@ class Shortwave:
         self.yscale = float((10.0) / (t['T'][1] - t['T'][0]))      # lw_setup's temperature positions are in 10 K steps
         self.block = (self.NG + 31) // 32 * 32
         self.swf = cp.zeros((3 * layers + 2, dg.N), dtype=dg.dtype)   # layers, surface, clear sky's reflection, each layer's top and bottom sub-level
-        self.k = dg.kernel('sw_column', 'air.cu', (f'-DNL={layers}',))
+        self.k = dg.kernel('sw_column', 'air.cu', (f'-DNL={layers}',) + tuple(defs))
 
     def __call__(self, mode, t, interval, pos, alb, cloudo):
         g, i32, R = self.dg, np.int32, self.dg.dtype.type
@@ -95,4 +112,4 @@ class Shortwave:
                                         R(self.yscale), self.sun, self.ray, self.hzf, self.cssa, R(self.haze[0]),
                                         R(self.haze[1]), R(self.haze[2]), R(self.inhom), self.lwm.sub, i32(mode), t, R(interval), pos, alb,
                                         self.cssa_i if self.cssa_i is not None else NULL, self.g_i if self.g_i is not None else NULL,
-                                        cloudo if cloudo is not None else NULL, self.swf))
+                                        cloudo if cloudo is not None else NULL, self.swf, self.cia if self.cia is not None else NULL))

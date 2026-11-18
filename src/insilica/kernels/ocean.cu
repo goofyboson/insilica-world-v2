@@ -117,7 +117,7 @@ extern "C" __global__ void ocn_column(int N, int L, const real* h, real* T, real
                                       const real* qfw, const real* qsun, real grav, real alpha, real alpha2, real beta, real S_ref,
                                       real alpha_ref, real rho_w, real cw, real m_kt, real n_kt, real hmin, real hmax, real dTmin,
                                       real R, real z1, real z2, real dt, real* wx, const real* land, real kappa_d, real dwf,
-                                      const real* shear, real ri_b, real reach, real h_ent) {
+                                      const real* shear, real ri_b, real reach, real h_ent, const real* Tc, real det_class, const real* Sc) {
   LOOP1(i, N)
   if (land && land[i] > (real)0.5) {                            // no water here (decision #84)
     for (int k = 0; k < L - 1; k++) wx[(size_t)k * N + i] = 0;
@@ -172,23 +172,38 @@ extern "C" __global__ void ocn_column(int N, int L, const real* h, real* T, real
   if (dm > up_max) dm = up_max > 0 ? up_max : (real)0;
   if (-dm > dn_max) dm = dn_max > 0 ? -dn_max : (real)0;
   wx[i] = dm;
-  real gave = dm > 0 ? dm : (real)0;                            // (what layer k already gives the layer above)
+  // (#170) what layer 1 lacks comes up through it from below: add[k], the water passing up across the interface below layer k.
+  // (#189) Taken first, so formation and mixing see it: across an interface water already passes up through, no layer's water
+  // forms downward (with ri_b's deep targets the two together emptied a layer below its floor: NaN in 3 days, earth7o5)
+  real add[LMAX + 1];
+  for (int k = 0; k <= LMAX; k++) add[k] = 0;
+  if (reach > 0 && dm > 0) {
+    real rem = dm - fmax(h1 - hmin, (real)0);
+    for (int k = 1; k < L - 1 && rem > 0; k++) {
+      add[k] = rem;
+      rem -= fmax(h[(size_t)(k + 1) * N + i] - hmin, (real)0);
+    }
+  }
+  real gave = dm > 0 ? dm - add[1] : (real)0;                   // (what layer k's own water already gives the layer above)
   for (int k = 1; k < L - 1; k++) {
     const real hk = h[(size_t)k * N + i], hb = h[(size_t)(k + 1) * N + i];
     real v = 0;
-    if (dwf > 0 && Bns < 0 && buoy(T[(size_t)k * N + i], S[(size_t)k * N + i], q) <= buoy(T[(size_t)(k + 1) * N + i], S[(size_t)(k + 1) * N + i], q))
+    if (dwf > 0 && Bns < 0 && add[k] <= 0 && buoy(T[(size_t)k * N + i], S[(size_t)k * N + i], q) <= buoy(T[(size_t)(k + 1) * N + i], S[(size_t)(k + 1) * N + i], q))
       v = -fmax(hk - hmin - gave, (real)0);                    // formed: down into the layer below
     else if (kappa_d > 0)
-      v = fmin(2 * kappa_d / (hk + hb) * dt, fmax(hb - hmin, (real)0));   // mixed: up from it
-    wx[(size_t)k * N + i] = v;
-    gave = v > 0 ? v : (real)0;
+      v = fmin(2 * kappa_d / (hk + hb) * dt, fmax(hb - hmin - (add[k] - add[k + 1]), (real)0));   // mixed: up from it
+    wx[(size_t)k * N + i] = v + add[k];
+    gave = (v > 0 ? v : (real)0) + (add[k] - add[k + 1]);         // (the next layer's own water passed up through this one)
   }
-  if (reach > 0 && dm > 0) {                                    // (#170) what layer 1 lacks comes up through it from below
-    real rem = dm - fmax(h1 - hmin, (real)0);
-    for (int k = 1; k < L - 1 && rem > 0; k++) {
-      wx[(size_t)k * N + i] += rem;
-      rem -= fmax(h[(size_t)(k + 1) * N + i] - hmin, (real)0);
-    }
+  // (#194) the water the mixed layer leaves behind joins the class of its own density (the isopycnal models' detrainment), passing
+  // down through the lighter classes above it; water lighter than every class joins the lightest. Without it, it all joined layer 1
+  // whatever its temperature (polar winter water into the 26 C class: 55,000 Sv a year in and out again through the class sorting)
+  if (Tc && det_class > 0 && dm < 0) {
+    int ks = 1;
+    const real b0 = buoy(T0, S[i], q);                         // (by density, as the class sorting: fresh polar water is light)
+    for (int k = 2; k < L; k++)
+      if (b0 <= (real)0.5 * (buoy(Tc[k - 1], Sc ? Sc[k - 1] : S_ref, q) + buoy(Tc[k], Sc ? Sc[k] : S_ref, q))) ks = k;
+    for (int k = 1; k < ks; k++) wx[(size_t)k * N + i] += dm;
   }
 }
 
@@ -283,7 +298,7 @@ __device__ __forceinline__ real temp_of(real B, real S, const Eos& q) {     // T
 }
 extern "C" __global__ void ocn_classes(int N, int L, const real* h, const real* T, const real* S, const real* Tc, real grav,
                                        real alpha, real alpha2, real beta, real S_ref, real hmin, real Tmin, const real* land,
-                                       real* wx, real* Tn, real* Sn, real top) {
+                                       real* wx, real* Tn, real* Sn, real top, const real* Sc) {
   LOOP1(i, N)
   if (land && land[i] > (real)0.5) {
     for (int k = 0; k < L - 1; k++) wx[(size_t)k * N + i] = 0;
@@ -295,7 +310,7 @@ extern "C" __global__ void ocn_classes(int N, int L, const real* h, const real* 
   for (int k = 0; k < L; k++) {
     const size_t o = (size_t)k * N + i;
     hk[k] = h[o]; Hk[k] = h[o] * T[o]; Sk[k] = h[o] * S[o]; up[k] = 0; dn[k] = 0;
-    Bc[k] = k > 0 ? buoy(Tc[k], S_ref, q) : (real)0;
+    Bc[k] = k > 0 ? buoy(Tc[k], Sc ? Sc[k] : S_ref, q) : (real)0;   // (#198) each class's own salinity, when given
   }
   real gH[LMAX], gS[LMAX], gh[LMAX];                             // what each layer receives
   for (int k = 0; k < L; k++) { gH[k] = 0; gS[k] = 0; gh[k] = 0; }
@@ -372,9 +387,14 @@ extern "C" __global__ void ocn_xch_salt(int N, int L, const real* wx, const real
 // moved, not made. qns_acc and sun_acc sum the mixed layer's non-solar flux and the sunlight entering the water for the
 // mixing (decision #74).
 extern "C" __global__ void ocn_pen(int N, int L, const real* h, real* T, const real* qocean, const real* qsw, real rho_cw,
-                                   real R, real z1, real z2, real dt, real* qns_acc, real* sun_acc, const real* land) {
+                                   real R, real z1, real z2, real dt, real* qns_acc, real* sun_acc, const real* land, const real* up) {
   LOOP1(i, N)
   if (land && land[i] > (real)0.5) return;
+  qns_acc[i] += (qocean[i] - qsw[i]) * dt;
+  sun_acc[i] += qsw[i] * dt;
+  // (#189) where water rose into the mixed layer at the last mixing (up = the exchange across its base, positive up), the sunlight
+  // passing its base heats water on its way up into it: the mixed layer keeps it all
+  if (up && up[i] > 0) return;
   real z = h[i];
   real f = sun_f(z, R, z1, z2);
   const real pen = qsw[i] * f;
@@ -386,8 +406,6 @@ extern "C" __global__ void ocn_pen(int N, int L, const real* h, real* T, const r
     T[(size_t)k * N + i] += qsw[i] * (f - fb) * dt / (rho_cw * hk);
     f = fb;
   }
-  qns_acc[i] += (qocean[i] - qsw[i]) * dt;
-  sun_acc[i] += qsw[i] * dt;
 }
 
 // Diagnostic (decision #80): H += sign rho c_w sum_k h_k (T_k - 273.15 K), J/m^2 relative to 0 C. Taken with sign -1 before
@@ -403,18 +421,124 @@ extern "C" __global__ void ocn_heat(int N, int L, const real* h, const real* T, 
 // skin's T0 (capacity cap). They exchange heat by conduction at the force-restore rate (Deardorff 1978): the skin relaxes to the
 // deep ground at the daily frequency omega, so the conductance is omega times the skin's capacity. Taken exactly over the step
 // (two bodies), energy conserved.
-extern "C" __global__ void ocn_ground(int N, const real* land, real* T, const real* cap, real c_deep, real dt) {
+extern "C" __global__ void ocn_ground(int N, const real* land, real* T, const real* cap, real c_deep, real dt, real day_s) {
   LOOP1(i, N)
   if (!(land[i] > (real)0.5)) return;
   const real Cs = cap[i], a = T[i], b = T[(size_t)N + i];
-  const real k = (real)(2 * 3.14159265358979323846 / 86400.0) * Cs, Te = (Cs * a + c_deep * b) / (Cs + c_deep);
+  const real k = (real)(2 * 3.14159265358979323846) / day_s * Cs, Te = (Cs * a + c_deep * b) / (Cs + c_deep);
   const real d = (a - b) * exp(-k * dt * (1 / Cs + 1 / c_deep));
   T[i] = Te + d * c_deep / (Cs + c_deep);
   T[(size_t)N + i] = Te - d * Cs / (Cs + c_deep);
+}
+
+// The land column (V2-6e, #218), on land cells: under the ground's skin T0 (capacity cap, J/m^2/K) K soil layers, thickness dz (m),
+// volumetric heat capacity c_soil (J/m^3/K) and conductivity k_soil (W/m/K), their temperatures Tg (K x N). Heat is conducted between
+// neighbours across their centres, the skin as thick as its capacity in soil (cap / c_soil); none passes the bottom. Stepped
+// implicitly (backward Euler, one tridiagonal solve per column): stable however thin the layers, the column's heat kept to rounding.
+#define KSOIL 16
+extern "C" __global__ void land_column(int N, int K, const real* land, real* T, const real* cap, real* Tg, const real* dz, real c_soil,
+                                       real k_soil, real dt) {
+  LOOP1(i, N)
+  if (!(land[i] > (real)0.5)) return;
+  const int n = K + 1;
+  real C[KSOIL + 1], G[KSOIL + 1], x[KSOIL + 1], cp_[KSOIL + 1], dp[KSOIL + 1];
+  C[0] = cap[i]; x[0] = T[i];
+  real half = cap[i] / c_soil / 2;
+  for (int k = 1; k < n; k++) {
+    const real d = dz[k - 1];
+    C[k] = c_soil * d; x[k] = Tg[(size_t)(k - 1) * N + i];
+    G[k - 1] = dt * k_soil / (half + d / 2);                     // (times dt) between node k-1 and k
+    half = d / 2;
+  }
+  G[n - 1] = 0;
+  // (C_k + G_{k-1} + G_k) x'_k - G_{k-1} x'_{k-1} - G_k x'_{k+1} = C_k x_k  (Thomas)
+  for (int k = 0; k < n; k++) {
+    const real a = k ? G[k - 1] : (real)0, c = G[k];
+    const real den = C[k] + a + c - (k ? a * cp_[k - 1] : (real)0);
+    cp_[k] = c / den;
+    dp[k] = (C[k] * x[k] + (k ? a * dp[k - 1] : (real)0)) / den;
+  }
+  x[n - 1] = dp[n - 1];
+  for (int k = n - 2; k >= 0; k--) x[k] = dp[k] + cp_[k] * x[k + 1];
+  T[i] = x[0];
+  for (int k = 1; k < n; k++) Tg[(size_t)(k - 1) * N + i] = x[k];
 }
 
 // The mixed layer's heat capacity per cell for the air's surface physics: rho_w c_w h0 (J/m^2/K).
 extern "C" __global__ void ocn_cap(int N, const real* h, real rho_cw, real* cap, const real* land, real c_land) {
   LOOP1(i, N)
   cap[i] = land && land[i] > (real)0.5 ? (cap[i] > 0 ? cap[i] : c_land) : rho_cw * h[i];   // land's stays once set: the air's column may set it by its soil water
+}
+
+// Sea-ice drift (V2-6e, #185): free drift, the ice moving with the mixed layer's current plus ice_drift (~2%) of the air's bottom
+// wind turned ice_turn to the right in the north (left in the south; Thorndike & Colony 1982); no internal stress, except that no
+// ice is pushed into a cell already ice_hmax thick (where real pack ice's strength stops the convergence). Donor-cell (upwind)
+// fluxes through sea edges only, limited so a cell sends at most the ice it holds; the ice's energy (-Lf m) and its fresh water
+// go with it, so ice_prev moves too (moved ice is not melt). F (kg, positive from eI to eJ) per edge; si per cell.
+extern "C" __global__ void ice_flux(int E, int La, const real* ua, const real* uo, const int* eI, const int* eJ, const int* eoeStart,
+                                    const int* eoe, const real* w, const real* sn, real cs, real cwind, const real* wall,
+                                    const real* ice, const real* le, real rho_ice, real hmax, real dt, real* F) {
+  LOOP1(e, E)
+  F[e] = 0;
+  if (wall && wall[e] == 0) return;
+  const real* a = ua + (size_t)(La - 1) * E;
+  real ut = 0;                                              // the wind along the edge (TRiSK's tangential: k x n)
+  for (int j = eoeStart[e]; j < eoeStart[e + 1]; j++) ut += w[j] * a[eoe[j]];
+  const real v = uo[e] + cwind * (cs * a[e] + sn[e] * ut);
+  const int dn = v > 0 ? eI[e] : eJ[e], rc = v > 0 ? eJ[e] : eI[e];
+  if (!(ice[dn] > 0) || ice[rc] >= rho_ice * hmax) return;
+  F[e] = v * dt * le[e] * ice[dn];
+}
+
+extern "C" __global__ void ice_limit(int N, const real* F, const int* cellEdge, const int* eI, const real* ice, const real* area, real* si) {
+  LOOP1(i, N)
+  real out = 0;
+  for (int m = 0; m < 6; m++) {
+    const int e = cellEdge[i * 6 + m];
+    if (e < 0) break;
+    const real f = eI[e] == i ? F[e] : -F[e];
+    if (f > 0) out += f;
+  }
+  const real have = ice[i] > 0 ? ice[i] * area[i] : (real)0;
+  si[i] = out > have ? have / out : (real)1;
+}
+
+extern "C" __global__ void ice_move(int N, const real* F, const real* si, const int* cellEdge, const int* eI, const int* eJ,
+                                   const real* area, real* ice, real* ice_prev) {
+  LOOP1(i, N)
+  real d = 0;
+  for (int m = 0; m < 6; m++) {
+    const int e = cellEdge[i * 6 + m];
+    if (e < 0) break;
+    const real f = F[e] * si[F[e] > 0 ? eI[e] : eJ[e]];     // from eI to eJ, scaled by its donor's limit
+    d += eI[e] == i ? -f : f;
+  }
+  if (d == 0) return;
+  d /= area[i];
+  ice[i] += d;
+  if (ice_prev) ice_prev[i] += d;
+}
+
+// (#200) The wind's momentum in the Ekman layer: the stress just given to the mixed layer (its impulse h0 (u0 - u0b)) is spread
+// over the top ek metres of water, each layer within it accelerated alike (a layer partly within by its share), so where the
+// mixed layer is thinner than the wind-stirred layer the Ekman transport is carried by the water the wind stirs, not passed down
+// by the interfacial stress within hours (#194). Momentum exact; the kinetic energy the spreading removes goes to diss (heat).
+extern "C" __global__ void ek_spread(int N, int E, int L, const real* h, real* u, const real* u0b, const int* eI, const int* eJ,
+                                     real ek, real rho_w, const real* wall, real* diss) {
+  LOOP1(e, E)
+  if (wall && wall[e] == 0) return;
+  const real h0 = (real)0.5 * (h[eI[e]] + h[eJ[e]]);
+  if (h0 >= ek) return;
+  const real I = h0 * (u[e] - u0b[e]);
+  if (I == 0) return;
+  real z = 0, ke0 = 0, ke1 = 0;
+  for (int k = 0; k < L && z < ek; k++) {
+    const real hk = (real)0.5 * (h[(size_t)k * N + eI[e]] + h[(size_t)k * N + eJ[e]]);
+    const real take = fmin(hk, ek - z);
+    real* pu = u + (size_t)k * E + e;
+    const real ub = k == 0 ? u0b[e] : *pu, uo = *pu, un = ub + I * take / (ek * hk);
+    ke0 += (real)0.5 * hk * uo * uo; ke1 += (real)0.5 * hk * un * un;
+    *pu = un; z += take;
+  }
+  if (diss) diss[e] += rho_w * (ke0 - ke1);
 }

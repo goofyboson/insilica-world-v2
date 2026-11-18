@@ -68,13 +68,16 @@ def test_conserve(record, n, days):
 def conserve_land(record, days=2):
     """The land's budgets (V2-4a, `continent` from its cached spin-up, every step): the column's energy ledger with land; the
     land's water (soil, surface water, ice and what waits at the mouths change by rain − evaporation − what the sea took); the ocean's salt against its fresh water, the rivers included;
-    no water across a coast; total energy against TOA; and a save/load continuation."""
+    no water across a coast; total energy against TOA; and a save/load continuation. The sea ice drifts (#185), so these budgets
+    hold with it moving."""
     import sys
     sys.path.insert(0, str(__import__('pathlib').Path(__file__).parent))
     from test_climate import coupled_spun
     w = coupled_spun(4, 'continent')
     g, sea = w.grid, w.sea
     w.ice += cp.asarray(np.abs(g.lat) > np.radians(50.0)) * w.land * 3.0e6        # 3 km of ice on the far land, so that some flows into the sea (#86)
+    w.enable_ice_drift(0.02)                                                    # sea-ice drift (V2-6e, #185)
+    moved = 0.0
     A, At = cp.asarray(g.areaCell), float(np.sum(g.areaCell))
     rho, Sr, land = sea.cfg['rho'], sea.cfg['S_ref'], w.land
     calved = w.routing.calved
@@ -86,6 +89,8 @@ def conserve_land(record, days=2):
         e0 = w.energy()
         took = float(cp.sum(A * w.mouth))                      # the ocean takes what waits at the start of its tick
         w.step(1, graph=False)
+        if w._kind(w.tick - 1):                                # what the drift carried this ocean step (it moves ice and ice_prev together)
+            moved += float(cp.sum(cp.abs(w.sea._iF)))
         p = w.physics
         toa = float(cp.sum(A * (p.sw_abs - p.olr))) * w.dt
         res += w.energy() - e0 - toa
@@ -101,11 +106,12 @@ def conserve_land(record, days=2):
     f = os.path.join(tempfile.gettempdir(), f'land{os.getpid()}.iw2')
     w.save(f)
     r = World.load(f)
+    r.enable_ice_drift(0.02)
     w.step(48); r.step(48)
     same = w.state_hash() == r.state_hash()
     os.remove(f)
     ok = col <= 1e-13 and wland <= 1e-13 and sflux <= 1e-13 and coast == 0 and abs(energy) <= 0.1 and same and gave > 0
-    record('CONSERVE land', f'continent, {days} d after the spin-up, with 3 km of ice on land beyond 50° (it gives the sea {gave:.1e} mm/day of the land): column energy {fmt(col)} of the energy stored; land water {fmt(wland)}; salt against fresh water '
+    record('CONSERVE land', f'continent, {days} d after the spin-up, with 3 km of ice on land beyond 50° (it gives the sea {gave:.1e} mm/day of the land), the sea ice drifting ({moved / days / float(cp.sum(A * (1 - land) * w.ice)):.1e} of it a day): column energy {fmt(col)} of the energy stored; land water {fmt(wland)}; salt against fresh water '
            f'and rivers {fmt(sflux)}; fastest water across a coast {coast:.1f} m/s; energy change − TOA {energy:+.4f} W/m²; reload continues {"identically" if same else "DIFFERENTLY"}',
            '≤ 1e-13; ≤ 1e-13; ≤ 1e-13; 0; |energy − TOA| ≤ 0.1 W/m²; identical', ok)
     return ok
@@ -207,7 +213,16 @@ def conserve_air(record):
     j.step(int(15 * 86400 / j.dt))
     drift = (j.energy() - e0) / e0
     # the seven-layer earth's columns (V2-6b; earth6 since #142, earth7 since #153): the mixed layer, deep plumes taking in the cloud layer's air, their downdrafts, the land
-    e = World(4, 'earth7')
+    # (#216: in an air of its own, nine parts N₂ to one of CO₂, its constants compiled in: the ledgers close on the air's own cp)
+    # (#217: carrying CO₂, N₂O and CH₄ as tracers, CO₂ with a surface source on 100 cells)
+    # (#218: with earth7's land column under the ground's skin: its conduction keeps the land's heat, and it reloads)
+    from insilica.constants import SOIL_DZ
+    air = {'physics': {'gases': dict(n2=0.9, co2=0.1)}}
+    # (#220: with geology's accumulators, each sum against the same kept here, the runoff against the water reaching the sea)
+    e = World(4, 'earth7', params=dict(air, gas_tracers=1, geology=1))
+    e.gas_src[0, :100] = 1e-9
+    gamt = lambda: [float(cp.sum(e.M * e.gx[j])) for j in range(e.gx.shape[0])]
+    g0, gsrc = gamt(), 0.0
     e4 = e4w = 0.0
     lede, ge = cp.asarray(e.grid.le * e.grid.de), e.grid
     he = lambda h: 0.5 * (h[:, ge.eI] + h[:, ge.eJ])
@@ -228,25 +243,98 @@ def conserve_air(record):
             d['momentum'] = max(d['momentum'], float(cp.sum(lede * cp.abs(dm)) / cp.sum(lede * cp.sum(he(h) * cp.abs(u), axis=0))))
         return apply
     e.oro.apply, e.gw.apply = ledger('oro', e.oro.apply), ledger('gw', e.gw.apply)
+    sea, lnd, soil = e.sea, e.land, {'worst': 0.0, 'moved': 0.0}
+    dzc = cp.asarray(SOIL_DZ)[:, None] * sea.soil['c']
+
+    def column_heat():
+        """The land's skin and column (J), and its gross relative to freezing."""
+        x = sea.cap * (sea.T[0] - 273.15) + cp.sum(dzc * (sea.Tg - 273.15), axis=0)
+        return float(cp.sum(A * lnd * x)), float(cp.sum(A * lnd * (sea.cap * cp.abs(sea.T[0] - 273.15) + cp.sum(dzc * cp.abs(sea.Tg - 273.15), axis=0))))
+
+    def ground(dt, _g=sea.ground):
+        h0, gross = column_heat()
+        t0 = sea.Tg.copy()
+        _g(dt)
+        soil['worst'] = max(soil['worst'], abs(column_heat()[0] - h0) / gross)
+        soil['moved'] += float(cp.sum(A * lnd * cp.sum(dzc * cp.abs(sea.Tg - t0), axis=0))) / float(cp.sum(A * lnd)) / dt
+    sea.ground = ground
+    from insilica.geology import CRACK, EA_WEATHER, FT_BAND, R_GAS, ROWS, T0_WEATHER
+    geo, lm = e.geology, lnd > 0.5
+    ref = {k: cp.zeros(e.grid.N) for k in ('rain', 'evap', 'tsum', 'frozen', 'crack', 'ftc', 'rx1', 'weather')}
+    gs = dict(fst=geo.row('fstate').copy(), bucket=cp.zeros(e.grid.N), ring=[], n=0, runoff=0.0, sent=0.0, below=0)
+
+    def gcol(rain, evap, ice=None, _c=geo.column):
+        T, dt, tf = geo.Ts.copy(), e.dt, geo.tf
+        _c(rain, evap, ice)
+        ref['rain'] += rain * dt; ref['evap'] += evap * dt; ref['tsum'] += T * dt
+        ref['frozen'] += cp.where(lm & (T < tf), dt, 0.0)
+        ref['crack'] += cp.where(lm & (T >= tf + CRACK[0]) & (T <= tf + CRACK[1]), dt, 0.0)
+        thaw = lm & (gs['fst'] > 0.5) & (T > tf + FT_BAND)
+        ref['ftc'] += thaw
+        gs['fst'] = cp.where(thaw, 0.0, cp.where(lm & (gs['fst'] < 0.5) & (T < tf - FT_BAND), 1.0, gs['fst']))
+        gs['bucket'] = gs['bucket'] + rain * dt
+        gs['n'] += 1
+        if gs['n'] % geo.slot == 0:
+            gs['ring'] = (gs['ring'] + [gs['bucket']])[-geo.nslot:]
+            gs['bucket'] = cp.zeros(e.grid.N)
+            ref['rx1'] = cp.maximum(ref['rx1'], sum(gs['ring']))
+    geo.column = gcol
+
+    def route(dt, _r=e.routing.step):
+        m0, a0, p0, i0 = e.mouth.copy(), geo.acc.copy(), e.pond.copy(), e.ice.copy()
+        _r(dt)
+        d = geo.acc - a0
+        run = d[ROWS.index('runoff')]
+        gs['runoff'] = max(gs['runoff'], abs(float(cp.sum(A * run)) - float(cp.sum(A * (e.mouth - m0)))) / float(cp.sum(A * cp.abs(run))))
+        gs['sent'] += float(cp.sum(A * (e.mouth - m0)))
+        ref['weather'] += run * cp.exp(EA_WEATHER / R_GAS * (1 / T0_WEATHER - 1 / e.Ts))
+        # out at least its net loss, to rounding of the amounts and of the flows through the cell (#226: a nearly empty pond passing water on)
+        dr, di = d[ROWS.index('river')], d[ROWS.index('iceflow')]
+        gs['below'] += int(cp.sum(lm & (dr < (p0 - e.pond) - 1e-12 * (cp.abs(p0) + cp.abs(e.pond) + 2 * cp.abs(dr)))))
+        gs['below'] += int(cp.sum(lm & (di < (i0 - e.ice) - 1e-12 * (cp.abs(i0) + cp.abs(e.ice) + 2 * cp.abs(di)))))
+    e.routing.step = route
     snow = 0.0                                            # the snow reaching the ground (#134): its freezing heat given aloft
-    for _ in range(48):
+    for t in range(48):
         W0, E0 = e.water(), e.energy()
         e.step(1, graph=False)                            # (the drag's ledger reads the host every step)
         p = e.physics
+        gsrc += float(cp.sum(A * e.gas_src[0])) * e.dt
+        if t == 0:                                        # (#217) the k-tables reading the carried gases, all at the planet's values
+            f = World(4, 'earth7', params=air)
+            f.step(1, graph=False)
+            olr_gx = abs(float(cp.sum(A * p.olr)) / float(cp.sum(A * f.physics.olr)) - 1)
         snow += float(cp.sum(A * p.rainp[3])) / float(cp.sum(A)) * e.dt
         e4 = max(e4, abs(float(cp.sum(A * p.stored)) - float(cp.sum(A * (p.sw_abs - p.olr))) * e.dt) / abs(E0))
         e4w = max(e4w, abs(e.water() - W0 - float(cp.sum(A * (p.evap - p.rain))) * e.dt) / e.water())
+    g1 = gamt()
+    gerr = max(float(cp.max(cp.abs(geo.row(k) - v)) / max(float(cp.max(cp.abs(v))), 1e-300)) for k, v in ref.items())
+    geo_ok = (gerr <= 1e-13 and gs['runoff'] <= 1e-13 and gs['below'] == 0 and float(ref['rx1'].max()) > 0 and float(ref['ftc'].sum()) > 0
+              and gs['sent'] > 0 and float(geo.row('iceflow').max()) > 0 and 'geo' in e.STATE)
+    fs = os.path.join(tempfile.gettempdir(), f'soil{os.getpid()}.iw2')
+    e.save(fs)
+    reload_ok = World.load(fs).state_hash() == e.state_hash() and 'oTg' in e.STATE
+    os.remove(fs)
+    gbud = max(abs(g1[0] - g0[0] - gsrc) / g1[0], *(abs(g1[j] - g0[j]) / g0[j] for j in range(1, len(g0))))
+    guni = max(float((e.gx[j].max() - e.gx[j].min()) / e.gx[j].mean()) for j in range(1, len(g0)))
     ok = (worst <= 1e-13 and water <= 1e-13 and mass <= 1e-13 and tracer <= 1e-13 and vapor <= 1e-13 and abs(drift) < 1e-4 and e4 <= 1e-13
-          and e4w <= 1e-13 and snow > 0 and all(d['energy'] <= 1e-13 and d['gross'] > 0 for d in drag.values()) and drag['gw']['momentum'] <= 1e-13)
+          and e4w <= 1e-13 and snow > 0 and all(d['energy'] <= 1e-13 and d['gross'] > 0 for d in drag.values()) and drag['gw']['momentum'] <= 1e-13
+          and gbud <= 1e-13 and guni <= 1e-12 and olr_gx <= 1e-12 and soil['worst'] <= 1e-13 and soil['moved'] > 0 and reload_ok
+          and geo_ok)
     record('CONSERVE air', f'moist column ledgers, 48 steps: energy worst {fmt(worst)} of the energy stored ({fmt(per_step)} of one step of sunlight), '
            f'water {fmt(water)}; moist aqua 10 d (3 layers; dynamics, radiation, crossings ~{crossed:.2f} kg/m² per step, convection, rain): '
            f'air mass {fmt(mass)}, tracer {fmt(tracer)}, vapor against evaporation − rain {fmt(vapor)}; adiabatic air (two layers), '
-           f'15 d: energy drift {fmt(drift)}; six-layer earth, 48 steps (mixed layer, cumulus layer, plumes with downdrafts and entrainment, a shallow plume, ice in the air with its '
+           f'15 d: energy drift {fmt(drift)}; seven-layer earth in N₂–CO₂ air (cp {e.gas["cp"]:.1f}, R {e.gas["rd"]:.1f}, #216), 48 steps (mixed layer, cumulus layer, plumes with downdrafts and entrainment, a shallow plume, ice in the air with its '
            f'freezing heat aloft, {snow * 86400 / (48 * e.dt):.3f} kg/m² of snow a day reaching the ground): '
            f'column energy {fmt(e4)} of the energy stored, water {fmt(e4w)}; kinetic energy removed against heat booked: mountain drag (#127) '
            f'{fmt(drag["oro"]["energy"])}, waves (#128) {fmt(drag["gw"]["energy"])} of the kinetic energy ({drag["oro"]["gross"] / 48:.2e}, '
-           f'{drag["gw"]["gross"] / 48:.2e} J a step); the waves\' column momentum {fmt(drag["gw"]["momentum"])} of the gross',
-           '≤ 1e-13; ≤ 1e-13; drift < 1e-4', ok)
+           f'{drag["gw"]["gross"] / 48:.2e} J a step); the waves\' column momentum {fmt(drag["gw"]["momentum"])} of the gross; '
+           f'gas tracers (#217): CO₂, N₂O, CH₄ against their sources (CO₂ {gsrc / g1[0]:.1e} of its amount from the surface) {fmt(gbud)}, '
+           f'N₂O and CH₄ started uniform stay so to {fmt(guni)}, OLR reading them against the planet\'s values {fmt(olr_gx)}; '
+           f'land column (#218, {len(SOIL_DZ)} layers to {sum(SOIL_DZ):.1f} m, {soil["moved"] / 48:.1f} W/m² changing its layers on land, mean over the steps): its heat {fmt(soil["worst"])} of its gross, '
+           f'geology’s accumulators (#220; rain, evaporation, temperature, frost, freeze-thaw, the day’s largest rain, weathering) against the same kept here {fmt(gerr)}, '
+           f'the land’s runoff against the water reaching the sea ({gs["sent"] / 1e12:.1f} Gt) {fmt(gs["runoff"])}, outflows below a cell’s net loss {gs["below"]}; '
+           f'reload {"identical" if reload_ok else "DIFFERENT"}',
+           '≤ 1e-13; ≤ 1e-13; drift < 1e-4; uniform ≤ 1e-12; reload identical', ok)
     return ok
 
 

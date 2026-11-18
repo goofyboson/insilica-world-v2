@@ -137,8 +137,8 @@ def build_map():
     np.savez(OUT / 'map.npz', **out)
 
 
-def build_tables():
-    m = np.load(OUT / 'map.npz')
+def build_tables(out='lw.npz', mapname='map.npz'):
+    m = np.load(OUT / mapname)
     ng = sum(NG)
     comps = [('H2O', X_H2O[0]), ('H2O', X_H2O[1])] + [(g, 0.0) for g in GASES[1:]]
     K = np.zeros((len(comps), ng, len(P_TAB), len(T_TAB)))
@@ -155,7 +155,7 @@ def build_tables():
                     k = lbl.absorption(lines[g], T, p, x, nu0, d, n)
                     K[c, g0:g0 + NG[b], i, j] = (cp.bincount(lab, weights=k, minlength=NG[b]) / cnt).get()
         print(f'band {BANDS[b]}-{BANDS[b + 1]}: {time.time() - t:.0f}s', flush=True)
-    np.savez(OUT / 'lw.npz', K=K, P=P_TAB, T=T_TAB, T_pl=T_PL, x_h2o=np.array(X_H2O), bands=np.array(BANDS),
+    np.savez(OUT / out, K=K, P=P_TAB, T=T_TAB, T_pl=T_PL, x_h2o=np.array(X_H2O), bands=np.array(BANDS),
              ng=np.array(NG), comps=np.array([f'{g}{x}' for g, x in comps]),
              pl=np.concatenate([m[f'pl{b}'] for b in range(len(NG))], axis=1),
              w=np.concatenate([m[f'w{b}'] for b in range(len(NG))]))
@@ -189,14 +189,15 @@ def band_planck(T, bands=BANDS):
 DIFFUSIVITY = ([1 / 1.66], [1.66 / 2])               # the model's angle (flux = pi I at mu = 1/1.66)
 
 
-def column_terms(t, P):
+def column_terms(t, P, vmr=None, m_air=lbl.M_AIR, broad=1.0):
     """The column's layer optical depths per g-point from the tables (layers x g), Planck sources at the levels
-    (levels x g, W m-2 sr-1), and its layers' log-pressures."""
-    pm, Tm, x, u = lbl.layers(P['p'], P['T'], P['vmr'])
+    (levels x g, W m-2 sr-1), and its layers' log-pressures. (#226: another air's vmr, molar mass and broadening, the
+    tables read at the pressure times it.)"""
+    pm, Tm, x, u = lbl.layers(P['p'], P['T'], P['vmr'] if vmr is None else vmr, m_air)
     ng, nl = int(t['ng'].sum()), len(pm)
     tau = np.zeros((nl, ng))
     for i in range(nl):
-        k = interp_k(t['K'], pm[i], Tm[i])           # comps x g
+        k = interp_k(t['K'], pm[i] * broad, Tm[i])   # comps x g
         f = x['H2O'][i] / X_H2O[1]
         tau[i] = u['H2O'][i] * (k[0] * (1 - f) + k[1] * f) + sum(u[g][i] * k[2 + c] for c, g in enumerate(GASES[1:]))
     gb = np.repeat(np.arange(len(t['ng'])), t['ng'])
@@ -255,11 +256,13 @@ def node_weights(lp):
     return W
 
 
-def fit():
+def fit(src='lw.npz', extra=None):
     """A factor on every gas's k per g-point, smooth in log pressure (linear between NODES), fitted by Levenberg-
     Marquardt so the diffusivity fluxes match line-by-line (three angles) on FIT_COLUMNS: each band's net flux at
-    every level and heating in every layer (above 1 hPa at a fifth of the weight). Saves lw.npz's K fitted (K_raw kept)."""
-    t = dict(np.load(OUT / 'lw.npz'))
+    every level and heating in every layer (above 1 hPa at a fifth of the weight). Saves src's K fitted (K_raw kept).
+    (#226: extra(t) gives further columns, each (tau, B, node weights, p, reference, heating weights, an optical depth
+    the factors leave alone: collision-induced absorption)."""
+    t = dict(np.load(OUT / src))
     t['K'] = t.get('K_raw', t['K'])
     cols = []
     for name, co2 in FIT_COLUMNS:
@@ -268,6 +271,8 @@ def fit():
         tau, B, lp = column_terms(t, P)
         wH = np.where(P['p'][1:] > 100.0, 1.0, 0.2)
         cols.append((tau, B, node_weights(lp), P['p'], r, wH))
+    if extra is not None:
+        cols += extra(t)
     nn = len(NODES)
     A = np.zeros((int(t['ng'].sum()), nn))
     for b in range(len(NG)):
@@ -277,15 +282,18 @@ def fit():
         def resid(a, which=None):
             """Residuals (data then priors), and per node the change from perturbing all g-points' node."""
             out = []
-            for tau, B, W, p, r, wH in cols:
+            for c in cols:
+                tau, B, W = c[:3]
                 tg = tau[:, g] * np.exp(W @ a.T)
+                if len(c) > 6:
+                    tg = tg + c[6][:, g]
                 up, dn = g_fluxes(tg, B[:, g])
                 out.append((up, dn))
             return out
 
         def stack(fl, a):
             res = []
-            for (up, dn), (tau, B, W, p, r, wH) in zip(fl, cols):
+            for (up, dn), (tau, B, W, p, r, wH) in zip(fl, (c[:6] for c in cols)):
                 net = up.sum(0) - dn.sum(0)
                 rnet = r['up'][b] - r['dn'][b]
                 res.append((net - rnet) / SIG_F)
@@ -347,7 +355,7 @@ def fit():
     t['K_raw'] = t['K']
     t['K'] = t['K'] * F[None, :, :, None]
     t['A'] = A
-    np.savez(OUT / 'lw.npz', **t)
+    np.savez(OUT / src, **t)
 
 
 def through(I, tau, Bnear, Bfar, mu):
@@ -384,19 +392,19 @@ def check():
 PACKAGED = lbl.ROOT / 'src' / 'insilica' / 'data' / 'lw_ktables.npz'
 
 
-def export():
+def export(src='lw.npz', dst=PACKAGED):
     """The fitted tables as the model reads them (src/insilica/data/lw_ktables.npz): log k per component as
     (comp, P, T, g) float32, each g-point's Planck radiance (W m-2 sr-1) on T_PL (T, g), and the US standard ozone
-    profile on the table's pressures."""
-    t = dict(np.load(OUT / 'lw.npz'))
+    profile on the table's pressures. (#226: src, dst for other air's wide tables.)"""
+    t = dict(np.load(OUT / src))
     gb = np.repeat(np.arange(len(t['ng'])), t['ng'])
     pg = np.stack([band_planck(T)[gb] * t['pl'][j] for j, T in enumerate(T_PL)])
     P = afgl.profile('us_standard')
     o3 = np.interp(np.log(P_TAB), np.log(P['p']), P['vmr']['O3'])          # (the levels' pressures rise from the top)
-    np.savez_compressed(PACKAGED, logk=np.log(np.maximum(t['K'], 1e-40)).transpose(0, 2, 3, 1).astype(np.float32),
+    np.savez_compressed(dst, logk=np.log(np.maximum(t['K'], 1e-40)).transpose(0, 2, 3, 1).astype(np.float32),
                         planck=pg.astype(np.float32), P=P_TAB, T=T_TAB, T_pl=T_PL, o3=o3.astype(np.float32),
                         bands=np.array(BANDS), ng=np.array(NG), comps=t['comps'])
-    print(PACKAGED, PACKAGED.stat().st_size, 'bytes')
+    print(dst, dst.stat().st_size, 'bytes')
 
 
 if __name__ == '__main__':

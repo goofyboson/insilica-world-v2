@@ -188,8 +188,8 @@ def has_lines(g, b):
     return bool(((nu > BANDS[b][0][0] - 25) & (nu < min(BANDS[b][-1][1], 20000) + 25)).any())
 
 
-def build_tables():
-    m = np.load(OUT / 'swmap.npz')
+def build_tables(out='sw.npz', mapname='swmap.npz'):
+    m = np.load(OUT / mapname)
     comps = [('H2O', X_H2O[0]), ('H2O', X_H2O[1])] + [(g, 0.0) for g in GASES[1:]]
     ng = sum(NG)
     K = np.zeros((len(comps), ng, len(P_TAB), len(T_TAB)))
@@ -209,7 +209,7 @@ def build_tables():
                     k = gas_k(g, seg, T, p, x)
                     K[c, g0:g0 + NG[b], i, j] = (cp.bincount(lab, weights=k.astype(cp.float64) * wc, minlength=NG[b]) / W).get()
         print(f'band {b}: {time.time() - t:.0f}s', flush=True)
-    np.savez(OUT / 'sw.npz', K=K, P=P_TAB, T=T_TAB, x_h2o=np.array(X_H2O), ng=np.array(NG),
+    np.savez(OUT / out, K=K, P=P_TAB, T=T_TAB, x_h2o=np.array(X_H2O), ng=np.array(NG),
              comps=np.array([f'{g}{x}' for g, x in comps]),
              sun=np.concatenate([m[f'sun{b}'] for b in range(len(BANDS))]) / SUN,
              ray=np.concatenate([m[f'ray{b}'] for b in range(len(BANDS))]),
@@ -270,11 +270,12 @@ def heat(net, p, mu0):
 SIG_F, SIG_H, SIG_SMOOTH, SIG_A = 0.1 / 1361.0, 0.02, 0.5, 1.5
 
 
-def fit():
+def fit(src='sw.npz', extra=None):
     """As the longwave's (make_ktables.fit): a factor on every gas's k per g-point, smooth in log p, fitted by
     Levenberg-Marquardt to line-by-line net fluxes and heating at three sun angles on the four columns (heating above
-    1 hPa at a fifth of the weight, as the longwave's)."""
-    t = dict(np.load(OUT / 'sw.npz'))
+    1 hPa at a fifth of the weight, as the longwave's). (#226: src, and extra(t) further columns, each (tau, tr, th, node
+    weights, p, reference, an optical depth the factors leave alone).)"""
+    t = dict(np.load(OUT / src))
     t['K'] = t.get('K_raw', t['K'])
     cols = []
     for c in COLUMNS:
@@ -282,6 +283,8 @@ def fit():
         r = np.load(ref_name(*c))
         tau, tr, th, lp = column_terms(t, P)
         cols.append((tau, tr, th, node_weights(lp), P['p'], r))
+    if extra is not None:
+        cols += extra(t)
     nn = len(NODES)
     A = np.zeros((int(t['ng'].sum()), nn))
     for b in range(len(NG)):
@@ -290,14 +293,17 @@ def fit():
 
         def run(a):
             out = []
-            for tau, tr, th, W, p, r in cols:
+            for c in cols:
+                tau, tr, th, W = c[:4]
                 tg = tau[:, g] * np.exp(W @ a.T)
+                if len(c) > 6:
+                    tg = tg + c[6][:, g]
                 out.append([g_fluxes(tg, tr[:, g], th[:, g], mu0, ALB) for mu0 in MU0])
             return out
 
         def stack(fl, a):
             res = []
-            for fm, (tau, tr, th, W, p, r) in zip(fl, cols):
+            for fm, (tau, tr, th, W, p, r) in zip(fl, (c[:6] for c in cols)):
                 for m, (Fd, Ff, Fu) in enumerate(fm):
                     net = ((Fd + Ff - Fu) * sun).sum(1)
                     rnet = r['dir'][m, b] + r['dif'][m, b] - r['up'][m, b]
@@ -358,7 +364,7 @@ def fit():
     t['K_raw'] = t['K']
     t['K'] = t['K'] * np.exp(A @ WT.T)[None, :, :, None]
     t['A'] = A
-    np.savez(OUT / 'sw.npz', **t)
+    np.savez(OUT / src, **t)
 
 
 SUB_HPA = (0, 1, 5, 20, 50, 100, 150, 200, 300, 400, 500, 600, 700, 800, 900, 1e4)
@@ -388,10 +394,10 @@ def check():
         print(c[0], f'{c[1] * 1e6:.0f}', c[2], '\n   ' + '\n   '.join(rows))
 
 
-def export():
-    """The fitted tables as the model reads them (src/insilica/data/sw_ktables.npz)."""
-    t = dict(np.load(OUT / 'sw.npz'))
-    path = lbl.ROOT / 'src' / 'insilica' / 'data' / 'sw_ktables.npz'
+def export(src='sw.npz', name='sw_ktables.npz'):
+    """The fitted tables as the model reads them (src/insilica/data/sw_ktables.npz; #226: src, name for other air's)."""
+    t = dict(np.load(OUT / src))
+    path = lbl.ROOT / 'src' / 'insilica' / 'data' / name
     np.savez_compressed(path, logk=np.log(np.maximum(t['K'], 1e-40)).transpose(0, 2, 3, 1).astype(np.float32),
                         P=P_TAB, T=T_TAB, sun=t['sun'], ray=t['ray'], haze=t['haze'], ng=t['ng'], comps=t['comps'],
                         haze_par=np.array([swlbl.HAZE[k] for k in ('tau550', 'ssa', 'g', 'scale')]))

@@ -26,6 +26,21 @@
         "8766"
       ],
       "port": 8766
+    },
+    {
+      "name": "engine-earth7",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "-m",
+        "insilica.server",
+        "--n",
+        "4",
+        "--preset",
+        "earth7",
+        "--port",
+        "8767"
+      ],
+      "port": 8767
     }
   ]
 }

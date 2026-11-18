@@ -25,6 +25,22 @@ MOL = {'H2O': 1, 'CO2': 2, 'O3': 3, 'N2O': 4, 'CH4': 6, 'O2': 7}
 # column amounts (molecules/cm2) well above any planned case, for dropping lines too weak to matter (S*u < WMIN cm-1)
 UMAX = {'H2O': 3e23, 'CO2': 8e22, 'O3': 2e19, 'N2O': 2e19, 'CH4': 1e20, 'O2': 6e24}
 WMIN = 1e-6
+# (#226) other air: columns up to about a bar of CO2 and 1% of CH4 (set_wide()), for the wide tables
+UMAX_WIDE = {'H2O': 3e23, 'CO2': 2.2e25, 'O3': 2e19, 'N2O': 2e19, 'CH4': 2.2e23, 'O2': 6e24}
+# (#226) CO2's broadening of lines relative to air's: its own lines' gamma_self / gamma_air, strength-weighted over HITRAN 2020's
+# CO2 lines (1.329 in every band, 10-8000 cm-1); taken for every absorber (H2O's by CO2 is not in the line list: an assumption)
+E_CO2 = 1.33
+# (#226) the air the lines sit in: co2 None, Earth's (broadening by air); else the dry air's CO2 mole fraction, the rest air-like
+AIR = dict(co2=None)
+CIA_DIR = ROOT / 'cache' / 'hitran-cia'
+CIA_FILES = {'N2-N2': 'N2-N2_2021.cia', 'CO2-CO2': 'CO2-CO2_2024.cia', 'O2-O2': 'O2-O2_2024.cia', 'N2-H2': 'N2-H2_2024.cia',
+             'CO2-H2': 'CO2-H2_2024.cia', 'CO2-CH4': 'CO2-CH4_2024.cia', 'N2-CH4': 'N2-CH4_2024.cia'}
+
+
+def set_wide():
+    """Keep the weak lines other air's large columns need (#226); clears the lines read so far."""
+    UMAX.update(UMAX_WIDE)
+    _LINES.clear()
 
 
 # ---------------------------------------------------------------- data
@@ -142,7 +158,8 @@ def continuum(nu, T, p, vmr):
     sf = cp.interp(nu, w, _CKD['self_absco_ref']) * cp.exp(cp.interp(nu, w, _CKD['self_texp']) * math.log(296.0 / T))
     ff = cp.interp(nu, w, _CKD['for_absco_ref'])
     rad = nu * cp.tanh(C2 * nu / (2 * T))
-    return (sf * vmr + ff * (1 - vmr)) * rho * rad
+    bf = 1.0 if AIR['co2'] is None else (1 - AIR['co2']) + E_CO2 * AIR['co2']      # (#226) the foreign part by the air's broadening
+    return (sf * vmr + bf * ff * (1 - vmr)) * rho * rad
 
 
 # ---------------------------------------------------------------- the line kernel
@@ -245,7 +262,13 @@ def absorption(L, T, p, vmr, nu0, dnu, n):
     pself = patm * (vmr if L['gas'] == 'H2O' else 0.0)
     nuc = L['nu'] + L['dair'] * patm
     S = strength(L, T)
-    gl = (TREF / T) ** L['nair'] * (L['gair'] * (patm - pself) + L['gself'] * pself)
+    xc = AIR['co2']
+    if xc is None:
+        gl = (TREF / T) ** L['nair'] * (L['gair'] * (patm - pself) + L['gself'] * pself)
+    elif L['gas'] == 'CO2':                                         # (#226) CO2's lines by CO2 (each its own gamma_self) and the rest
+        gl = (TREF / T) ** L['nair'] * (L['gair'] * patm * (1 - xc) + L['gself'] * patm * xc)
+    else:                                                           # (#226) others by the air, CO2 E_CO2 times as broadening
+        gl = (TREF / T) ** L['nair'] * (L['gair'] * ((1 - xc) + E_CO2 * xc) * (patm - pself) + L['gself'] * pself)
     gd = L['nu'] / CLIGHT * np.sqrt(2 * KB * T / L['mass'])        # Doppler 1/e half width (HWHM / sqrt(ln2))
     R0 = L['nu'] * np.tanh(C2 * L['nu'] / (2 * T))
     pl = gl / math.pi / (CUT ** 2 + gl ** 2) if L['gas'] == 'H2O' and MODE['continuum'] else np.zeros_like(gl)
@@ -309,13 +332,13 @@ def fluxes(tau, Tlev, Ts, nu, dnu, angles=None, eps=1.0):
     return up, dn
 
 
-def layers(plev, Tlev, vmr):
+def layers(plev, Tlev, vmr, m_air=M_AIR):
     """Layers between levels (top first): log-mean pressure, mean temperature and vmr, and each gas's column amount
-    (molecules/cm2). vmr: {gas: level vmr}."""
+    (molecules/cm2). vmr: {gas: level vmr}; m_air the air's molar mass (kg/mol)."""
     plev, Tlev = np.asarray(plev, float), np.asarray(Tlev, float)
     pm = (plev[1:] - plev[:-1]) / np.log(plev[1:] / plev[:-1])
     Tm = (Tlev[1:] + Tlev[:-1]) / 2
-    air = np.diff(plev) / GRAV / M_AIR * NA / 1e4
+    air = np.diff(plev) / GRAV / m_air * NA / 1e4
     x = {g: (np.asarray(v)[1:] + np.asarray(v)[:-1]) / 2 for g, v in vmr.items()}
     return pm, Tm, x, {g: v * air for g, v in x.items()}
 
@@ -331,6 +354,74 @@ def optical_depth(pm, Tm, x, u, nu0, dnu, n, gases=None):
             _LINES[g] = read_lines(g)
         for i in range(len(pm)):
             tau[i] += cp.float32(u[g][i]) * absorption(_LINES[g], Tm[i], pm[i], x[g][i] if g == 'H2O' else 0.0, nu0, dnu, n)
+    return tau
+
+
+# ---------------------------------------------------------------- collision-induced absorption (#226)
+
+_CIA = {}
+
+
+def read_cia(pair):
+    """HITRAN's CIA file for the pair: its sets [(T, nu, k)] in the file's order (k in cm^5 / molecule^2)."""
+    if pair in _CIA:
+        return _CIA[pair]
+    lines = open(CIA_DIR / CIA_FILES[pair]).read().splitlines()
+    sets, i = [], 0
+    while i < len(lines):
+        h = lines[i]
+        if not h.strip():
+            i += 1
+            continue
+        n, T = int(h[40:47]), float(h[47:54])
+        a = np.array([[float(v) for v in lines[i + 1 + j].split()[:2]] for j in range(n)])
+        sets.append((T, a[:, 0], np.maximum(a[:, 1], 0.0)))
+        i += n + 1
+    _CIA[pair] = sets
+    return sets
+
+
+def cia_k(pair, nu, T, step=0.5):
+    """The pair's binary absorption coefficient (cm^5 / molecule^2) at wavenumbers nu (NumPy, ascending) and temperature
+    T: at each wavenumber, linear in T between the nearest sets below and above T that cover it (the nearest one beyond
+    them; the first in the file among equal temperatures), zero where none does. Evaluated every `step` cm-1 (the data's
+    own resolution is 0.1-10 cm-1) and interpolated to nu."""
+    nu = np.asarray(nu, float)
+    c = np.arange(np.floor(nu[0] / step) * step, nu[-1] + 2 * step, step)
+    Tl, Tu = np.full(c.shape, -np.inf), np.full(c.shape, np.inf)
+    vl, vu = np.zeros(c.shape), np.zeros(c.shape)
+    for Ts, x, k in read_cia(pair):
+        m = (c >= x[0]) & (c <= x[-1])
+        if not m.any():
+            continue
+        v = np.interp(c, x, k)
+        lo, hi = m & (Ts <= T) & (Ts > Tl), m & (Ts >= T) & (Ts < Tu)
+        Tl[lo], vl[lo] = Ts, v[lo]
+        Tu[hi], vu[hi] = Ts, v[hi]
+    both = np.isfinite(Tl) & np.isfinite(Tu)
+    f = np.where(both & (Tu > Tl), (T - Tl) / np.where(Tu > Tl, Tu - Tl, 1.0), 0.0)
+    out = np.where(both, vl + f * (vu - vl), np.where(np.isfinite(Tl), vl, np.where(np.isfinite(Tu), vu, 0.0)))
+    return np.interp(nu, c, out)
+
+
+def cia_pairs(air):
+    """The pairs whose two gases are in the dry air {gas: mole fraction} (lower-case names), with x_a x_b."""
+    out = {}
+    for pair in CIA_FILES:
+        a, b = (g.lower() for g in pair.split('-'))
+        if air.get(a, 0) > 0 and air.get(b, 0) > 0:
+            out[pair] = air[a] * air[b]
+    return out
+
+
+def cia_tau(pm, Tm, u_air, air, nu):
+    """Layers' collision-induced optical depths (nlay x len(nu), cupy float32): k x_a x_b n u, n the number density."""
+    tau = cp.zeros((len(pm), len(nu)), cp.float32)
+    nu_h = cp.asnumpy(nu) if isinstance(nu, cp.ndarray) else nu
+    for pair, xx in cia_pairs(air).items():
+        for i in range(len(pm)):
+            n = pm[i] / (KB * Tm[i]) * 1e-6                       # molecules / cm^3
+            tau[i] += cp.asarray(cia_k(pair, nu_h, Tm[i]) * (xx * n * u_air[i]), cp.float32)
     return tau
 
 
@@ -365,6 +456,38 @@ def reference(name, co2=400e-6, bands=BANDS, dnu=DNU, tag='', **kw):
     REF.mkdir(parents=True, exist_ok=True)
     np.savez(REF / f'lbl_{name}_{co2 * 1e6:.0f}{tag}.npz', p=P['p'], T=P['T'], bands=np.array(bands), **out)
     return out, P
+
+
+def reference_air(name, base, air, m_air, bands=BANDS, dnu=DNU, o3=1.0, n2o=0.0, path=None):
+    """(#226) Line-by-line fluxes through an AFGL column's temperatures and vapor in another dry air {gas: mole fraction}
+    (molar mass m_air, kg/mol): its CO2 and CH4 well mixed, ozone the column's times o3, N2O n2o, lines broadened by the air,
+    collision-induced absorption of its pairs. Saved as tests/data/lbl's columns are (p, T, up, dn, vmr_*), with the air."""
+    import afgl
+    set_wide()
+    AIR['co2'] = air.get('co2', 0.0)
+    P = afgl.profile(base)
+    nl = len(P['p'])
+    vmr = {'H2O': P['vmr']['H2O'], 'CO2': np.full(nl, air.get('co2', 0.0)), 'O3': P['vmr']['O3'] * o3,
+           'N2O': np.full(nl, n2o), 'CH4': np.full(nl, air.get('ch4', 0.0))}
+    pm, Tm, x, u = layers(P['p'], P['T'], vmr, m_air)
+    u_air = np.diff(P['p']) / GRAV / m_air * NA / 1e4
+    nb = len(bands) - 1
+    out = {k: np.zeros((nb, nl)) for k in ('up', 'dn')}
+    for b in range(nb):
+        nu0, d, n = grid(bands[b], bands[b + 1], dnu)
+        nu = nu0 + d * (cp.arange(n, dtype=cp.float64) + 0.5)
+        tau = optical_depth(pm, Tm, x, u, nu0 + d / 2, d, n, gases=[g for g in x if np.any(x[g] > 0)])
+        tau += cia_tau(pm, Tm, u_air, air, nu)
+        out['up'][b], out['dn'][b] = fluxes(tau, P['T'], P['T'][-1], nu, d)
+        del tau
+        print(f'{name} band {bands[b]}-{bands[b + 1]}: OLR {out["up"][b][0]:.2f}, surface down {out["dn"][b][-1]:.2f}', flush=True)
+    AIR['co2'] = None
+    path = path or ROOT / 'tests' / 'data' / 'lbl' / f'lbl_{name}.npz'
+    keys = sorted(air)
+    np.savez(path, p=P['p'], T=P['T'], up=out['up'], dn=out['dn'], m_air=m_air, air_gas=np.array(keys),
+             air_x=np.array([air[k] for k in keys]), **{'vmr_' + g: v for g, v in vmr.items()})
+    print(f'{name}: OLR {out["up"][:, 0].sum():.2f}, surface down {out["dn"][:, -1].sum():.2f} W/m2 -> {path}')
+    return out
 
 
 if __name__ == '__main__':

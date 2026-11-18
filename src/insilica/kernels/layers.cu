@@ -79,9 +79,10 @@ extern "C" __global__ void lay_ubar(int N, int E, int L, const real* h, const re
 // at its top z_k. Its layer-mean horizontal force is -grad M_k + zm_k grad sigma_k (Ripa 1993; the ocean's form of the
 // air's -grad M + pibar grad theta), M_k = P_k + sigma_k z_k (the g eta part in the fast mode) and zm_k = z_k - h_k / 2 the
 // layer's mid-height (written here for lay_slow). With sigma constant in each layer it is the fixed-g' form above.
+// tide (V2-6f, #228; else NULL): the tide-generating potential V (m^2/s^2), the same force grad V on every layer: B_k - V.
 extern "C" __global__ void lay_bern(int N, int E, int L, const real* h, const real* u, const real* b, const real* gp,
                                     const int* cellEdge, const real* le, const real* de, const real* areaCell, real* B,
-                                    const real* sig, real* zm) {
+                                    const real* sig, real* zm, const real* tide) {
   LOOP1(i, N)
   real z[LMAX];
   real s = b[i];
@@ -101,7 +102,9 @@ extern "C" __global__ void lay_bern(int N, int E, int L, const real* h, const re
       if (e < 0) break;
       ke += le[e] * de[e] * (real)0.25 * ul[e] * ul[e];
     }
-    B[(size_t)k * N + i] = Mp + ke / areaCell[i];
+    real Bk = Mp + ke / areaCell[i];
+    if (tide) Bk -= tide[i];
+    B[(size_t)k * N + i] = Bk;
   }
 }
 
@@ -268,7 +271,7 @@ extern "C" __global__ void lay_slow(int N, int E, int L, const fast* pk, const f
                                     const real* de, const real* drag, const real* stress,
                                     real floor_, real nu4, const real* lap4, const real* theta, const real* pibar,
                                     real dts, real thin, real shelf, real* Tp, real* G, real* He, real* ubs,
-                                    const real* sig, const real* zm, const real* ob) {
+                                    const real* sig, const real* zm, const real* ob, real cd_bot, const real* cbot) {
   LOOP1(e, E)
   real T[LMAX], hev[LMAX], sqk[LMAX];
   real H = 0, U = 0, GT = 0;
@@ -298,10 +301,21 @@ extern "C" __global__ void lay_slow(int N, int E, int L, const fast* pk, const f
     const real sq = theta ? (real)1 : sq0;
     sqk[k] = sq0;
     real d = Q - DIVBY(sq * (Bl[eJ[e]] - Bl[eI[e]]), de[e]) - (drag[k] + (1 - sq) / (real)21600) * ul[e];
-    if (stress[k] != 0) {
+    real ck = stress[k];
+    if (k == L - 1 && (cd_bot > 0 || cbot)) {
+      // (V2-6f, #228, with tides) the bottom layer's quadratic stress cd |u| (|u| from its normal and TRiSK tangential
+      // components) and the internal tide's drag (cbot, m/s per edge; Jayne & St Laurent 2001)
+      if (cd_bot > 0) {
+        fast vt = 0;
+        for (int m = eoeStart[e]; m < eoeStart[e + 1]; m++) vt += wf[m] * pk[((size_t)eoe[m] * L + k) * 3 + 1];
+        ck += cd_bot * sqrt(ul[e] * ul[e] + (real)vt * (real)vt);
+      }
+      if (cbot) ck += cbot[e];
+    }
+    if (ck != 0) {
       // exact exponential decay over the stage (rate r = c / h): the effective rate (1 - e^(-r dts)) / dts is r for
       // weak friction and never exceeds 1/dts, so a nearly massless layer is stopped, not overshot (decision #36)
-      const real r = stress[k] / (he > floor_ ? he : floor_);
+      const real r = ck / (he > floor_ ? he : floor_);
       d = d - ((r * dts > (real)1e-8) ? (1 - exp(-r * dts)) / dts : r) * ul[e];
     }
     if (theta) {                       // air: + pibar grad(theta), the pressure force of theta varying in a layer

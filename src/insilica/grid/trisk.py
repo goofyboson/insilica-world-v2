@@ -147,6 +147,6 @@ def cell_winds(g, u):
     the Voronoi edge midpoint xm, projected onto the tangent plane. u (E,) → (N, 3) in m/s.
     (v1's cellWinds uses the kite corner xe instead; its error does not fall with resolution, SPEC §9 #17.)"""
     ce = np.where(g.cellEdge >= 0, g.cellEdge, 0)
-    c = np.where(g.cellEdge >= 0, g.cellSign * u[ce] * g.le[ce] * R_PLANET, 0.0)
+    c = np.where(g.cellEdge >= 0, g.cellSign * u[ce] * g.le[ce] * getattr(g, 'radius', R_PLANET), 0.0)
     v = np.sum(c[..., None] * (g.xm[ce] - g.pos[:, None, :]), axis=1) / g.areaCell[:, None]
     return v - np.sum(v * g.pos, axis=1)[:, None] * g.pos

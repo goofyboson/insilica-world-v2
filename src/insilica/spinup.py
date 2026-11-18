@@ -106,7 +106,11 @@ class OceanOnly:
         s.k['ocn_pen'](*grid_dims(g.N), (i32(g.N), i32(s.L), s.h, s.T, s.qocean, s.qsw, R(c['rho'] * c['cw']), R(c['sw_R']),
                                         R(c['sw_z1']), R(c['sw_z2']), R(dt), s.q_acc, s.sun_acc, s._land(),
                                         s.wx if c['sw_up'] > 0 else NULL))
+        if w.tides is not None:                                    # (#228) the tide's force at the step's middle (its clock still at the start)
+            w.tides.force(self.time, -0.5 * dt)
         s.step(mix=mix)
+        if w.tides is not None:
+            w.tides.mix(dt)
         self.k['play_time']((1,), (1,), (self.time, R(dt)))
 
     def run(self, years):

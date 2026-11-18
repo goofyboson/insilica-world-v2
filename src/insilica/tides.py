@@ -20,9 +20,10 @@ DAY = 86400.0
 TIDES = dict(moon=dict(gm=4.9028e12, a=3.84748e8, e=0.0549, i=5.145, T=27.321662 * DAY, node_T=-6798.38 * DAY, aps_T=3232.6 * DAY,
                        L0=0.0, node0=0.0, aps0=0.0),
              sun_gm=1.32712440018e20, sun_a=1.495978707e11, love=0.69, gamma=0.2,
-             cd=2.5e-3, kappa_it=2 * math.pi / 10.0e3)
+             cd=2.5e-3, kappa_it=2 * math.pi / 10.0e3, zeta=500.0)
 # cd: the bottom's quadratic drag coefficient (global tide models' 2.5e-3; Taylor 1919, Egbert & Ray 2001); kappa_it the internal
-# tide drag's wavenumber, 2 pi / 10 km (Jayne & St Laurent 2001)
+# tide drag's wavenumber, 2 pi / 10 km (Jayne & St Laurent 2001); zeta (m) the height over which the floor's mixing fades (St Laurent,
+# Simmons & Jayne 2002; #229)
 
 
 def settings(tides):
@@ -76,4 +77,4 @@ class Tides:
         self.k['tide_mix'](*grid_dims(g.N), (i32(g.N), i32(g.E), i32(s.L), s.h, s.u, s.T, s.S, g.cellEdge, g.le, g.de, g.areaCell,
                                              s._land() if s._land() is not None else NULL, R(c['bottom_stress']), R(c['rho']),
                                              R(self.cfg['gamma']), R(dt)) + s.eos() + (self.dsum, R(self.cfg['cd']),
-                                             s.core.cbot if s.core.cbot is not None else NULL))
+                                             s.core.cbot if s.core.cbot is not None else NULL, R(self.cfg['zeta'])))

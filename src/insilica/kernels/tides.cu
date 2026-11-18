@@ -10,10 +10,12 @@
 //
 // tide_mix: the bottom stress's dissipation D = rho c |u_b|^2 (W/m^2; c the bottom layer's whole stress coefficient: its linear
 // one, the quadratic cd |u_b| and the internal tide's drag, |u_b| the cell's speed from its edges), a share gamma
-// of it (the mixing efficiency) spent raising the column's potential energy by mixing heat and salt across its interfaces from
-// the bottom up: two layers of thickness h1 over h2, buoyancy step db > 0, mixed a fraction f (their step falls to (1 - f) db)
-// gain rho h1 h2 db f / 2, so f = gamma D dt / (rho h1 h2 db / 2) up to 1, the energy left passing to the interface above. Heat and
-// salt are exchanged in equal volumes v = f h1 h2 / (h1 + h2), so both are conserved exactly; the layers keep their water.
+// of it (the mixing efficiency) spent raising the column's potential energy by mixing heat and salt across its interfaces: the
+// mixing the floor's dissipation drives fades with height above the floor, exp(-z / zeta), zeta about 500 m (St Laurent, Simmons
+// & Jayne 2002), so an interface z above the floor gets gamma D dt exp(-z / zeta) (#229: a deep sea's thermocline, 3 km up, none;
+// a shelf sea's interfaces, near the floor, nearly all). Two layers of thickness h1 over h2, buoyancy step db > 0, mixed a fraction
+// f (their step falls to (1 - f) db) gain rho h1 h2 db f / 2, so f = E / (rho h1 h2 db / 2) up to 1. Heat and salt are exchanged
+// in equal volumes v = f h1 h2 / (h1 + h2), so both are conserved exactly; the layers keep their water.
 
 typedef REAL real;
 
@@ -64,7 +66,7 @@ extern "C" __global__ void tide_pot(int N, const real* tp, const real* time, rea
 extern "C" __global__ void tide_mix(int N, int E, int L, const real* h, const real* u, real* T, real* S, const int* cellEdge,
                                     const real* le, const real* de, const real* area, const real* land, real c_bot, real rho,
                                     real gamma, real dt, real grav, real alpha, real alpha2, real beta, real* dsum, real cd,
-                                    const real* cbot) {
+                                    const real* cbot, real zeta) {
   LOOP1(i, N)
   if (land && land[i] > (real)0.5) return;
   const real* ub = u + (size_t)(L - 1) * E;
@@ -80,16 +82,18 @@ extern "C" __global__ void tide_mix(int N, int E, int L, const real* h, const re
   const real u2 = s / (2 * area[i]);                            // the cell's speed squared
   const real D = rho * (c_bot + cd * sqrt(u2) + (ne ? cit / ne : (real)0)) * u2;   // W/m^2
   dsum[i] += D * dt;
-  real En = gamma * D * dt;                                      // J/m^2 for mixing
-  for (int k = L - 2; k >= 0 && En > 0; k--) {
+  const real En0 = gamma * D * dt;                               // J/m^2 for mixing, at the floor
+  real z = 0;                                                    // the interface's height above the floor
+  for (int k = L - 2; k >= 0; k--) {
     const size_t a = (size_t)k * N + i, b = (size_t)(k + 1) * N + i;
     const real h1 = h[a], h2 = h[b];
+    z += h2;
+    const real En = En0 * exp(-z / zeta);
     const real t1 = T[a] - (real)273.15, t2 = T[b] - (real)273.15;
     const real db = grav * (alpha * (t1 - t2) + (real)0.5 * alpha2 * (t1 * t1 - t2 * t2) - beta * (S[a] - S[b]));
     if (!(db > 0) || !(h1 > 0) || !(h2 > 0)) continue;
     const real full = rho * h1 * h2 * db / 2;
     const real f = En < full ? En / full : (real)1;
-    En -= f * full;
     const real v = f * h1 * h2 / (h1 + h2);
     const real dT = T[b] - T[a], dS = S[b] - S[a];
     T[a] += v / h1 * dT; T[b] -= v / h2 * dT;

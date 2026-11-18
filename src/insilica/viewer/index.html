@@ -39,6 +39,11 @@
   #range { display: flex; justify-content: space-between; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 2px; }
   #msg { color: #f0883e; margin-top: 8px; white-space: pre-line; }
   #conn { color: var(--muted); }
+  .grid2 { display: grid; grid-template-columns: 1fr 74px; gap: 4px 6px; align-items: center; margin: 6px 0; }
+  .grid2 label { color: var(--muted); }
+  .grid2 input { width: 100%; box-sizing: border-box; }
+  details summary { cursor: pointer; color: var(--muted); margin: 6px 0; }
+  .hint { color: var(--muted); font-size: 12px; margin: 4px 0; }
 </style>
 </head>
 <body>
@@ -61,10 +66,20 @@
     <dt>Solar time at 0°</dt><dd id="d-clock">–</dd>
     <dt>Speed</dt><dd id="d-speed">–</dd>
   </dl>
-  <h2>Sun</h2>
+  <h2>Planet</h2>
   <dl>
-    <dt>Declination</dt><dd id="d-dec">–</dd>
-    <dt>Overhead at</dt><dd id="d-sub">–</dd>
+    <dt>Radius</dt><dd id="d-radius">–</dd>
+    <dt>Day, year</dt><dd id="d-dayyear">–</dd>
+    <dt>Tilt, eccentricity</dt><dd id="d-tilt">–</dd>
+    <dt>Air</dt><dd id="d-gases">–</dd>
+    <dt>Tides</dt><dd id="d-tides">–</dd>
+  </dl>
+  <h2>Sun and Moon</h2>
+  <dl>
+    <dt>Sun overhead at</dt><dd id="d-sub">–</dd>
+    <dt>Sun declination</dt><dd id="d-dec">–</dd>
+    <dt>Moon overhead at</dt><dd id="d-moon">–</dd>
+    <dt>Moon distance</dt><dd id="d-moonr">–</dd>
   </dl>
   <h2>Field</h2>
   <div id="fieldname">–</div>
@@ -90,15 +105,45 @@
   <h2>New world</h2>
   <div class="row"><label for="n">Grid n</label><select id="n"></select></div>
   <div class="row"><label for="preset">Preset</label><select id="preset"></select></div>
+  <details id="planetform"><summary>Planet settings (blank: the preset's)</summary>
+    <div class="grid2">
+      <label for="p-radius">Radius (km)</label><input id="p-radius" type="number" step="any" placeholder="6371">
+      <label for="p-day">Day (hours)</label><input id="p-day" type="number" step="any" placeholder="24">
+      <label for="p-year">Year (days)</label><input id="p-year" type="number" step="any" placeholder="365">
+      <label for="p-grav">Gravity (m/s²)</label><input id="p-grav" type="number" step="any" placeholder="9.81">
+      <label for="p-s0">Sunlight (W/m²)</label><input id="p-s0" type="number" step="any" placeholder="1361">
+      <label for="p-tilt">Tilt (°)</label><input id="p-tilt" type="number" step="any" placeholder="23.44">
+      <label for="p-ecc">Eccentricity</label><input id="p-ecc" type="number" step="any" placeholder="0.0167">
+      <label for="p-n2">N₂ (%)</label><input id="p-n2" type="number" step="any" placeholder="78.08">
+      <label for="p-o2">O₂ (%)</label><input id="p-o2" type="number" step="any" placeholder="20.95">
+      <label for="p-ar">Ar (%)</label><input id="p-ar" type="number" step="any" placeholder="0.93">
+      <label for="p-co2">CO₂ (%)</label><input id="p-co2" type="number" step="any" placeholder="0.042">
+      <label for="p-ch4">CH₄ (%)</label><input id="p-ch4" type="number" step="any" placeholder="0">
+    </div>
+    <div class="hint">The air's gases set its heat capacity, molar mass and radiation; give them all, or none.</div>
+    <label class="check"><input type="checkbox" id="p-tides"> Tides</label>
+    <div class="grid2">
+      <label for="p-mmass">Moon mass (× ours)</label><input id="p-mmass" type="number" step="any" placeholder="1">
+      <label for="p-mdist">Moon distance (× ours)</label><input id="p-mdist" type="number" step="any" placeholder="1">
+    </div>
+    <label class="check"><input type="checkbox" id="p-nomoon"> No moon</label>
+    <label class="check"><input type="checkbox" id="p-gas"> Carry CO₂, CH₄, N₂O as tracers</label>
+    <label class="check"><input type="checkbox" id="p-geo"> Geology's accumulators</label>
+  </details>
   <div class="row"><button id="new">Start new world</button></div>
+  <h2>Save and load</h2>
+  <div class="row"><input id="savename" placeholder="name" style="flex: 1; min-width: 0"><button id="save">Save</button></div>
+  <div class="row"><select id="saves" style="flex: 1; min-width: 0"></select><button id="load">Load</button></div>
+  <div class="hint">In cache/saves/ on the engine's machine.</div>
   <h2>View</h2>
   <label class="check"><input type="checkbox" id="v-sun" checked> Sun (not to scale)</label>
+  <label class="check"><input type="checkbox" id="v-moon" checked> Moon (not to scale)</label>
   <label class="check"><input type="checkbox" id="v-stars" checked> Bright stars</label>
   <div class="row"><label>Hold fixed</label>
     <label class="check"><input type="radio" name="hold" id="v-earth" checked> Earth</label>
     <label class="check"><input type="radio" name="hold" id="v-sunfix"> Sun</label></div>
   <div class="row"><button id="v-reset">Reset view</button></div>
-  <div style="color: var(--muted); margin-top: 8px">Drag to turn, wheel to zoom. Zoom out to see the sun.</div>
+  <div style="color: var(--muted); margin-top: 8px">Drag to turn, wheel to zoom. Zoom out to see the sun and the moon.</div>
 </div>
 
 <script src="vendor/three.min.js"></script>
@@ -107,14 +152,17 @@
 // Viewer for the local engine (protocol: src/insilica/server/app.py). It draws each cell as a fan of
 // triangles (center plus Voronoi corners) colored by the subscribed field, with the sun and the bright stars around
 // it in the planet's own frame.
-const FIELD_NAMES = { h: 'layer thickness (m, or kg/m² for air)', z: 'height of the layer top (m)', eta: 'free surface (m)', psi: 'tracer', speed: 'wind speed (m/s)', vort: 'relative vorticity (1/s)', theta: 'potential temperature θ (K)', T: 'air temperature (K)', Ts: 'surface temperature (K)', Tsurf: 'surface skin temperature, ice skin over ice (K)', ps: 'surface pressure (hPa)', q: 'specific humidity (g/kg)', rh: 'relative humidity', rain: 'rain (mm/day)', evap: 'evaporation (mm/day)', ice: 'sea ice (m)', sst: 'ocean: sea surface temperature (°C)', sss: 'ocean: sea surface salinity (psu)', mld: 'ocean: mixed-layer depth (m)', tthermo: 'ocean: thermocline layer temperature (°C)', tdeep: 'ocean: abyss temperature (°C)', current: 'ocean: mixed-layer current speed (m/s)', land: 'land mask', elev: 'ground height (m)', soil: 'soil water (kg/m²)' };
+const FIELD_NAMES = { h: 'layer thickness (m, or kg/m² for air)', z: 'height of the layer top (m)', eta: 'free surface (m)', psi: 'tracer', speed: 'wind speed (m/s)', vort: 'relative vorticity (1/s)', theta: 'potential temperature θ (K)', T: 'air temperature (K)', Ts: 'surface temperature (K)', Tsurf: 'surface skin temperature, ice skin over ice (K)', ps: 'surface pressure (hPa)', q: 'specific humidity (g/kg)', rh: 'relative humidity', rain: 'rain (mm/day)', evap: 'evaporation (mm/day)', ice: 'sea ice (m)', sst: 'ocean: sea surface temperature (°C)', sss: 'ocean: sea surface salinity (psu)', mld: 'ocean: mixed-layer depth (m)', tthermo: 'ocean: thermocline layer temperature (°C)', tdeep: 'ocean: abyss temperature (°C)', current: 'ocean: mixed-layer current speed (m/s)', land: 'land mask', elev: 'ground height (m)', soil: 'soil water (kg/m²)', pond: 'surface water (kg/m²)', snow: 'snow (kg/m²)', lightning: 'lightning (flashes/km²/year)', sla: 'ocean: sea level anomaly (m)', tide: 'ocean: equilibrium tide (m)', tsoil: 'land: soil temperature (°C)', co2: 'CO₂ (ppm)', ch4: 'CH₄ (ppm)', n2o: 'N₂O (ppm)', g_rain: 'geology: mean rain (mm/day)', g_rx1: 'geology: largest one-day rain (mm)', g_river: 'geology: river flow (m³/s)', g_ftc: 'geology: freeze–thaw cycles a year', g_weather: 'geology: weathering (mm/day at 15 °C)' };
+const GROUPS = [['Air', ['h', 'z', 'eta', 'psi', 'speed', 'vort', 'theta', 'T', 'Ts', 'Tsurf', 'ps', 'q', 'rh', 'rain', 'evap', 'lightning']],
+                ['Ocean and ice', ['sst', 'sss', 'mld', 'tthermo', 'tdeep', 'current', 'ice', 'sla', 'tide']],
+                ['Land', ['land', 'elev', 'soil', 'pond', 'snow', 'tsoil']], ['Composition', ['co2', 'ch4', 'n2o']],
+                ['Geology', ['g_rain', 'g_rx1', 'g_river', 'g_ftc', 'g_weather']]];
 const $ = (id) => document.getElementById(id);
 let ws, info, info0 = false, mesh, colors, cellDeg, playing = false, field = 'psi', layer = 0;
 
-// The sun's clock, as the column physics computes it (kernels/air.cu, atmosphere.py): tilt 23.44°, a 365-day year
-// and a 24-hour day; at time 0 the sun stands over 0° longitude at the March equinox.
-const TILT = 23.44 * Math.PI / 180, DAY_S = 86400, YEAR_S = 365 * DAY_S;
-const SUN_DIST = 6, SKY_R = 60;                        // display distances in planet radii (the sun is not to scale)
+// The Sun and the Moon come from the engine (status.sky: World.sky(), placed as the model's tide and sunlight place them);
+// the viewer has no clock of its own (V2-6g).
+const SUN_DIST = 6, MOON_DIST = 4, SKY_R = 60;          // display distances in planet radii (not to scale)
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
@@ -134,7 +182,7 @@ globe.add(frame);
 // the solar hour angle with the sun held fixed (the Earth then turns under it).
 const planet = new THREE.Group();
 frame.add(planet);
-let fixedSun = false, lastT = 0;
+let fixedSun = false, lastSky = null;
 function resize() { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
 addEventListener('resize', resize); resize();
 
@@ -165,6 +213,12 @@ planet.add(sun);
 const subsolar = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture('#fff3b0', 'rgba(255,220,120,0.6)'), depthTest: true }));
 subsolar.scale.set(0.06, 0.06, 1);
 planet.add(subsolar);
+const moon = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture('#e8eaee', 'rgba(170,180,195,0.45)'), depthWrite: false }));
+moon.scale.set(0.7, 0.7, 1);
+planet.add(moon);
+const sublunar = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture('#dfe6f0', 'rgba(160,175,200,0.6)'), depthTest: true }));
+sublunar.scale.set(0.05, 0.05, 1);
+planet.add(sublunar);
 
 // ---- Stars: the brightest stars at their real positions (J2000 right ascension in hours, declination in degrees,
 // visual magnitude, color; rounded catalog values — a visual approximation, not an ephemeris) ----
@@ -226,33 +280,38 @@ planet.add(sky);
   }
 })();
 
-// Place the sun, the subsolar marker and the sky for model time t (s). The sun's ecliptic longitude is 2 pi t / year
-// from the March equinox; in the planet's frame it stands over longitude -2 pi (t mod day) / day at declination
-// asin(sin tilt sin lambda) (as the column physics has it). The stars keep their equatorial positions; the planet
-// turns under them by the sidereal angle theta_g = alpha_sun + 2 pi (t mod day) / day.
-function placeSky(t) {
-  lastT = t;
-  const lam = 2 * Math.PI * t / YEAR_S, rot = 2 * Math.PI * (((t % DAY_S) + DAY_S) % DAY_S) / DAY_S;
-  const dec = Math.asin(Math.sin(TILT) * Math.sin(lam));
-  const lon = -rot;
-  const s = [Math.cos(dec) * Math.cos(lon), Math.cos(dec) * Math.sin(lon), Math.sin(dec)];
+// Place the Sun, the Moon, their overhead markers and the stars from the engine's sky (World.sky(): unit vectors in the
+// planet's frame, the Sun's right ascension, the day's turn rot, the day and year lengths). The stars keep their
+// equatorial positions; the planet turns under them by the sidereal angle ra_sun + rot.
+const deg = (r) => r * 180 / Math.PI;
+const where = (v) => { const la = deg(Math.asin(v[2])), lo = deg(Math.atan2(v[1], v[0]));
+                       return `${Math.abs(la).toFixed(1)}°${la >= 0 ? 'N' : 'S'}, ${Math.abs(lo).toFixed(1)}°${lo >= 0 ? 'E' : 'W'}`; };
+function placeSky(sk) {
+  lastSky = sk;
+  const on = !!sk;
+  sun.visible = subsolar.visible = on && $('v-sun').checked;
+  moon.visible = sublunar.visible = on && $('v-moon').checked;
+  if (!on) { for (const id of ['d-dec', 'd-sub', 'd-moon', 'd-moonr', 'd-clock']) $(id).textContent = '–'; return; }
+  const s = sk.sun, m = sk.moon;
   sun.position.set(SUN_DIST * s[0], SUN_DIST * s[1], SUN_DIST * s[2]);
   subsolar.position.set(1.004 * s[0], 1.004 * s[1], 1.004 * s[2]);
-  const alpha = Math.atan2(Math.cos(TILT) * Math.sin(lam), Math.cos(lam));
-  sky.rotation.z = -(alpha + rot);
-  planet.rotation.z = fixedSun ? rot : 0;
-  const deg = (r) => r * 180 / Math.PI, lonDeg = ((deg(lon) % 360) + 540) % 360 - 180;
-  $('d-dec').textContent = `${deg(dec).toFixed(2)}°`;
-  $('d-sub').textContent = `${Math.abs(deg(dec)).toFixed(1)}°${dec >= 0 ? 'N' : 'S'}, ${Math.abs(lonDeg).toFixed(1)}°${lonDeg >= 0 ? 'E' : 'W'}`;
-  const year = Math.floor(t / YEAR_S) + 1, doy = (t % YEAR_S) / DAY_S;
+  moon.position.set(MOON_DIST * m[0], MOON_DIST * m[1], MOON_DIST * m[2]);
+  sublunar.position.set(1.004 * m[0], 1.004 * m[1], 1.004 * m[2]);
+  sky.rotation.z = -(sk.ra_sun + sk.rot);
+  planet.rotation.z = fixedSun ? sk.rot : 0;
+  $('d-dec').textContent = `${deg(Math.asin(s[2])).toFixed(2)}°`;
+  $('d-sub').textContent = where(s);
+  $('d-moon').textContent = where(m);
+  $('d-moonr').textContent = `${sk.moon_r.toFixed(3)} × its mean`;
+  const t = sk.t, year = Math.floor(t / sk.year_s) + 1, doy = (t % sk.year_s) / sk.day_s;
   $('d-date').textContent = `year ${year}, day ${doy.toFixed(1)}`;
-  const hours = (12 + 24 * (((t % DAY_S) + DAY_S) % DAY_S) / DAY_S) % 24;     // local solar time at 0° longitude
+  const hours = (12 + 24 * (((t % sk.day_s) + sk.day_s) % sk.day_s) / sk.day_s) % 24;     // local solar time at 0° longitude
   $('d-clock').textContent = `${String(Math.floor(hours)).padStart(2, '0')}:${String(Math.floor((hours % 1) * 60)).padStart(2, '0')}`;
 }
-placeSky(0);
-$('v-sun').onchange = () => { sun.visible = subsolar.visible = $('v-sun').checked; };
+placeSky(null);
+$('v-sun').onchange = $('v-moon').onchange = () => placeSky(lastSky);
 $('v-stars').onchange = () => { sky.visible = $('v-stars').checked; };
-$('v-earth').onchange = $('v-sunfix').onchange = () => { fixedSun = $('v-sunfix').checked; placeSky(lastT); };
+$('v-earth').onchange = $('v-sunfix').onchange = () => { fixedSun = $('v-sunfix').checked; placeSky(lastSky); };
 // Panels fold to their title; on a narrow window both start folded so the globe stays in view.
 for (const b of document.querySelectorAll('.fold')) {
   const p = $(b.dataset.panel);
@@ -324,8 +383,8 @@ function paint(h, a) {
   $('lo').textContent = fmt(lo); $('hi').textContent = fmt(hi);
   $('d-mean').textContent = fmt(sum / a.length);
   $('msg').textContent = h.finite === false ? 'This field has non-finite values: the run has blown up.' : '';
-  const nl = info ? info.layers : 1;
-  $('fieldname').textContent = `${FIELD_NAMES[h.name] || h.name}${nl > 1 ? `, layer ${h.layer}` : ''}`;
+  const nl = info ? (h.name === 'tsoil' ? info.soil_layers : info.layers) : 1;
+  $('fieldname').textContent = `${FIELD_NAMES[h.name] || h.name}${nl > 1 ? `, ${h.name === 'tsoil' ? 'soil ' : ''}layer ${h.layer}` : ''}`;
 }
 
 function send(m) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); }
@@ -343,9 +402,15 @@ function connect() {
         const pick = ['Tsurf', 'Ts', 'psi'].find(f => m.fields.includes(f));
         if (!m.fields.includes(field) || (!info0 && pick)) field = pick || m.fields[0];
         info0 = true;
-        fill($('field'), m.fields, field, (v) => FIELD_NAMES[v] || v);
-        layer = Math.min(layer, m.layers - 1);
-        fill($('layer'), [...Array(m.layers).keys()], layer, (k) => m.layers === 1 ? '0 (single layer)' : k === 0 ? '0 (top)' : k === m.layers - 1 ? `${k} (bottom)` : `${k}`);
+        fillFields(m.fields);
+        fillLayers();
+        const pl = m.planet || {};
+        $('d-radius').textContent = pl.radius ? `${(pl.radius / 1000).toFixed(0)} km, g ${pl.grav.toFixed(2)} m/s²` : '–';
+        $('d-dayyear').textContent = pl.day_s ? `${(pl.day_s / 3600).toFixed(2)} h, ${(pl.year_s / pl.day_s).toFixed(1)} days` : '–';
+        $('d-tilt').textContent = pl.tilt !== undefined ? `${deg(pl.tilt).toFixed(2)}°, ${(pl.ecc || 0).toFixed(4)}` : '–';
+        $('d-gases').textContent = pl.gases ? Object.entries(pl.gases).map(([g, x]) => `${g.toUpperCase()} ${(100 * x).toPrecision(3)}%`).join(', ') : (pl.day_s ? "Earth's (default)" : 'none');
+        $('d-tides').textContent = m.tides ? 'on' : 'off';
+        fill($('saves'), m.saves.length ? m.saves : ['(none yet)'], m.saves[m.saves.length - 1]);
         fill($('preset'), m.presets, m.preset);
         fill($('n'), [2, 3, 4, 5, 6, 7, 8], m.n);
         $('d-preset').textContent = m.preset;
@@ -366,6 +431,26 @@ function connect() {
 function fill(sel, values, current, label = (v) => v) {
   sel.innerHTML = values.map(v => `<option value="${v}"${String(v) === String(current) ? ' selected' : ''}>${label(v)}</option>`).join('');
 }
+// The field list in groups (air, ocean and ice, land, composition, geology), each field with its units.
+function fillFields(fields) {
+  const opt = (v) => `<option value="${v}"${v === field ? ' selected' : ''}>${FIELD_NAMES[v] || v}</option>`;
+  const seen = new Set();
+  let html = '';
+  for (const [g, names] of GROUPS) {
+    const here = names.filter(v => fields.includes(v));
+    here.forEach(v => seen.add(v));
+    if (here.length) html += `<optgroup label="${g}">${here.map(opt).join('')}</optgroup>`;
+  }
+  const rest = fields.filter(v => !seen.has(v));
+  if (rest.length) html += `<optgroup label="Other">${rest.map(opt).join('')}</optgroup>`;
+  $('field').innerHTML = html;
+}
+// The layer list: the soil's layers for the soil temperature, the air's (or the sea's) otherwise.
+function fillLayers() {
+  const nl = field === 'tsoil' ? info.soil_layers : info.layers;
+  layer = Math.min(layer, nl - 1);
+  fill($('layer'), [...Array(nl).keys()], layer, (k) => nl === 1 ? '0 (single layer)' : k === 0 ? '0 (top)' : k === nl - 1 ? `${k} (bottom)` : `${k}`);
+}
 let rate = null;                                        // [wall time, model day] of an earlier status, for the speed
 function status(m) {
   playing = m.playing;
@@ -373,7 +458,7 @@ function status(m) {
   const day = m.day !== undefined ? m.day : m.tick * info.dt / 86400;
   $('d-tick').textContent = m.tick.toLocaleString();
   $('d-day').textContent = day.toFixed(2);
-  placeSky(day * DAY_S);
+  if (m.sky !== undefined) placeSky(m.sky);
   const now = performance.now();
   if (playing && rate && now - rate[0] > 500) {
     const dps = (day - rate[1]) / ((now - rate[0]) / 1000);
@@ -385,9 +470,39 @@ function status(m) {
 $('play').onclick = () => send(playing ? { type: 'pause' } : { type: 'play', tpf: +$('tpf').value });
 $('tpf').onchange = () => { if (playing) send({ type: 'play', tpf: +$('tpf').value }); };
 $('step').onclick = () => send({ type: 'step', k: 1 });
-$('field').onchange = () => { field = $('field').value; send({ type: 'subscribe', field, layer }); };
+$('field').onchange = () => { field = $('field').value; fillLayers(); send({ type: 'subscribe', field, layer }); };
 $('layer').onchange = () => { layer = +$('layer').value; send({ type: 'subscribe', field, layer }); };
-$('new').onclick = () => send({ type: 'new', n: +$('n').value, preset: $('preset').value });
+// A new world's params from the planet form: only the fields filled in (blank: the preset's)
+function newParams() {
+  const v = (id) => $(id).value.trim() === '' ? null : +$(id).value;
+  const planet = {}, params = {};
+  if (v('p-radius') !== null) planet.radius = v('p-radius') * 1000;
+  if (v('p-day') !== null) { planet.day_s = v('p-day') * 3600; planet.omega = 2 * Math.PI / planet.day_s; }
+  if (v('p-year') !== null) planet.year_s = v('p-year') * (planet.day_s || 86400);
+  if (v('p-grav') !== null) planet.grav = v('p-grav');
+  if (v('p-s0') !== null) planet.S0 = v('p-s0');
+  if (v('p-tilt') !== null) planet.tilt = v('p-tilt') * Math.PI / 180;
+  if (v('p-ecc') !== null) planet.ecc = v('p-ecc');
+  const gases = {};
+  for (const g of ['n2', 'o2', 'ar', 'co2', 'ch4']) if (v(`p-${g}`) !== null && v(`p-${g}`) > 0) gases[g] = v(`p-${g}`) / 100;
+  if (Object.keys(gases).length) planet.gases = gases;
+  if (Object.keys(planet).length) params.planet = planet;
+  if ($('p-tides').checked) {
+    if ($('p-nomoon').checked) params.tides = { moon: null };
+    else {
+      const moon = {};
+      if (v('p-mmass') !== null) moon.gm = 4.9028e12 * v('p-mmass');
+      if (v('p-mdist') !== null) moon.a = 3.84748e8 * v('p-mdist');
+      params.tides = Object.keys(moon).length ? { moon } : true;
+    }
+  }
+  if ($('p-gas').checked) params.gas_tracers = 1;
+  if ($('p-geo').checked) params.geology = 1;
+  return params;
+}
+$('new').onclick = () => send({ type: 'new', n: +$('n').value, preset: $('preset').value, params: newParams() });
+$('save').onclick = () => { const name = $('savename').value.trim(); if (name) send({ type: 'save', name }); else $('msg').textContent = 'Give the save a name.'; };
+$('load').onclick = () => { const name = $('saves').value; if (name && name !== '(none yet)') send({ type: 'load', name }); };
 connect();
 </script>
 </body>

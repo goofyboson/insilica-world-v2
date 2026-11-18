@@ -38,18 +38,25 @@ def settings(tides):
     return c
 
 
+def sky_par(p, radius, tides=True, dtype=np.float64):
+    """The tide kernels' parameter vector (tide_pot, sky_dirs) for the air physics' settings p, the planet's radius and a world's
+    tide settings (Earth's Moon when none)."""
+    c = settings(tides)
+    m, d = c['moon'], math.radians
+    mp = [0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0] if m is None else \
+         [m['gm'], m['a'], m['e'], d(m['i']), m['T'], m['node_T'], m['aps_T'], d(m['L0']), d(m['node0']), d(m['aps0'])]
+    return cp.asarray([float(p['tilt']), float(p['year_s']), float(p['day_s']), float(p.get('ecc', 0.0)), float(p.get('lam_peri', 0.0)),
+                       c['sun_gm'], c['sun_a']] + mp + [c['love'], float(radius)], dtype=dtype)
+
+
 class Tides:
     def __init__(self, dg, sea, p, radius, tides=True, rough=None, nbot=None):
         """sea: the world's Ocean; p: the air physics' settings (tilt, year_s, day_s, ecc, lam_peri); radius: the planet's (m);
         rough: the sea floor's roughness h^2 per cell (m^2; the case's), for the internal tide's drag, or None; nbot: the buoyancy
         frequency above the floor (1/s; the case's), or None (from the two lowest layers)."""
         self.dg, self.sea, self.cfg = dg, sea, settings(tides)
-        c, m = self.cfg, self.cfg['moon']
-        d = math.radians
-        mp = [0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0] if m is None else \
-             [m['gm'], m['a'], m['e'], d(m['i']), m['T'], m['node_T'], m['aps_T'], d(m['L0']), d(m['node0']), d(m['aps0'])]
-        self.par = cp.asarray([float(p['tilt']), float(p['year_s']), float(p['day_s']), float(p.get('ecc', 0.0)), float(p.get('lam_peri', 0.0)),
-                               c['sun_gm'], c['sun_a']] + mp + [c['love'], float(radius)], dtype=dg.dtype)
+        c = self.cfg
+        self.par = sky_par(p, radius, tides, dg.dtype)
         N = dg.N
         self.V = cp.zeros(N)                                       # the potential (m²/s²), read by the layers' Bernoulli function
         self.dsum = cp.zeros(N)                                    # the bottom stress's dissipation, summed (J/m²)

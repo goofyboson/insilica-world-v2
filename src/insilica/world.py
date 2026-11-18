@@ -32,7 +32,12 @@ THIN_WIND = 100.0     # kg/m² (~1 hPa): below it an air layer takes its neighbo
 GAS_TRACERS = (('co2', 400e-6), ('n2o', 0.32e-6), ('ch4', 1.8e-6))
 
 FIELDS = ('h', 'z', 'eta', 'psi', 'speed', 'vort', 'theta', 'T', 'Ts', 'Tsurf', 'ps', 'q', 'rh', 'rain', 'evap', 'lightning', 'ice',
-          'sst', 'sss', 'mld', 'tthermo', 'tdeep', 'current', 'land', 'elev', 'soil', 'pond', 'snow')
+          'sst', 'sss', 'mld', 'tthermo', 'tdeep', 'current', 'land', 'elev', 'soil', 'pond', 'snow',
+          'sla', 'tide', 'co2', 'ch4', 'n2o', 'tsoil', 'g_rain', 'g_rx1', 'g_river', 'g_ftc', 'g_weather')
+# (V2-6g) sla: the sea level's anomaly from its mean over the sea (m); tide: the equilibrium tide, the tidal potential over g (m);
+# co2, ch4, n2o: the carried gases (ppm, by layer); tsoil: the land column's soil temperature (°C, by soil layer from the top);
+# g_*: geology's accumulators as means (rain mm/day, the largest one-day rain mm, river flow m³/s, freeze-thaw cycles a year,
+# weathering mm/day)
 # z: height of the layer's top; eta: the free surface; theta, T, Ts, ps: air (potential temperature, temperature,
 # surface temperature, surface pressure in hPa); q, rh, rain, evap, ice: moist air (specific humidity in g/kg, relative
 # humidity, rain and evaporation in mm/day, sea ice in m, Tsurf the radiating surface: the ice skin over ice);
@@ -443,8 +448,29 @@ class World:
         if not self.air:
             return base
         return (base + ['theta', 'T', 'Ts', 'ps'] + (['Tsurf', 'q', 'rh', 'rain', 'evap', 'ice', 'lightning'] if self.moist else [])
-                + (['sst', 'sss', 'mld', 'tthermo', 'tdeep', 'current'] if self.sea is not None else [])
-                + (['land', 'elev', 'soil', 'pond', 'snow'] if self.land is not None else []))
+                + (['sst', 'sss', 'mld', 'tthermo', 'tdeep', 'current', 'sla'] if self.sea is not None else [])
+                + (['tide'] if getattr(self, 'tides', None) is not None else [])
+                + (['land', 'elev', 'soil', 'pond', 'snow'] if self.land is not None else [])
+                + (['tsoil'] if self.sea is not None and self.sea.soil is not None else [])
+                + (['co2', 'ch4', 'n2o'] if getattr(self, 'gas_on', False) else [])
+                + (['g_rain', 'g_rx1', 'g_river', 'g_ftc', 'g_weather'] if getattr(self, 'geology', None) is not None else []))
+
+    def sky(self):
+        """(V2-6g, the viewer) The Sun's and the Moon's directions in the planet's frame at the model's time, as the tide kernel
+        places them (kernels/tides.cu bodies): dict(t, sun, moon, ra_sun, rot, sun_r, moon_r, day_s, year_s, tilt); None without air."""
+        if not self.air:
+            return None
+        from .tides import sky_par
+        if not hasattr(self, '_sky'):
+            tid = getattr(self, 'tides', None)
+            self._sky = (tid.par if tid is not None else sky_par(self.physics.p, self.planet['radius']), cp.zeros(10),
+                         self.dg.kernel('sky_dirs', 'tides.cu'))
+        par, out, k = self._sky
+        k((1,), (32,), (par, self.time, out))
+        o, p = out.get(), self.physics.p
+        return dict(t=float(self.time.get()[0]), sun=[float(x) for x in o[:3]], moon=[float(x) for x in o[3:6]], ra_sun=float(o[6]),
+                    rot=float(o[7]), sun_r=float(o[8]), moon_r=float(o[9]), day_s=float(p['day_s']), year_s=float(p['year_s']),
+                    tilt=float(p['tilt']))
 
     def field(self, name, layer=0):
         """A cell field (CuPy, float64) for the viewer."""
@@ -487,6 +513,21 @@ class World:
             out = cp.zeros(d.N)
             self.sea.k['cell_speed'](*grid_dims(d.N), (np.int32(d.N), self.sea.u[0], d.cellEdge, d.le, d.de, d.areaCell, out))
             return out
+        if name == 'sla':                                          # (V2-6g) the sea level's anomaly from its mean over the sea
+            s = self.sea.h.sum(0) + self.sea.b
+            wet = (self.land < 0.5) if self.land is not None else cp.ones(self.grid.N, dtype=bool)
+            A = cp.asarray(g.areaCell)
+            return cp.where(wet, s - cp.sum(s * A * wet) / cp.sum(A * wet), 0.0)
+        if name == 'tide':
+            return self.tides.V / self.grav
+        if name in ('co2', 'n2o', 'ch4'):
+            return self.gx[GAS_TRACERS.index(next(t for t in GAS_TRACERS if t[0] == name)), layer] * 1e6
+        if name == 'tsoil':
+            return self.sea.Tg[min(layer, self.sea.Tg.shape[0] - 1)] - 273.15
+        if name.startswith('g_'):
+            s = self.geology.summary()
+            key = {'g_rain': 'rain', 'g_rx1': 'rx1day', 'g_river': 'river', 'g_ftc': 'ftc', 'g_weather': 'weathering'}[name]
+            return cp.asarray(s[key])
         if name == 'Tsurf':                                        # before the first step (of a new or loaded world): the slab
             return self.physics.tsurf if self.tick > self._tick_start else self.Ts
         if name == 'rain':

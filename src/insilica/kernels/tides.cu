@@ -31,28 +31,36 @@ __device__ real kepler(real M, real e, real* rr) {
   return 2 * atan2(sqrt(1 + e) * sin(E / 2), sqrt(1 - e) * cos(E / 2));
 }
 
-extern "C" __global__ void tide_pot(int N, const real* tp, const real* time, real back, const real* pos, real* V) {
-  LOOP1(i, N)
-  const real t = time[0] - back;
+// The Sun's and the Moon's places at time t: declinations, right ascensions, the turn of the day (rot), and their distances in
+// units of their semi-major axes (V2-6g: shared by tide_pot and sky_dirs, the viewer's)
+__device__ __forceinline__ void bodies(const real* tp, real t, real& decs, real& ras, real& rot, real& rs, real& decm, real& ram,
+                                       real& rm) {
   const real tilt = tp[0], year_s = tp[1], day_s = tp[2], ecc = tp[3], lam_peri = tp[4];
   // the Sun: its ecliptic longitude and distance (as air.cu's sun_lon)
-  real ls, rs = 1;
+  real ls;
+  rs = 1;
   if (!(ecc > 0)) ls = 2 * PI_ * t / year_s;
   else {
     const real nu0 = -lam_peri, E0 = 2 * atan(sqrt((1 - ecc) / (1 + ecc)) * tan(nu0 / 2));
     ls = kepler(E0 - ecc * sin(E0) + 2 * PI_ * t / year_s, ecc, &rs) + lam_peri;
   }
-  const real ras = atan2(cos(tilt) * sin(ls), cos(ls)), decs = asin(sin(tilt) * sin(ls));
-  const real rot = 2 * PI_ * fmod(t, day_s) / day_s;
+  ras = atan2(cos(tilt) * sin(ls), cos(ls)); decs = asin(sin(tilt) * sin(ls));
+  rot = 2 * PI_ * fmod(t, day_s) / day_s;
   // the Moon: Kepler in its orbit, then the inclined orbit's ecliptic longitude and latitude, then the equator's
   const real e = tp[9], inc = tp[10];
   const real peri = tp[16] + 2 * PI_ * t / tp[13], node = tp[15] + 2 * PI_ * t / tp[12];
-  real rm;
   const real lo = kepler(tp[14] - peri + 2 * PI_ * t / tp[11], e, &rm) + peri;    // true longitude in the orbit
   const real u = lo - node;
   const real bet = asin(sin(inc) * sin(u)), lam = node + atan2(cos(inc) * sin(u), cos(u));
-  const real decm = asin(sin(bet) * cos(tilt) + cos(bet) * sin(tilt) * sin(lam));
-  const real ram = atan2(sin(lam) * cos(tilt) - tan(bet) * sin(tilt), cos(lam));
+  decm = asin(sin(bet) * cos(tilt) + cos(bet) * sin(tilt) * sin(lam));
+  ram = atan2(sin(lam) * cos(tilt) - tan(bet) * sin(tilt), cos(lam));
+}
+
+extern "C" __global__ void tide_pot(int N, const real* tp, const real* time, real back, const real* pos, real* V) {
+  LOOP1(i, N)
+  const real t = time[0] - back;
+  real decs, ras, rot, rs, decm, ram, rm;
+  bodies(tp, t, decs, ras, rot, rs, decm, ram, rm);
   // directions in the planet's frame: the Sun at longitude -rot, the Moon its right ascension further east
   const real x = pos[3 * i], y = pos[3 * i + 1], z = pos[3 * i + 2];
   const real ls_e = -rot, lm_e = -rot + (ram - ras);
@@ -61,6 +69,18 @@ extern "C" __global__ void tide_pot(int N, const real* tp, const real* time, rea
   const real R2 = tp[18] * tp[18];
   const real as = tp[6] * rs, am = tp[8] * rm;
   V[i] = tp[17] * (tp[5] * R2 / (as * as * as) * (3 * cs * cs - 1) / 2 + tp[7] * R2 / (am * am * am) * (3 * cm * cm - 1) / 2);
+}
+
+// sky_dirs (V2-6g, the viewer): one thread; out = the Sun's direction (3), the Moon's (3), the Sun's right ascension, rot, and the
+// two bodies' distances over their semi-major axes, at time[0]
+extern "C" __global__ void sky_dirs(const real* tp, const real* time, real* out) {
+  if (blockIdx.x || threadIdx.x) return;
+  real decs, ras, rot, rs, decm, ram, rm;
+  bodies(tp, time[0], decs, ras, rot, rs, decm, ram, rm);
+  const real ls_e = -rot, lm_e = -rot + (ram - ras);
+  out[0] = cos(decs) * cos(ls_e); out[1] = cos(decs) * sin(ls_e); out[2] = sin(decs);
+  out[3] = cos(decm) * cos(lm_e); out[4] = cos(decm) * sin(lm_e); out[5] = sin(decm);
+  out[6] = ras; out[7] = rot; out[8] = rs; out[9] = rm;
 }
 
 extern "C" __global__ void tide_mix(int N, int E, int L, const real* h, const real* u, real* T, real* S, const int* cellEdge,

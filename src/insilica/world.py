@@ -33,11 +33,11 @@ GAS_TRACERS = (('co2', 400e-6), ('n2o', 0.32e-6), ('ch4', 1.8e-6))
 
 FIELDS = ('h', 'z', 'eta', 'psi', 'speed', 'vort', 'theta', 'T', 'Ts', 'Tsurf', 'ps', 'q', 'rh', 'rain', 'evap', 'lightning', 'ice',
           'sst', 'sss', 'mld', 'tthermo', 'tdeep', 'current', 'land', 'elev', 'soil', 'pond', 'snow',
-          'sla', 'tide', 'co2', 'ch4', 'n2o', 'tsoil', 'g_rain', 'g_rx1', 'g_river', 'g_ftc', 'g_weather')
+          'sla', 'tide', 'co2', 'ch4', 'n2o', 'tsoil', 'g_rain', 'g_rx1', 'g_river', 'g_ftc', 'g_weather', 'frost')
 # (V2-6g) sla: the sea level's anomaly from its mean over the sea (m); tide: the equilibrium tide, the tidal potential over g (m);
 # co2, ch4, n2o: the carried gases (ppm, by layer); tsoil: the land column's soil temperature (°C, by soil layer from the top);
 # g_*: geology's accumulators as means (rain mm/day, the largest one-day rain mm, river flow m³/s, freeze-thaw cycles a year,
-# weathering mm/day)
+# weathering mm/day); frost: CO2 frost on the ground (V2-7, #236; kg/m²)
 # z: height of the layer's top; eta: the free surface; theta, T, Ts, ps: air (potential temperature, temperature,
 # surface temperature, surface pressure in hPa); q, rh, rain, evap, ice: moist air (specific humidity in g/kg, relative
 # humidity, rain and evaporation in mm/day, sea ice in m, Tsurf the radiating surface: the ice skin over ice);
@@ -138,6 +138,11 @@ class World:
                 self.gas_src = cp.zeros((len(GAS_TRACERS), self.grid.N))   # surface sources, mole fraction x kg/m^2/s of air
                 self.k_gas = {n: self.dg.kernel(n, 'air.cu', self.physics.defs) for n in ('gas_src',)}
                 self.STATE = self.STATE + ('gx',)
+            if self.physics.frost is not None:            # (V2-7, #236) CO2 frost on the ground (kg/m²)
+                self.frost = self.physics.frost
+                if 'frost' in extra:
+                    self.frost[...] = cp.asarray(np.asarray(extra['frost'], dtype=float))
+                self.STATE = self.STATE + ('frost',)
             self.moist = self.physics.moist
             if self.moist:                                # vapor per layer (kg/kg) and sea ice (kg/m²): V2-2b
                 self.q = cp.asarray(np.asarray(extra['q'], dtype=float))
@@ -332,6 +337,8 @@ class World:
                                 land=self.land, soilcap=self.soilcap, soil=self.soil, pond=self.pond, snow=self.snow,
                                 cw=self.cw if self.moist else None, elev=self.b, firn=getattr(self, 'firn', None),
                                 gx=self.gx if self.gas_on else None)
+            if self.physics.frost is not None:                   # (V2-7, #236) the air CO2 frost took or gave, out of the layers
+                self.physics.frost_mass(self.h, self.M, self.u, self.theta)
             if rec:
                 rec.post_column()
             if self.geology is not None:
@@ -437,6 +444,9 @@ class World:
             if self.moist:
                 e += (self.physics.p['Lv'] * float(cp.sum(A * cp.sum(self.h * self.q, axis=0)))
                       - self.physics.p['Lf'] * float(cp.sum(A * self.ice)))
+            if self.physics.frost is not None:                       # (V2-7, #236) CO2 frost: the air's enthalpy at T_fref less its latent heat, at the ground's geopotential
+                p = self.physics.p
+                e += float(cp.sum(A * self.physics.frost * (p['cp'] * p['T_fref'] - p['L_co2'] + self.grav * self.b)))
             if getattr(self, 'firn', None) is not None:              # (#160)
                 p = self.physics.p
                 e += p['c_ice'] * p['rho_firn'] * p['firn'] * float(cp.sum(A * (self.firn - p['Tf'])))
@@ -539,6 +549,8 @@ class World:
             return self.physics.flash * 3.15576e13                  # flashes/km²/year
         if name == 'ice':
             return self.ice / self.physics.p['rho_ice']             # m
+        if name == 'frost':
+            return self.frost if getattr(self, 'frost', None) is not None else cp.zeros(g.N)   # kg/m² (V2-7, #236)
         if name == 'rh':
             T = self.field('T', layer)
             p = self.grav * cp.cumsum(self.h, axis=0)

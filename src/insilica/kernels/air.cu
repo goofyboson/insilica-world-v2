@@ -69,6 +69,9 @@ struct Par {
   real root_q;                                    // plumes root in the mixed layer's vapor plus the thermals' excess (V2-6c, #137)
   real revap, revap_rhs, revap_rhl, revap_area;   // rain and snow evaporation by Kessler's form as Tiedtke's (V2-6c, #136)
   real ice_air;                                    // ice in the air (V2-6c, #134): ice saturation below freezing, snow, freezing heat aloft
+  real frost, frost_x, L_co2, T_fref, alb_frost, frost_cover;   // CO2 frost (V2-7, #236): on (1), CO2's mole fraction, its latent heat (J/kg),
+                                                   // the frost's reference temperature (K), its albedo and the frost (kg/m^2) that covers the ground
+  real bulk_imp;                                   // (V2-7, #236) the bulk exchange's air side implicit, as the surface layer's (sfc)
   real ths[LMAX];                                  // the theta* of the interfaces above the lowest one, from the top (decision #101)
 };
 
@@ -122,7 +125,7 @@ __device__ Par unpack(const real* a) {
   P.kappa = a[15]; P.p0 = a[16]; P.tilt = a[17]; P.year_s = a[18]; P.day_s = a[19]; P.tau_lin = a[20]; P.theta_star2 = a[21];
   P.moist = a[22]; P.Lv = a[23]; P.Lf = a[24]; P.Tf = a[25]; P.k_evap = a[26]; P.tau_conv = a[27]; P.alb_ice = a[28];
   P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32]; P.sat_layer = a[33]; P.sw_tau = a[34];
-  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; P.plume_ent = a[78]; P.l_ice = a[79]; P.storm_area = a[80]; P.graupel_v = a[81]; P.ice_small = a[82]; P.q_shape = a[83]; P.edge_heat = a[84]; P.freeze_dry = a[85]; P.edge_vap = a[86]; P.conv_revap = a[87]; P.plume_root = a[88]; P.bl_q = a[89]; P.sfc = a[90]; P.z0_land = a[91]; P.downdraft = a[92]; P.ent_cloud = a[93]; P.c_deep = a[94]; P.rs_max = a[95]; P.rs_sun = a[96]; P.q_sea = a[97]; P.bl_reach = a[98]; P.dry_edge = a[99]; P.bl_lcl = a[100]; P.edge_k = (int)a[101]; P.ice_air = a[102]; P.revap = a[103]; P.revap_rhs = a[104]; P.revap_rhl = a[105]; P.revap_area = a[106]; P.root_q = a[107]; P.ent_det = a[108]; P.ent_ifs = a[109]; P.shallow = a[110]; P.cu_dth = a[111]; P.cu_dp = a[112]; P.buoy_v = a[113]; P.cu_sub = a[114]; P.bare_fx = a[115]; P.det_all = a[116]; P.cl_float = a[117]; P.ml_clear = a[118]; P.cu_cloud = a[119]; P.firn = a[120]; P.k_firn = a[121]; P.rho_firn = a[122]; P.c_ice = a[123]; P.lw_refl = a[124]; P.ent_loc = a[125]; P.ecc = a[126]; P.lam_peri = a[127]; P.liq_cold = a[128]; P.cw_qs = a[129]; P.ent_lcl = a[130]; P.sub_mix = a[131]; P.xf = 0; P.bl_room = (real)1e30; for (int j = 0; j < LMAX; j++) P.ths[j] = a[132 + j];
+  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; P.plume_ent = a[78]; P.l_ice = a[79]; P.storm_area = a[80]; P.graupel_v = a[81]; P.ice_small = a[82]; P.q_shape = a[83]; P.edge_heat = a[84]; P.freeze_dry = a[85]; P.edge_vap = a[86]; P.conv_revap = a[87]; P.plume_root = a[88]; P.bl_q = a[89]; P.sfc = a[90]; P.z0_land = a[91]; P.downdraft = a[92]; P.ent_cloud = a[93]; P.c_deep = a[94]; P.rs_max = a[95]; P.rs_sun = a[96]; P.q_sea = a[97]; P.bl_reach = a[98]; P.dry_edge = a[99]; P.bl_lcl = a[100]; P.edge_k = (int)a[101]; P.ice_air = a[102]; P.revap = a[103]; P.revap_rhs = a[104]; P.revap_rhl = a[105]; P.revap_area = a[106]; P.root_q = a[107]; P.ent_det = a[108]; P.ent_ifs = a[109]; P.shallow = a[110]; P.cu_dth = a[111]; P.cu_dp = a[112]; P.buoy_v = a[113]; P.cu_sub = a[114]; P.bare_fx = a[115]; P.det_all = a[116]; P.cl_float = a[117]; P.ml_clear = a[118]; P.cu_cloud = a[119]; P.firn = a[120]; P.k_firn = a[121]; P.rho_firn = a[122]; P.c_ice = a[123]; P.lw_refl = a[124]; P.ent_loc = a[125]; P.ecc = a[126]; P.lam_peri = a[127]; P.liq_cold = a[128]; P.cw_qs = a[129]; P.ent_lcl = a[130]; P.sub_mix = a[131]; P.frost = a[132]; P.frost_x = a[133]; P.L_co2 = a[134]; P.T_fref = a[135]; P.alb_frost = a[136]; P.frost_cover = a[137]; P.bulk_imp = a[138]; P.xf = 0; P.bl_room = (real)1e30; for (int j = 0; j < LMAX; j++) P.ths[j] = a[139 + j];
   return P;
 }
 
@@ -480,6 +483,9 @@ __device__ real base_T(int k, const real* mu, const real* th, const Par& P) {
   const bool spread = P.sat_prof > 0 && k >= P.edge_k && k < P.Lm1 && th[k] < tstar(k - 1, P.Lm1 + 1, P);
   return (spread ? tstar(k, P.Lm1 + 1, P) : th[k]) * FPOW(pb / P.p0, P.kappa);
 }
+
+// CO2's frost point (K) at its partial pressure pc (Pa): James et al. (1992), 3148 / (23.102 - ln(0.01 pc)); 147.3 K at 0.951 of 610 Pa
+__device__ __forceinline__ real frost_point(real pc) { return (real)3148 / ((real)23.102 - log((real)0.01 * fmax(pc, (real)1e-3))); }
 
 __device__ real column_energy(int L, const real* mu, const real* pib, const real* th, const real* q, const Par& P) {
   real E = 0;
@@ -878,7 +884,8 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
                                       real* wx, real* olr, real* sw_abs, real* stored, real* rain, real* evap, real* conv,
                                       real* tsurf, real* rainp, real* dgo, real* cap, real* qocean,
                                       real* qsw, const real* land, const real* soilcap, real* soil, real* pond, real* snow, real* cloudw, real* cloudo, const real* elev, real* flash,
-                                      const real* radf, const real* swf, real* swalb, const real* ch, const real* lc, real* firn, real* xfer) {
+                                      const real* radf, const real* swf, real* swalb, const real* ch, const real* lc, real* firn, real* xfer,
+                                      real* frost, real* co2x) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= N) return;
 #ifdef NL
@@ -956,7 +963,13 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   // the ice below; its heat Cf (Tfn - Tf) (Tfn = Tf wherever there is none)
   const real Cf = firn && P.firn > 0 ? P.c_ice * P.rho_firn * P.firn : (real)0;
   real Tfn = Cf > 0 ? firn[i] : P.Tf;
-  const real E0 = column_energy(L, mu, pib, th, q, P) + Cw * Ts[i] - P.Lf * m_ice + Cf * (Tfn - P.Tf);
+  // CO2 frost (V2-7, #236): its mass m_fr (kg/m^2) on the ground; its energy per kg the air's enthalpy at T_fref less the latent heat (and
+  // the ground's geopotential, which the air's mass carries too, so it cancels here), its own heat capacity left out (the frost point moves ~2 K)
+  const bool fro = frost && P.frost > 0;
+  const real ef = P.cp * P.T_fref - P.L_co2;
+  real m_fr = fro ? frost[i] : (real)0, dmx[LMAX];
+  for (int k = 0; k < L; k++) dmx[k] = 0;
+  const real E0 = column_energy(L, mu, pib, th, q, P) + Cw * Ts[i] - P.Lf * m_ice + Cf * (Tfn - P.Tf) + ef * m_fr;
   for (int k = 0; k < L; k++) T[k] = pib[k] * th[k] / P.cp;
   const int top = 0, bot = L - 1;
   // each layer's cover, in-cloud water path (kg/m^2) and liquid share (all ice below -20 C)
@@ -1014,6 +1027,9 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   // (sfc: the air's side taken implicitly, as the surface's is: the exchange over a step can at most bring the air touching the ground,
   // mass mb, to the surface's value, however thin the mixed layer; conductance g / (1 + g dt / mb))
   if (sfc) bulk = bulk / (1 + bulk * dt / mb);
+  // (bulk_imp, V2-7: the same for the bulk exchange: over Mars's high ground the bottom layer thins to its floor, under 1 Pa, and an explicit
+  // step there passed it more than its whole difference from the ground, its theta swinging to -38,000 K)
+  else if (P.bulk_imp > 0 && P.bulk_c > 0) bulk = bulk / (1 + bulk * dt / mb);
   const real hs = rough * (P.bulk_c > 0 || sfc ? P.cp * bulk : P.h_sens * (1 + uabs[i] / P.u0));
 
   // ---- shortwave; the surface's albedo with the ice cover ----
@@ -1049,7 +1065,8 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
     alb_i = fs * (P.alb_snow + (P.alb_snow_melt - P.alb_snow) * warm) + (1 - fs) * P.alb_glacier;
   }
   const real fsee = isl && lc ? fice * lc[5 * N + i] : fice;    // (#132: the ice the cover lets show)
-  const real alb = fsee * alb_i + (1 - fsee) * alb0;
+  real alb = fsee * alb_i + (1 - fsee) * alb0;
+  if (fro) alb += (P.alb_frost - alb) * fmin((real)1, m_fr / P.frost_cover);   // (#236) the frost's
   if (swalb) swalb[i] = alb;                                     // for the next radiation step (k-tables)
   // the k-tables' shortwave (sw_column at the last radiation step): each layer's and the surface's share of the sunlight
   const real toAir = swf ? [&]() { real s = 0; for (int k = 0; k < L; k++) s += swf[(size_t)k * N + i]; return s * I; }()
@@ -1308,6 +1325,47 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
       if (m <= m_ice) { m_ice -= m; Tn = P.Tf; } else { Tn = P.Tf + (m - m_ice) * P.Lf / Cw; m_ice = 0; }
     }
     ice[i] = m_ice;
+  }
+  // ---- CO2 frost (V2-7, #236) ----
+  if (fro) {
+    // on the ground: below the frost point at the surface the ground stays there and CO2 condenses out of the air touching it, the bottom
+    // layer, leaving with its energy there (cp T at its lower edge); above it the frost sublimates, the gas joining the bottom layer at the
+    // frost point. Each move's energy is exact, the ground taking the rest; the bottom layer keeps twice the floor
+    const real Tc = frost_point(P.frost_x * pb[bot]);
+    if (Tn < Tc) {
+      const real Ea = column_energy(L, mu, pib, th, q, P);
+      const real dm = fmin(fmax(mu[bot] - 2 * P.floor_, (real)0), Cw * (Tc - Tn) / (P.cp * th[bot] * exi[bot] - ef));
+      if (dm > 0) {
+        mu[bot] -= dm;
+        layer_exner(L, mu, P, pb, pib, exi);
+        Tn += (Ea - column_energy(L, mu, pib, th, q, P) - dm * ef) / Cw;
+        m_fr += dm;
+        dmx[bot] += dm;
+      }
+    } else if (m_fr > 0 && Tn > Tc) {
+      const real sg = P.cp * Tc, dm = fmin(m_fr, Cw * (Tn - Tc) / (sg - ef));
+      const real Ea = column_energy(L, mu, pib, th, q, P);
+      mu[bot] += dm;
+      layer_exner(L, mu, P, pb, pib, exi);
+      th[bot] += (Ea + dm * sg - column_energy(L, mu, pib, th, q, P)) / (mu[bot] * pib[bot]);
+      Tn -= dm * (sg - ef) / Cw;
+      m_fr = dm < m_fr ? m_fr - dm : (real)0;
+      dmx[bot] -= dm;
+    }
+    // in the air: a layer colder than the frost point at its middle condenses about as much as warms it back there with the latent heat;
+    // the snow falls at once to the ground's frost, the layer keeping the rest of what that air had (its latent heat, its height's energy)
+    for (int k = 0; k < L; k++) {
+      const real pt = k ? pb[k - 1] : (real)0, Tk = pib[k] * th[k] / P.cp, Tck = frost_point(P.frost_x * (real)0.5 * (pt + pb[k]));
+      if (Tk >= Tck) continue;
+      const real dm = fmin(fmax(mu[k] - 2 * P.floor_, (real)0), mu[k] * P.cp * (Tck - Tk) / (P.L_co2 + P.cp * (Tk - P.T_fref)));
+      if (dm <= 0) continue;
+      const real Ea = column_energy(L, mu, pib, th, q, P);
+      mu[k] -= dm;
+      layer_exner(L, mu, P, pb, pib, exi);
+      th[k] += (Ea - dm * ef - column_energy(L, mu, pib, th, q, P)) / (mu[k] * pib[k]);
+      m_fr += dm;
+      dmx[k] += dm;
+    }
   }
   Ts[i] = Tn;
   sw_abs[i] = toAir + swS;
@@ -1965,10 +2023,46 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
       th[n] += mu[k] * pib[k] * (th[k] - tn) / (mu[n] * pib[n]);
       th[k] = tn;
     }
-  const real E1 = column_energy(L, mu, pib, th, q, P) + Cw * Ts[i] - P.Lf * m_ice + Cf * (Tfn - P.Tf);
+  const real E1 = column_energy(L, mu, pib, th, q, P) + Cw * Ts[i] - P.Lf * m_ice + Cf * (Tfn - P.Tf) + ef * m_fr;
   if (Cf > 0) firn[i] = Tfn;
+  if (fro) { frost[i] = m_fr; for (int k = 0; k < L; k++) co2x[(size_t)k * N + i] = dmx[k]; }
   for (int k = 0; k < L; k++) { theta[(size_t)k * N + i] = th[k]; if (moist) qv[(size_t)k * N + i] = q[k]; if (cloudy) cloudw[(size_t)k * N + i] = cl[k]; }
   stored[i] = E1 - E0;
+}
+
+// CO2 frost's moves of air (V2-7, #236): each layer gives up co2x (kg/m^2; negative: takes) with its wind, its prognostic volume M with it;
+// the kinetic energy that leaves or arrives with it is booked to the layer's heat, so the column's energy, kinetic included, is exact
+// (the enthalpy's own change with the masses the column kernel has already counted)
+extern "C" __global__ void frost_mass(int N, int L, const real* par, const real* co2x, const real* areaCell, const int* cellEdge,
+                                      const real* le, const real* de, const real* u, int E, real* h, real* M, real* theta, real* booked) {
+  const int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= N) return;
+  Par P = unpack(par);
+  real mu[LMAX], pb[LMAX], pib[LMAX], kin[LMAX];
+  bool any = false;
+  for (int k = 0; k < L; k++) {
+    const real d = co2x[(size_t)k * N + i];
+    any = any || d != 0;
+    real ke = 0;
+    if (d != 0)
+      for (int m = 0; m < 6; m++) {
+        const int e = cellEdge[i * 6 + m];
+        if (e < 0) break;
+        const real ue = u[(size_t)k * E + e];
+        ke += le[e] * de[e] * (real)0.25 * ue * ue;
+      }
+    kin[k] = d * ke;                                             // J: the kinetic energy leaving the cell's layer
+    h[(size_t)k * N + i] -= d;
+    M[(size_t)k * N + i] -= d * areaCell[i];
+    mu[k] = h[(size_t)k * N + i];
+  }
+  real b = 0;
+  if (any) {
+    layer_exner(L, mu, P, pb, pib);
+    for (int k = 0; k < L; k++)
+      if (kin[k] != 0) { theta[(size_t)k * N + i] += kin[k] / (areaCell[i] * mu[k] * pib[k]); b += kin[k]; }
+  }
+  booked[i] = b;                                                 // (J: the heat booked, for the ledger)
 }
 
 // Time for the sun, advanced inside the captured tick.

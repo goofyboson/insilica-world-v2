@@ -316,7 +316,8 @@ def conserve_air(record):
     os.remove(fs)
     gbud = max(abs(g1[0] - g0[0] - gsrc) / g1[0], *(abs(g1[j] - g0[j]) / g0[j] for j in range(1, len(g0))))
     guni = max(float((e.gx[j].max() - e.gx[j].min()) / e.gx[j].mean()) for j in range(1, len(g0)))
-    ok = (worst <= 1e-13 and water <= 1e-13 and mass <= 1e-13 and tracer <= 1e-13 and vapor <= 1e-13 and abs(drift) < 1e-4 and e4 <= 1e-13
+    fr = mars_frost()
+    ok = fr['ok'] and (worst <= 1e-13 and water <= 1e-13 and mass <= 1e-13 and tracer <= 1e-13 and vapor <= 1e-13 and abs(drift) < 1e-4 and e4 <= 1e-13
           and e4w <= 1e-13 and snow > 0 and all(d['energy'] <= 1e-13 and d['gross'] > 0 for d in drag.values()) and drag['gw']['momentum'] <= 1e-13
           and gbud <= 1e-13 and guni <= 1e-12 and olr_gx <= 1e-12 and soil['worst'] <= 1e-13 and soil['moved'] > 0 and reload_ok
           and geo_ok)
@@ -333,9 +334,59 @@ def conserve_air(record):
            f'land column (#218, {len(SOIL_DZ)} layers to {sum(SOIL_DZ):.1f} m, {soil["moved"] / 48:.1f} W/m² changing its layers on land, mean over the steps): its heat {fmt(soil["worst"])} of its gross, '
            f'geology’s accumulators (#220; rain, evaporation, temperature, frost, freeze-thaw, the day’s largest rain, weathering) against the same kept here {fmt(gerr)}, '
            f'the land’s runoff against the water reaching the sea ({gs["sent"] / 1e12:.1f} Gt) {fmt(gs["runoff"])}, outflows below a cell’s net loss {gs["below"]}; '
-           f'reload {"identical" if reload_ok else "DIFFERENT"}',
+           f'reload {"identical" if reload_ok else "DIFFERENT"}; ' + fr['text'],
            '≤ 1e-13; ≤ 1e-13; drift < 1e-4; uniform ≤ 1e-12; reload identical', ok)
     return ok
+
+
+def mars_frost():
+    """(V2-7, #236) Mars's CO2 frost: a start with cold polar ground (140 K poleward of 60°N), frost lying poleward of 60°S, and the
+    second layer at 120 K over the north pole's cap, so frost forms on the ground and in the air and sublimates, in 48 steps. Each step:
+    the column's energy with the frost's against sunlight − OLR, the air's mass with the frost's, the kinetic energy that leaves or
+    arrives with the frost's air against the heat booked for it; and a reload."""
+    from insilica.constants import MARS, air_props
+    g = gridmod.get(4)
+    h, b, u, extra = cases.mars_build(g, cases.mars_topo(g))
+    north, south = g.lat > np.radians(60), g.lat < np.radians(-60)
+    extra = dict(extra, frost=np.where(south, 50.0, 0.0))
+    extra['Ts'] = np.where(north, 140.0, extra['Ts'])
+    kap = air_props(MARS['gases'], t_cp=MARS['t_cp'])['kappa']
+    pm = np.cumsum(h, axis=0)[1] * cases.GRAV - 0.5 * h[1] * cases.GRAV           # (Earth-gravity pressures, as the builder's)
+    extra['theta'][1] = np.where(g.lat > np.radians(80), 120.0 * (cases.P0 / pm) ** kap, extra['theta'][1])
+    m = World(4, 'mars', state=(h, b, u, extra))
+    A, ph = cp.asarray(m.grid.areaCell), m.physics
+    lede, ge = cp.asarray(m.grid.le * m.grid.de), m.grid
+    ke = lambda h_, u_: float(cp.sum(lede * cp.sum(0.25 * (h_[:, ge.eI] + h_[:, ge.eJ]) * u_ * u_, axis=0)))
+    mass = lambda: float(cp.sum(A * (cp.sum(m.h, axis=0) + m.frost)))
+    st = dict(e=0.0, ke=0.0, gross=0.0, ground=0.0, air=0.0, sub=0.0)
+
+    def apply(h_, M_, u_, th_, _a=ph.frost_mass):
+        _a(h_, M_, u_, th_)
+        removed, booked = ke(ph.co2x, u_), float(cp.sum(ph.frost_ke))     # (the kinetic energy of the air moved; the mass budget checks h follows it)
+        st['gross'] += abs(removed)
+        st['ke'] = max(st['ke'], abs(removed - booked) / max(abs(removed), 1e-300))
+        x = ph.co2x
+        st['ground'] += float(cp.sum(A * cp.maximum(x[-1], 0))); st['sub'] += float(cp.sum(A * cp.maximum(-x[-1], 0)))
+        st['air'] += float(cp.sum(A * x[:-1]))
+    ph.frost_mass = apply
+    m0, e0, worst = mass(), m.energy(), 0.0
+    for _ in range(48):
+        m.step(1, graph=False)
+        flux = float(cp.sum(A * (ph.sw_abs - ph.olr))) * m.dt
+        st['e'] = max(st['e'], abs(float(cp.sum(A * ph.stored)) - flux) / abs(e0))
+    worst = abs(mass() - m0) / m0
+    fs = os.path.join(tempfile.gettempdir(), f'frost{os.getpid()}.iw2')
+    m.save(fs)
+    reload_ok = World.load(fs).state_hash() == m.state_hash() and 'frost' in m.STATE
+    os.remove(fs)
+    ok = (st['e'] <= 1e-13 and worst <= 1e-13 and st['ke'] <= 1e-13 and st['gross'] > 0 and st['ground'] > 0 and st['sub'] > 0
+          and st['air'] > 0 and reload_ok)
+    tot = float(cp.sum(A)) * 48
+    text = (f'Mars CO₂ frost (#236), 48 steps: column energy with the frost {fmt(st["e"])} of the energy, air + frost mass {fmt(worst)}, '
+            f'kinetic energy with the frost\'s air against heat booked {fmt(st["ke"])} ({st["gross"] / 48:.2e} J a step); condensed on the ground '
+            f'{st["ground"] / tot * 1e3:.2f}, in the air {st["air"] / tot * 1e3:.2f}, sublimated {st["sub"] / tot * 1e3:.2f} g/m² a step (planet mean); '
+            f'reload {"identical" if reload_ok else "DIFFERENT"}')
+    return dict(ok=ok, text=text)
 
 
 @pytest.mark.xdist_group('grid4')

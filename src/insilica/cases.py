@@ -744,8 +744,9 @@ def _mars_preset():
     sc = mu / MU_REF                                        # the column's mass against Earth's: the layers' mass thresholds scale with it
     phys = dict(theta_stars=MARS_STARS, moist=0.0, alb=0.25, eps_s=0.95, mu_night=250.0 * sc,   # (the night's mixed layer, 25 hPa on Earth)
                 c_slab=250.0 * math.sqrt(MARS['day_s'] / math.pi),   # the day's skin: thermal inertia 250 (J m^-2 K^-1 s^-1/2) x sqrt(P / pi)
-                bulk_c=3.0e-3, bulk_gust=1.0,                         # rho C (|U| + gust): the exchange with the thin air
-                bl_mix=1.0, mu_bl=0.1 * mu, mu_ref=mu)
+                bulk_c=3.0e-3, bulk_gust=1.0, bulk_imp=1.0,           # rho C (|U| + gust): the exchange with the thin air, its air side implicit (#236)
+                bl_mix=1.0, mu_bl=0.1 * mu, mu_ref=mu,
+                frost=1.0)                                            # (step 4, #236) CO2 frost on the ground and in the air
     return dict(build=lambda g: mars_build(g, mars_topo(g)), dt=lambda n: 450.0 * 2.0 ** (4 - n),   # (winds near 200 m/s on cells half Earth's)
                 visc4_U=15.0, tracer=False, planet=dict(MARS),
                 floor=10.0 * sc, thin_wind=100.0 * sc, shelf=100.0 * sc,   # (the layer floor, 1 hPa's wind sharing #83, squeezed layers over terrain #97: Earth's 0.1%, 1%, 1%)
@@ -753,6 +754,7 @@ def _mars_preset():
                 air=dict(AIR, longwave='ktables', physics=phys))
 
 
-# step 1: a dry Mars on today's physics over MOLA's terrain, a uniform ground (a slab of the day's skin), no frost, no dust; and flat
+# step 1: a dry Mars on today's physics over MOLA's terrain, a uniform ground (a slab of the day's skin), no dust; and flat
+# (step 4, #236: with CO2 frost)
 PRESETS['mars'] = _mars_preset()
 PRESETS['mars_flat'] = dict(PRESETS['mars'], build=mars_build)

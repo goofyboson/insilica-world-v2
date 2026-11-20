@@ -37,6 +37,16 @@ CIA_FILES = {'N2-N2': 'N2-N2_2021.cia', 'CO2-CO2': 'CO2-CO2_2024.cia', 'O2-O2': 
              'CO2-H2': 'CO2-H2_2024.cia', 'CO2-CH4': 'CO2-CH4_2024.cia', 'N2-CH4': 'N2-CH4_2024.cia'}
 
 
+LINE_T = [180.0, 320.0]                     # K, the temperatures a line's strength is judged at (read_lines)
+
+
+def set_cold():
+    """(V2-7, Mars) Judge the lines' strength down to 100 K too (low-energy lines strengthen as the air cools); clears the lines
+    read so far."""
+    LINE_T[:] = [100.0, 180.0, 320.0]
+    _LINES.clear()
+
+
 def set_wide():
     """Keep the weak lines other air's large columns need (#226); clears the lines read so far."""
     UMAX.update(UMAX_WIDE)
@@ -100,10 +110,10 @@ _Q = {}
 
 
 def partition(m, i, T):
-    """TIPS-2021 partition sum (HAPI), tabulated 100-400 K and interpolated."""
+    """TIPS-2021 partition sum (HAPI), tabulated 70-400 K (V2-7: from 100 K before) and interpolated."""
     if (m, i) not in _Q:
         import hapi
-        g = np.arange(100.0, 401.0, 1.0)
+        g = np.arange(70.0, 401.0, 1.0)
         _Q[(m, i)] = (g, np.array([hapi.partitionSum(m, i, float(t)) for t in g]))
     g, q = _Q[(m, i)]
     return np.interp(T, g, q)
@@ -124,9 +134,9 @@ def read_lines(gas, numin=10.0, numax=3000.0):
              E=col(45, 55).astype(float), nair=col(55, 59).astype(float), dair=col(59, 67).astype(float), iso=iso)
     m = MOL[gas]
     d['mass'] = np.array([hapi.molecularMass(m, int(i)) for i in iso]) * AMU
-    # strength's largest value between 180 and 320 K
+    # strength's largest value between 180 and 320 K (LINE_T; set_cold: from 100 K)
     smax = d['S'].copy()
-    for T in (180.0, 320.0):
+    for T in LINE_T:
         smax = np.maximum(smax, strength(d, T, m))
     keep = smax * UMAX[gas] > WMIN
     return {k: v[keep] for k, v in d.items()} | {'mol': m, 'gas': gas, 'nall': len(nu)}
@@ -465,7 +475,10 @@ def reference_air(name, base, air, m_air, bands=BANDS, dnu=DNU, o3=1.0, n2o=0.0,
     import afgl
     set_wide()
     AIR['co2'] = air.get('co2', 0.0)
-    P = afgl.profile(base)
+    P = base if isinstance(base, dict) else afgl.profile(base)    # (V2-7) a column given as levels (Mars's), with its gravity
+    global GRAV
+    g0 = GRAV
+    GRAV = P.get('grav', g0)
     nl = len(P['p'])
     vmr = {'H2O': P['vmr']['H2O'], 'CO2': np.full(nl, air.get('co2', 0.0)), 'O3': P['vmr']['O3'] * o3,
            'N2O': np.full(nl, n2o), 'CH4': np.full(nl, air.get('ch4', 0.0))}
@@ -482,9 +495,10 @@ def reference_air(name, base, air, m_air, bands=BANDS, dnu=DNU, o3=1.0, n2o=0.0,
         del tau
         print(f'{name} band {bands[b]}-{bands[b + 1]}: OLR {out["up"][b][0]:.2f}, surface down {out["dn"][b][-1]:.2f}', flush=True)
     AIR['co2'] = None
+    grav, GRAV = GRAV, g0
     path = path or ROOT / 'tests' / 'data' / 'lbl' / f'lbl_{name}.npz'
     keys = sorted(air)
-    np.savez(path, p=P['p'], T=P['T'], up=out['up'], dn=out['dn'], m_air=m_air, air_gas=np.array(keys),
+    np.savez(path, p=P['p'], T=P['T'], up=out['up'], dn=out['dn'], m_air=m_air, grav=grav, air_gas=np.array(keys),
              air_x=np.array([air[k] for k in keys]), **{'vmr_' + g: v for g, v in vmr.items()})
     print(f'{name}: OLR {out["up"][:, 0].sum():.2f}, surface down {out["dn"][:, -1].sum():.2f} W/m2 -> {path}')
     return out

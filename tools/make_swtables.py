@@ -150,7 +150,8 @@ def features(tau, P):
     cum = cp.concatenate([cp.zeros((1, tau.shape[1]), cp.float32), cp.cumsum(tau, axis=0)])
     lp = np.log(P['p'])
     rows = []
-    for p in np.minimum(P_FEAT, P['p'][-1]):
+    sc = P['p'][-1] / 1.0e5 if P['p'][-1] < 5.0e4 else 1.0      # (V2-7) a thin air's column at the same shares of its surface pressure
+    for p in np.minimum(P_FEAT * sc, P['p'][-1]):
         j = int(np.clip(np.searchsorted(lp, np.log(p)) - 1, 0, len(lp) - 2))
         f = (np.log(p) - lp[j]) / (lp[j + 1] - lp[j])
         rows.append(cp.log10(cp.maximum(cum[j] * (1 - f) + cum[j + 1] * f, 1e-4)).clip(-4, 2))
@@ -270,7 +271,7 @@ def heat(net, p, mu0):
 SIG_F, SIG_H, SIG_SMOOTH, SIG_A = 0.1 / 1361.0, 0.02, 0.5, 1.5
 
 
-def fit(src='sw.npz', extra=None):
+def fit(src='sw.npz', extra=None, base=True):
     """As the longwave's (make_ktables.fit): a factor on every gas's k per g-point, smooth in log p, fitted by
     Levenberg-Marquardt to line-by-line net fluxes and heating at three sun angles on the four columns (heating above
     1 hPa at a fifth of the weight, as the longwave's). (#226: src, and extra(t) further columns, each (tau, tr, th, node
@@ -278,7 +279,7 @@ def fit(src='sw.npz', extra=None):
     t = dict(np.load(OUT / src))
     t['K'] = t.get('K_raw', t['K'])
     cols = []
-    for c in COLUMNS:
+    for c in (COLUMNS if base else []):                    # (V2-7: base False, Earth's columns left out: Mars's tables)
         P = column(*c)
         r = np.load(ref_name(*c))
         tau, tr, th, lp = column_terms(t, P)

@@ -43,11 +43,12 @@ def cumulative_features(tau, pl):
     cum = cp.concatenate([cp.zeros((1, tau.shape[1]), cp.float32), cp.cumsum(tau, axis=0)])
     lp = np.log(pl)
     rows = []
-    for p in np.minimum(P_FEAT, pl[-1]):
+    sc = pl[-1] / 1.0e5 if pl[-1] < 5.0e4 else 1.0      # (V2-7) a thin air's column (Mars's) at the same shares of its surface pressure
+    for p in np.minimum(P_FEAT * sc, pl[-1]):
         j = int(np.clip(np.searchsorted(lp, np.log(p)) - 1, 0, len(pl) - 2))
         w = (np.log(p) - lp[j]) / (lp[j + 1] - lp[j])
         rows.append(cp.log10(cp.maximum(cum[j] * (1 - w) + cum[j + 1] * w, 1e-4)).clip(-4, 2))
-    for p in P_FEAT_UP:                               # from the surface up, which the surface's downward flux sees
+    for p in P_FEAT_UP * sc:                          # from the surface up, which the surface's downward flux sees
         j = int(np.clip(np.searchsorted(lp, np.log(p)) - 1, 0, len(pl) - 2))
         w = (np.log(p) - lp[j]) / (lp[j + 1] - lp[j])
         rows.append(cp.log10(cp.maximum(cum[-1] - (cum[j] * (1 - w) + cum[j + 1] * w), 1e-4)).clip(-4, 2))
@@ -153,7 +154,7 @@ def build_tables(out='lw.npz', mapname='map.npz'):
             for i, p in enumerate(P_TAB):
                 for j, T in enumerate(T_TAB):
                     k = lbl.absorption(lines[g], T, p, x, nu0, d, n)
-                    K[c, g0:g0 + NG[b], i, j] = (cp.bincount(lab, weights=k, minlength=NG[b]) / cnt).get()
+                    K[c, g0:g0 + NG[b], i, j] = (cp.bincount(lab, weights=k, minlength=NG[b]) / cp.maximum(cnt, 1)).get()   # (V2-7: an empty g-point, 0)
         print(f'band {BANDS[b]}-{BANDS[b + 1]}: {time.time() - t:.0f}s', flush=True)
     np.savez(OUT / out, K=K, P=P_TAB, T=T_TAB, T_pl=T_PL, x_h2o=np.array(X_H2O), bands=np.array(BANDS),
              ng=np.array(NG), comps=np.array([f'{g}{x}' for g, x in comps]),
@@ -240,6 +241,7 @@ CHECK_COLUMNS = [('tropical', 800e-6, {}), ('subarctic_winter', 400e-6, {'h2o': 
                  ('us_standard', 400e-6, {'h2o': 2.0, 'dT': 10.0})]
 NODES = np.log(np.array([1.0, 10.0, 50.0, 200.0, 1000.0, 3000.0, 10000.0, 20000.0, 40000.0, 60000.0, 80000.0, 110000.0]))
 SIG_F, SIG_H, SIG_SMOOTH, SIG_A = 0.1, 0.02, 0.5, 1.5     # W/m2 per band; K/day; per node step; prior on log factor
+T_FIT = None    # (V2-7) (T0, TS): the log factor also linear in temperature, a + b (T - T0) / TS (Mars's tables); None: pressure alone
 
 
 def ref_name(name, co2, kw=None):
@@ -256,16 +258,16 @@ def node_weights(lp):
     return W
 
 
-def fit(src='lw.npz', extra=None):
+def fit(src='lw.npz', extra=None, base=True):
     """A factor on every gas's k per g-point, smooth in log pressure (linear between NODES), fitted by Levenberg-
     Marquardt so the diffusivity fluxes match line-by-line (three angles) on FIT_COLUMNS: each band's net flux at
     every level and heating in every layer (above 1 hPa at a fifth of the weight). Saves src's K fitted (K_raw kept).
     (#226: extra(t) gives further columns, each (tau, B, node weights, p, reference, heating weights, an optical depth
-    the factors leave alone: collision-induced absorption)."""
+    the factors leave alone: collision-induced absorption). V2-7: base False leaves Earth's columns out (Mars's tables)."""
     t = dict(np.load(OUT / src))
     t['K'] = t.get('K_raw', t['K'])
     cols = []
-    for name, co2 in FIT_COLUMNS:
+    for name, co2 in (FIT_COLUMNS if base else []):
         P = afgl.profile(name, co2=co2)
         r = np.load(ref_name(name, co2))
         tau, B, lp = column_terms(t, P)
@@ -274,10 +276,16 @@ def fit(src='lw.npz', extra=None):
     if extra is not None:
         cols += extra(t)
     nn = len(NODES)
-    A = np.zeros((int(t['ng'].sum()), nn))
+    if T_FIT is not None:
+        # (V2-7) each layer's node weights twice, the second times its temperature's distance from T0: a factor that tells a warm
+        # air from a cold one at one pressure (a grouping's error that follows the lines' strengths, so the temperature)
+        T0, TS = T_FIT
+        cols = [(c[0], c[1], np.hstack([c[2], c[2] * ((c[4]['T'][1:] + c[4]['T'][:-1]) / 2 - T0)[:, None] / TS]), *c[3:]) for c in cols]
+    nw = cols[0][2].shape[1]
+    A = np.zeros((int(t['ng'].sum()), nw))
     for b in range(len(NG)):
         g = slice(sum(NG[:b]), sum(NG[:b + 1]))
-        a = np.zeros((NG[b], nn))
+        a = np.zeros((NG[b], nw))
 
         def resid(a, which=None):
             """Residuals (data then priors), and per node the change from perturbing all g-points' node."""
@@ -300,7 +308,7 @@ def fit(src='lw.npz', extra=None):
                 res.append((up.sum(0)[0] - r['up'][b][0]) / SIG_F * np.ones(1))
                 res.append((dn.sum(0)[-1] - r['dn'][b][-1]) / SIG_F * np.ones(1))
                 res.append(wH * (lbl.heating(up.sum(0), dn.sum(0), p) - lbl.heating(r['up'][b], r['dn'][b], p)) / SIG_H)
-            res.append((np.diff(a, axis=1) / SIG_SMOOTH).ravel())
+            res.append((np.diff(a.reshape(len(a), -1, nn), axis=2) / SIG_SMOOTH).ravel())
             res.append((a / SIG_A).ravel())
             return np.concatenate(res)
 
@@ -310,7 +318,7 @@ def fit(src='lw.npz', extra=None):
             r0 = stack(fl0, a)
             J = np.zeros((len(r0), a.size))
             eps = 1e-4
-            for j in range(nn):
+            for j in range(nw):
                 ap = a.copy()
                 ap[:, j] += eps
                 flp = resid(ap)
@@ -321,7 +329,7 @@ def fit(src='lw.npz', extra=None):
                         fq[c][1][q] = flp[c][1][q]
                     aq = a.copy()
                     aq[q, j] += eps
-                    J[:, q * nn + j] = (stack(fq, aq) - r0) / eps
+                    J[:, q * nw + j] = (stack(fq, aq) - r0) / eps
             return r0, J
 
         mu = 1e-2
@@ -351,9 +359,11 @@ def fit(src='lw.npz', extra=None):
               f'{np.exp(a).min():.2f}-{np.exp(a).max():.2f}', flush=True)
     # apply: log k at table pressure P_TAB gets the node interpolation of A
     WT = node_weights(np.log(P_TAB))                  # P x nodes
-    F = np.exp(A @ WT.T)                              # g x P
+    F = np.exp(A[:, :nn] @ WT.T)[:, :, None]          # g x P x 1
+    if T_FIT is not None:
+        F = F * np.exp((A[:, nn:] @ WT.T)[:, :, None] * ((T_TAB - T_FIT[0]) / T_FIT[1])[None, None, :])   # g x P x T
     t['K_raw'] = t['K']
-    t['K'] = t['K'] * F[None, :, :, None]
+    t['K'] = t['K'] * F[None]
     t['A'] = A
     np.savez(OUT / src, **t)
 

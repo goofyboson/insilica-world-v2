@@ -11,12 +11,17 @@ DATA = Path(__file__).resolve().parent / 'data' / 'lw_ktables.npz'
 # (#226) another air's: the tables keeping the weak lines of large CO2 and CH4 columns, and collision-induced absorption per g-point
 DATA_WIDE = Path(__file__).resolve().parent / 'data' / 'lw_ktables_wide.npz'
 CIA_DATA = Path(__file__).resolve().parent / 'data' / 'cia_ktables.npz'
+# (V2-7) the other-air table sets: 'wide' (#226) and Mars's own ('mars': grouped and fitted on Mars's columns, 100-340 K), each its
+# longwave, shortwave and collision-induced absorption
+TABLES = {name: tuple(Path(__file__).resolve().parent / 'data' / f for f in files) for name, files in
+          dict(wide=('lw_ktables_wide.npz', 'sw_ktables_wide.npz', 'cia_ktables.npz'),
+               mars=('lw_ktables_mars.npz', 'sw_ktables_mars.npz', 'cia_ktables_mars.npz')).items()}
 
 
-def cia_table(weights, which):
+def cia_table(weights, which, tables='wide'):
     """The CIA pairs' tables (T x g, x 1e40) summed with weights x_a x_b (constants.CIA_PAIRS' order), float32 on the GPU."""
     from .constants import CIA_PAIRS
-    t = np.load(CIA_DATA)
+    t = np.load(TABLES[tables][2])
     assert tuple(str(x) for x in t['pairs']) == CIA_PAIRS
     a = np.tensordot(np.asarray(weights, float), t[which].astype(float), axes=1)
     return cp.asarray(a.astype(np.float32))
@@ -24,10 +29,11 @@ HAZE_SCALE = 1500.0                         # m, the haze's scale height (tools/
 
 
 class Longwave:
-    def __init__(self, dg, layers, par, co2=400e-6, n2o=0.32e-6, ch4=1.8e-6, tmode=2, defs=(), cia=None):
-        """cia (#226): another air's CIA pair weights (constants.air_radiation): the wide tables and the pairs' absorption."""
-        t = np.load(DATA if cia is None else DATA_WIDE)
-        self.cia = None if cia is None else cia_table(cia, 'lw')
+    def __init__(self, dg, layers, par, co2=400e-6, n2o=0.32e-6, ch4=1.8e-6, tmode=2, defs=(), cia=None, tables='wide'):
+        """cia (#226): another air's CIA pair weights (constants.air_radiation): the wide tables and the pairs' absorption;
+        tables (V2-7): which other-air set (TABLES)."""
+        t = np.load(DATA if cia is None else TABLES[tables][0])
+        self.cia = None if cia is None else cia_table(cia, 'lw', tables)
         self.dg, self.L, self.par, self.tmode = dg, layers, par, int(tmode)
         self.logk = cp.asarray(np.ascontiguousarray(t['logk']))
         self.planck = cp.asarray(np.ascontiguousarray(t['planck']))
@@ -86,9 +92,9 @@ def ice_optics(re_um):
 
 
 class Shortwave:
-    def __init__(self, dg, layers, par, lw, inhom=CLOUD_INHOM, ice_re=None, defs=(), cia=None):
-        t = np.load(SW_DATA if cia is None else SW_DATA_WIDE)
-        self.cia = None if cia is None else cia_table(cia, 'sw')
+    def __init__(self, dg, layers, par, lw, inhom=CLOUD_INHOM, ice_re=None, defs=(), cia=None, tables='wide'):
+        t = np.load(SW_DATA if cia is None else TABLES[tables][1])      # (V2-7) tables: the other-air set
+        self.cia = None if cia is None else cia_table(cia, 'sw', tables)
         self.dg, self.L, self.par, self.lwm, self.inhom = dg, layers, par, lw, inhom
         self.logk = cp.asarray(np.ascontiguousarray(t['logk']))
         self.NC, self.NP, self.NT, self.NG = self.logk.shape

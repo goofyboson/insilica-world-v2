@@ -118,5 +118,6 @@ C_SOIL, K_SOIL = 2.0e6, 1.0
 # capacity at 200 K (t_cp), ozone ~1 um-atm (0.1 DU against Earth's ~300: a factor 3e-4; Perrier et al. 2006)
 MARS = dict(radius=3.3895e6, omega=2 * math.pi / 88642.66, grav=3.721, day_s=88775.24, year_s=686.98 * 86400.0, S0=586.2,
             tilt=math.radians(25.19), ecc=0.0934, lam_peri=math.radians(250.87),
-            gases=dict(co2=0.951, n2=0.0259, ar=0.0194, o2=0.0016), co2=0.951, n2o=0.0, ch4=0.0, t_cp=200.0, o3=3.0e-4)
+            gases=dict(co2=0.951, n2=0.0259, ar=0.0194, o2=0.0016), co2=0.951, n2o=0.0, ch4=0.0, t_cp=200.0, o3=3.0e-4,
+            tables='mars')                      # (the radiation's own table set, 100-340 K)
 SOIL_DZ = (0.1, 0.2, 0.4, 0.8, 1.6, 3.2)

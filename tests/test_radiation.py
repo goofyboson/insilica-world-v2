@@ -7,13 +7,13 @@ import cupy as cp
 import numpy as np
 import pytest
 
-from insilica.radiation import CIA_DATA, DATA, DATA_WIDE
+from insilica.radiation import CIA_DATA, DATA, DATA_WIDE, TABLES
 from insilica.world import World
 
 REF = Path(__file__).resolve().parent / 'data' / 'lbl'
 COLUMNS = ['us_standard_400', 'us_standard_800', 'tropical_400', 'subarctic_winter_400', 'tropical_800',
            'subarctic_winter_400_h2o2', 'us_standard_400_h2o2_dT10']
-AIR_COLUMNS = ['early_n2co2', 'co2_half']      # (#226) in other air (tools/other_air.py), unfitted: the wide tables, broadening, CIA
+AIR_COLUMNS = ['early_n2co2', 'co2_half', 'mars', 'mars_polar']   # (#226) in other air (tools/other_air.py), unfitted: the wide tables, broadening, CIA; (V2-7) Mars's mean day and winter pole, 110-215 K
 GRAV, M_AIR, NA = 9.80665, 28.9647e-3, 6.02214076e23
 SUB_HPA = (0, 1, 5, 20, 50, 100, 150, 200, 300, 400, 500, 600, 700, 800, 900, 1e4)   # model-like sub-levels (#110)
 
@@ -71,13 +71,13 @@ def lw_numpy(t, x, y, u, fh, Tt, Tb, Ts, groups, fc=None, tc=None, cia=None):
     return up, dn, trs, Bs
 
 
-def afgl_terms(t, r, m_air=M_AIR, broad=1.0):
+def afgl_terms(t, r, m_air=M_AIR, broad=1.0, grav=GRAV):
     """A saved line-by-line column's layers in the model's terms (each its own group, no clouds); in another air (#226) its
-    molar mass, and its lines read at the pressure times its broadening."""
+    molar mass, and its lines read at the pressure times its broadening; (V2-7) on another planet, its gravity."""
     p, T = r['p'], r['T']
     pm = (p[1:] - p[:-1]) / np.log(p[1:] / p[:-1])
     Tm = (T[1:] + T[:-1]) / 2
-    air = np.diff(p) / GRAV / m_air * NA / 1e4
+    air = np.diff(p) / grav / m_air * NA / 1e4
     mid = lambda g: (r['vmr_' + g][1:] + r['vmr_' + g][:-1]) / 2
     u = np.stack([mid(g) * air for g in ('H2O', 'CO2', 'O3', 'N2O', 'CH4')], 1)
     P, Tt = t['P'], t['T']
@@ -86,9 +86,9 @@ def afgl_terms(t, r, m_air=M_AIR, broad=1.0):
     return x, y, u, mid('H2O') / 0.04, T[:-1], T[1:], T[-1], [[s] for s in range(len(pm))]
 
 
-def heating(up, dn, p):
+def heating(up, dn, p, grav=GRAV, cp_air=1004.64):
     net = up - dn
-    return (net[1:] - net[:-1]) / np.diff(p) * GRAV / 1004.64 * 86400
+    return (net[1:] - net[:-1]) / np.diff(p) * grav / cp_air * 86400
 
 
 @pytest.mark.xdist_group('grid4')
@@ -110,27 +110,33 @@ def test_longwave(record):
         e = np.abs(heating(U[sub], D[sub], r['p'][sub]) - heating(Ur[sub], Dr[sub], r['p'][sub]))
         worst['heat'] = max(worst['heat'], e[1:].max())   # below 1 hPa (#110)
     # (#226) other air: the wide tables, its broadening and collision-induced absorption, against line-by-line in that air
-    from insilica.constants import air_radiation
-    tw, cz = dict(np.load(DATA_WIDE)), np.load(CIA_DATA)
+    from insilica.constants import air_props, air_radiation
+    sets = {k: (dict(np.load(v[0])), np.load(v[2])) for k, v in TABLES.items()}
     other = dict(olr=0.0, down=0.0, heat=0.0, rel=0.0, over=0)
     olr_air = {}
     for name in AIR_COLUMNS:
         r = np.load(REF / f'lbl_{name}.npz')
-        rad = air_radiation({str(k): float(v) for k, v in zip(r['air_gas'], r['air_x'])})
-        terms = afgl_terms(tw, r, m_air=float(r['m_air']), broad=rad['broad'])
+        tw, cz = sets['mars' if name.startswith('mars') else 'wide']        # (V2-7) Mars's columns on Mars's own tables
+        gas = {str(k): float(v) for k, v in zip(r['air_gas'], r['air_x'])}
+        rad = air_radiation(gas)
+        # (V2-7) a column on another planet: its gravity, its air's heat capacity at 200 K (as the model's), sub-levels at the same
+        # shares of its surface pressure
+        g = float(r['grav']) if 'grav' in r.files else GRAV
+        cpa, ps = (air_props(gas, t_cp=200.0)['cp'], r['p'][-1] / 1.0e5) if 'grav' in r.files else (1004.64, 1.0)
+        terms = afgl_terms(tw, r, m_air=float(r['m_air']), broad=rad['broad'], grav=g)
         p = r['p']
         pm, Tm = (p[1:] - p[:-1]) / np.log(p[1:] / p[:-1]), (r['T'][1:] + r['T'][:-1]) / 2
-        wc = np.diff(p) / GRAV / float(r['m_air']) * NA / 1e4 * 1e-20 * (pm / (1.380649e-23 * Tm) * 1e-6) * 1e-20
+        wc = np.diff(p) / g / float(r['m_air']) * NA / 1e4 * 1e-20 * (pm / (1.380649e-23 * Tm) * 1e-6) * 1e-20
         up, dn, tr, Bs = lw_numpy(tw, *terms, cia=(wc, np.tensordot(rad['cia'], cz['lw'].astype(float), axes=1)))
         U, D = up.sum(1) + np.pi * (tr * Bs).sum(1), dn.sum(1)
         Ur, Dr = r['up'].sum(0), r['dn'].sum(0)
         olr_air[name] = (U[0], Ur[0])
         other['olr'] = max(other['olr'], abs(U[0] / Ur[0] - 1))
         other['down'] = max(other['down'], abs(D[-1] / Dr[-1] - 1))
-        sub = sorted({int(np.argmin(np.abs(p - q * 100))) for q in SUB_HPA})
+        sub = sorted({int(np.argmin(np.abs(p - q * 100 * ps))) for q in SUB_HPA})
         # (owner, 2026-11-17) each sub-level below 1 hPa within 0.2 K/day or within 2% of its cooling, whichever is looser
-        e = np.abs(heating(U[sub], D[sub], p[sub]) - heating(Ur[sub], Dr[sub], p[sub]))[1:]
-        hr = np.abs(heating(Ur[sub], Dr[sub], p[sub]))[1:]
+        e = np.abs(heating(U[sub], D[sub], p[sub], g, cpa) - heating(Ur[sub], Dr[sub], p[sub], g, cpa))[1:]
+        hr = np.abs(heating(Ur[sub], Dr[sub], p[sub], g, cpa))[1:]
         other['heat'] = max(other['heat'], e.max())
         other['rel'] = max(other['rel'], (e / hr)[e > 0.2].max() if np.any(e > 0.2) else 0.0)
         other['over'] += int(np.sum((e > 0.2) & (e > 0.02 * hr)))
@@ -148,7 +154,7 @@ def test_longwave(record):
         w.physics.radiate(w.h, w.theta, w.Ts, w.time, w.rad_every * w.dt, q=w.q, cw=w.cw)
         lw, L, N = w.physics.lw, w.L, w.grid.N
         sub, radf, Ts = lw.sub.get().reshape(4 * L, 15, N), lw.radf.get(), w.Ts.get()
-        tk, C = (t, None) if gases is None else (tw, lw.cia.get().astype(float))
+        tk, C = (t, None) if gases is None else (sets['wide'][0], lw.cia.get().astype(float))
         RW = L + 1
         cells = np.linspace(0, N - 1, 64).astype(int)
         for i in cells:
@@ -165,7 +171,7 @@ def test_longwave(record):
           and other['olr'] <= 0.01 and other['down'] <= 0.01 and other['over'] == 0)
     record('LONGWAVE', f'seven AFGL columns (three unfitted): OLR {worst["olr"] * 100:.2f}%, surface down {worst["down"] * 100:.2f}%, '
            f'heating {worst["heat"]:.3f} K/day per sub-level below 1 hPa, 2×CO₂ forcing (top, tropopause) {worst["forcing"] * 100:.1f}%; '
-           f'other air (#226; 10% CO₂ with 0.1% CH₄ and no O₂, half CO₂; unfitted, wide tables, broadening, collision-induced '
+           f'other air (#226; 10% CO₂ with 0.1% CH₄ and no O₂, half CO₂, Mars (mean day, winter pole); unfitted, the wide or Mars tables, broadening, collision-induced '
            f'absorption): OLR {other["olr"] * 100:.2f}% (' + ', '.join(f'{a:.1f} against {b:.1f}' for a, b in olr_air.values())
            + f' W/m²), surface down {other["down"] * 100:.2f}%, heating worst {other["heat"]:.3f} K/day, where over 0.2 '
            f'{other["rel"] * 100:.1f}% of the cooling, sub-levels over both {other["over"]}; '

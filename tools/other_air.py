@@ -9,6 +9,8 @@ line-by-line columns in other air that LONGWAVE checks them on.
     python tools/other_air.py swwidemap    the shortwave's g-points for other air (cache/ktables/swmap_wide.npz)
     python tools/other_air.py swref NAME   a column (COLUMNS, MAP_COLUMNS) by the shortwave's line-by-line (cache/ktables/sw_air_NAME.npz)
     python tools/other_air.py swcheck      the wide shortwave tables against them
+    python tools/other_air.py mars STEP    (V2-7) STEP for Mars's own tables (widemap ... swcheck): grouped and fitted on Mars's
+                                           columns alone, 100-340 K, written with the suffix _mars (lw_ktables_mars.npz, ...)
 
 The wide tables keep the weak lines that columns of up to about a bar of CO2 and 1% of CH4 need (lbl.UMAX_WIDE); Earth's
 tables leave them out. The longwave's g-points are grouped again (make_ktables' k-means, the same g-points per band) on
@@ -46,23 +48,91 @@ PAIRS = list(lbl.CIA_FILES)
 CIA_SCALE = 1e40
 
 
+# (V2-7, Mars) Mars's air and columns: levels from 1 Pa to the surface, the temperature by height z = 10.8 km ln(ps / p) (K, km);
+# `mars` a mean mid-latitude day's (LONGWAVE), `mars_polar` the winter pole's, cold near the ground and warmed aloft by the descending
+# branch (LONGWAVE); `map_mars` a warm equatorial day's and `map_mars_cold` a polar night's colder still (the g-points' grouping and fit)
+MARS_AIR = dict(co2=0.951, n2=0.0259, ar=0.0194, o2=0.0016)
+MARS_GRAV = 3.721
+MARS_T = {'mars': (610.0, lambda z: np.maximum(140.0, 215.0 - 2.2 * z)),
+          'mars_polar': (700.0, lambda z: np.where(z < 20, 150.0 - 0.75 * z, np.where(z < 40, 135.0 + 1.5 * (z - 20), 165.0 - 1.25 * (z - 40)))),
+          'map_mars': (500.0, lambda z: np.maximum(150.0, 245.0 - 3.0 * z)),
+          'map_mars_cold': (800.0, lambda z: np.maximum(110.0, 145.0 - 0.6 * z)),
+          'map_mars_inv': (650.0, lambda z: np.where(z < 15, 160.0 - z, np.where(z < 35, 145.0 + 1.5 * (z - 15), np.maximum(130.0, 175.0 - 1.5 * (z - 35)))))}
+COLUMNS.update(mars=('mars', MARS_AIR), mars_polar=('mars_polar', MARS_AIR))                   # (V2-7)
+MARS_MAP = dict(map_mars=('map_mars', MARS_AIR), map_mars_cold=('map_mars_cold', MARS_AIR), map_mars_inv=('map_mars_inv', MARS_AIR))
+# the table set being made: 'wide' (#226: Earth's columns and MAP_COLUMNS), or 'mars' (V2-7: MARS_MAP alone, down to 100 K)
+SET = dict(name='wide', suf='', base=True)
+# (V2-7) band: (N, S): after the grouping, its N g-points with the worst top-layer heating on MAP_COLUMNS split S ways by the top
+# layer's own optical depth (mk.NG counts them: the k-means makes NG - N (S - 1)); see top_split
+TOP_SPLIT = {}
+
+
+def set_mars():
+    """(V2-7) Make Mars's own tables: grouped and fitted on MARS_MAP alone (one set's pressure-smooth fit cannot serve Earth's
+    stratosphere and Mars's lower air, which share pressures 50-100 K and ~2000x the CO2 apart), 100-340 K; files with _mars."""
+    set_cold()
+    MAP_COLUMNS.clear()
+    MAP_COLUMNS.update(MARS_MAP)
+    SET.update(name='mars', suf='_mars', base=False)
+    # the g-points where Mars's air absorbs: CO2's 15 um band (500-630, 630-700, 700-820 cm-1) at the cost of the bands it hardly
+    # touches (138 in all, the kernel's most 144); the grouping's features at Mars's own pressures, 2-610 Pa (scaled by the column's surface pressure)
+    mk.NG = [4, 4, 22, 38, 30, 8, 8, 8, 8, 8]
+    # the top split in CO2's three bands (16, 32 and 24 grouped, 6 more each: 138 in all); see top_split
+    TOP_SPLIT.update({2: (2, 4), 3: (2, 4), 4: (2, 4)})
+    # the fit's factor linear in temperature as well: the grouping (on two cold columns and one warm) over-cools warm air in
+    # CO2's band wings by a few per cent, where hot bands grow; local in temperature, unlike the top's error, so a factor mends it
+    mk.T_FIT = (170.0, 50.0)
+    mk.P_FEAT = np.array([2.0, 5.0, 15.0, 40.0, 80.0, 150.0, 250.0, 400.0, 610.0]) / 610.0 * 1.0e5
+
+
+def checks():
+    """The set's unfitted check columns (COLUMNS): Mars's for Mars's tables, the others for the wide ones."""
+    return {k: v for k, v in COLUMNS.items() if (v[0] in MARS_T) == (SET['name'] == 'mars')}
+
+
+def mars_levels(name, n=41):
+    """A Mars column's levels as afgl.profile's (p, T, vmr, from the top), with its gravity."""
+    ps, T = MARS_T[name]
+    p = np.geomspace(1.0, ps, n)
+    z = 10.8 * np.log(ps / p)
+    zero = np.zeros(n)
+    return dict(p=p, T=np.asarray(T(z), float), z=z, grav=MARS_GRAV,
+                vmr={'H2O': zero, 'CO2': np.full(n, MARS_AIR['co2']), 'O3': zero, 'N2O': zero, 'CH4': zero})
+
+
+def set_cold():
+    """(V2-7) The wide tables down to 100 K: the longwave's temperatures 100-340 K (from 150), its Planck table 90-350 K (from 140),
+    the shortwave's 90-330 K (from 150); lines judged down to 100 K."""
+    lbl.set_cold()
+    mk.T_TAB = np.arange(100.0, 341.0, 10.0)
+    mk.T_PL = np.arange(90.0, 351.0, 1.0)
+    ms.T_TAB = np.arange(90.0, 341.0, 20.0)
+
+
+def use_grav(P):
+    """Set lbl's gravity for column P (Mars's own; Earth's otherwise)."""
+    lbl.GRAV = P.get('grav', 9.80665)
+
+
 def m_air(air):
     return sum(x * MASS[g] for g, x in air.items()) / sum(air.values()) * 1e-3
 
 
 def ref(name):
+    if name in MARS_MAP or name in COLUMNS and COLUMNS[name][0] in MARS_T:
+        set_mars()
     if name in MAP_COLUMNS:
         base, air = MAP_COLUMNS[name]
-        lbl.reference_air(name, base, air, m_air(air), o3=0.0, path=lbl.REF / f'lbl_{name}.npz')
+        lbl.reference_air(name, mars_levels(base) if base in MARS_T else base, air, m_air(air), o3=0.0, path=lbl.REF / f'lbl_{name}.npz')
     else:
         base, air = COLUMNS[name]
-        lbl.reference_air(name, base, air, m_air(air), o3=0.0)
+        lbl.reference_air(name, mars_levels(base) if base in MARS_T else base, air, m_air(air), o3=0.0)
 
 
 def air_column(base, air, o3=0.0):
     """An AFGL column's levels in another dry air: (P, vmr, m_air), as lbl.reference_air builds them."""
     import afgl
-    P = afgl.profile(base)
+    P = mars_levels(base) if base in MARS_T else afgl.profile(base)
     nl = len(P['p'])
     vmr = {'H2O': P['vmr']['H2O'], 'CO2': np.full(nl, air.get('co2', 0.0)), 'O3': P['vmr']['O3'] * o3,
            'N2O': np.zeros(nl), 'CH4': np.full(nl, air.get('ch4', 0.0))}
@@ -75,17 +145,19 @@ def widemap():
     import afgl
     lbl.set_wide()
     cols = []
-    for c, x in mk.COLUMNS:
+    for c, x in (mk.COLUMNS if SET['base'] else []):
         P = afgl.profile(c, co2=x)
         cols.append((P, lbl.layers(P['p'], P['T'], P['vmr']), None, None))
     for name, (base, air) in MAP_COLUMNS.items():
         P, vmr, m = air_column(base, air)
+        use_grav(P)
         cols.append((P, lbl.layers(P['p'], P['T'], vmr, m), air, np.diff(P['p']) / lbl.GRAV / m * lbl.NA / 1e4))
+    lbl.GRAV = 9.80665
     out = {}
     for b in range(len(mk.NG)):
         t = time.time()
         nu0, d, n, nu = mk.band_grid(b)
-        feats = []
+        feats, taus = [], []
         for P, L, air, ua in cols:
             lbl.AIR['co2'] = None if air is None else air.get('co2', 0.0)
             pm, Tm, x, u = L
@@ -93,26 +165,85 @@ def widemap():
             if air is not None:
                 tau += lbl.cia_tau(pm, Tm, ua, air, nu)
             feats.append(mk.cumulative_features(tau, P['p']))
+            taus.append(tau if b in TOP_SPLIT else None)
             del tau
         lbl.AIR['co2'] = None
-        lab = mk.kmeans(cp.concatenate(feats), mk.NG[b])
+        N, S = TOP_SPLIT.get(b, (0, 1))
+        lab = mk.kmeans(cp.concatenate(feats), mk.NG[b] - N * (S - 1))
+        if N:
+            lab = top_split(lab, mk.NG[b] - N * (S - 1), N, S, [(P, L[0], tau) for (P, L, _, _), tau in zip(cols, taus)], nu, d)
+        del taus
         out[f'lab{b}'] = lab.astype(cp.int8).get()
         frac = np.stack([cp.bincount(lab, weights=lbl.planck(nu, T), minlength=mk.NG[b]).get() for T in mk.T_PL])
         out[f'pl{b}'] = frac / frac.sum(axis=1, keepdims=True)
         out[f'w{b}'] = cp.bincount(lab, minlength=mk.NG[b]).get() / n
         print(f'band {mk.BANDS[b]}-{mk.BANDS[b + 1]}: g-point widths {np.round(out[f"w{b}"], 3)}, {time.time() - t:.0f}s', flush=True)
-    np.savez(lbl.REF / 'map_wide.npz', **out)
+    np.savez(lbl.REF / f'map_wide{SET["suf"]}.npz', **out)
 
+
+def _rt(tau, B, mu=1 / 1.66):
+    """Up and down fluxes (levels x points, W/m2 per point) with the diffusivity angle, the source linear in optical depth."""
+    def through(I, t, Bn, Bf):
+        x = t / mu
+        tr = cp.exp(-x)
+        lin = cp.where(x > 1e-3, 1 - (1 - tr) / cp.maximum(x, 1e-30), x / 2 - x * x / 6)
+        return I * tr + Bf * (1 - tr) + (Bn - Bf) * lin
+    nl = tau.shape[0]
+    up, dn = cp.zeros((nl + 1, tau.shape[1])), cp.zeros((nl + 1, tau.shape[1]))
+    I = cp.zeros(tau.shape[1])
+    for i in range(nl):
+        I = through(I, tau[i], B[i + 1], B[i])
+        dn[i + 1] = np.pi * I
+    I = B[-1].copy()
+    up[nl] = np.pi * I
+    for i in range(nl - 1, -1, -1):
+        I = through(I, tau[i], B[i], B[i + 1])
+        up[i] = np.pi * I
+    return up, dn
+
+
+def top_split(lab, ng, N, S, cols, nu, d):
+    """(V2-7) Split the N g-points of a band whose top two sub-layers' heating (Mars's 0.01-0.05 and 0.05-0.2 hPa scaled by the
+    surface pressure) the grouping misjudges most on the map columns (cols: (P, layer pressures, optical depths)), each into S
+    by the top layer's own log optical depth (near 7 Pa at 610 Pa, mean over the columns), appended as g-points ng, ng + 1, ...
+    Where molecular speed, not collisions, sets the lines' widths (all Mars's air above ~400 Pa), a wing that is thick below
+    is thin at the top: wavenumbers grouped together lower down part at the top, where the group's mean optical depth puts
+    its opacity in the gaps between the line centres and lets the top absorb the warmer radiation from below there."""
+    score = cp.zeros(ng)
+    ktop = 0.0
+    for P, pm, tau in cols:
+        tau = tau.astype(cp.float64)
+        p = P['p']
+        sub = sorted({int(np.argmin(np.abs(p - q * p[-1] / 1.0e3))) for q in (0, 1, 5, 20)})
+        B = cp.stack([lbl.planck(nu, T) * d for T in P['T']])
+        cnt = cp.maximum(cp.bincount(lab, minlength=ng), 1)
+        group = lambda F: cp.stack([cp.bincount(lab, weights=F[i], minlength=ng) for i in sub])
+        U, D = _rt(tau, B)
+        net = group(U) - group(D)
+        Ug, Dg = _rt(cp.stack([cp.bincount(lab, weights=t, minlength=ng) / cnt for t in tau]), cp.stack([cp.bincount(lab, weights=Bi, minlength=ng) for Bi in B]))
+        netg = Ug[sub] - Dg[sub]
+        dp = cp.asarray(np.diff(p[sub]))[:, None]
+        score += cp.abs((cp.diff(netg - net, axis=0) / dp)[1:3]).sum(0)
+        ktop = ktop + cp.log(cp.maximum(tau[int(np.argmin(np.abs(pm - 7.0 * p[-1] / 610.0)))], 1e-30)) / len(cols)
+    new = ng
+    for q in cp.argsort(-score)[:N].get():
+        sel = lab == int(q)
+        edges = cp.quantile(ktop[sel], cp.linspace(0, 1, S + 1)[1:-1])
+        part = cp.searchsorted(edges, ktop)
+        for k in range(1, S):
+            lab = cp.where(sel & (part == k), new, lab)
+            new += 1
+    return lab
 
 def cia():
-    m, sm = np.load(lbl.REF / 'map_wide.npz'), np.load(lbl.REF / 'swmap_wide.npz')
+    m, sm = np.load(lbl.REF / f'map_wide{SET["suf"]}.npz'), np.load(lbl.REF / f'swmap_wide{SET["suf"]}.npz')
     lw = np.zeros((len(PAIRS), len(mk.T_TAB), sum(mk.NG)))
     for b in range(len(mk.NG)):
         t = time.time()
         _, _, _, nu = mk.band_grid(b)
         nu = cp.asnumpy(nu)
         lab = m[f'lab{b}'].astype(np.int64)
-        cnt = np.bincount(lab, minlength=mk.NG[b])
+        cnt = np.maximum(np.bincount(lab, minlength=mk.NG[b]), 1)        # (V2-7: an empty g-point, 0)
         g0 = sum(mk.NG[:b])
         for c, pair in enumerate(PAIRS):
             for j, T in enumerate(mk.T_TAB):
@@ -129,7 +260,7 @@ def cia():
             for j, T in enumerate(ms.T_TAB):
                 sw[c, j, g0:g0 + ms.NG[b]] = np.bincount(lab, weights=lbl.cia_k(pair, nu, T) * w, minlength=ms.NG[b]) / W
         print(f'shortwave band {b}: {time.time() - t:.0f}s', flush=True)
-    path = DATA / 'cia_ktables.npz'
+    path = DATA / f'cia_ktables{SET["suf"]}.npz'
     np.savez_compressed(path, pairs=np.array(PAIRS), lw=(lw * CIA_SCALE).astype(np.float32), sw=(sw * CIA_SCALE).astype(np.float32),
                         T_lw=mk.T_TAB, T_sw=ms.T_TAB, scale=CIA_SCALE)
     for c, pair in enumerate(PAIRS):
@@ -147,10 +278,11 @@ def _fit_columns(t):
     """MAP_COLUMNS as make_ktables.fit's further columns: their tables' optical depths in their air, the collision-induced
     absorption (from cia_ktables.npz's longwave, as the model adds it) apart."""
     from insilica.constants import air_radiation
-    cz = np.load(DATA / 'cia_ktables.npz')
+    cz = np.load(DATA / f'cia_ktables{SET["suf"]}.npz')
     cols = []
     for name, (base, air) in MAP_COLUMNS.items():
         P, vmr, m = air_column(base, air)
+        use_grav(P)
         r = np.load(lbl.REF / f'lbl_{name}.npz')
         rad = air_radiation({k: v / sum(air.values()) for k, v in air.items()})
         tau, B, lp = mk.column_terms(t, P, vmr=vmr, m_air=m, broad=rad['broad'])
@@ -161,15 +293,17 @@ def _fit_columns(t):
         y = np.clip(np.interp(Tm, mk.T_TAB, np.arange(len(mk.T_TAB))), 0, len(mk.T_TAB) - 1 - 1e-9)
         j = y.astype(int)
         add = wc[:, None] * (C[j] + (C[j + 1] - C[j]) * (y - j)[:, None])
-        cols.append((tau, B, mk.node_weights(lp), p, r, np.where(p[1:] > 100.0, 1.0, 0.2), add))
+        cols.append((tau, B, mk.node_weights(lp), p, r, np.where(p[1:] > 100.0, 1.0, 0.2), add))   # (V2-7: on Mars too: scaled to its surface pressure, the fit came out worse)
+        lbl.GRAV = 9.80665
     return cols
 
 
 def wide():
     lbl.set_wide()
-    mk.build_tables(out='lw_wide.npz', mapname='map_wide.npz')
-    mk.fit('lw_wide.npz', extra=_fit_columns)
-    mk.export('lw_wide.npz', DATA / 'lw_ktables_wide.npz')
+    sf = SET['suf']
+    mk.build_tables(out=f'lw_wide{sf}.npz', mapname=f'map_wide{sf}.npz')
+    mk.fit(f'lw_wide{sf}.npz', extra=_fit_columns, base=SET['base'])
+    mk.export(f'lw_wide{sf}.npz', DATA / f'lw_ktables{"_wide" if not sf else sf}.npz')
 
 
 def swwidemap():
@@ -177,7 +311,7 @@ def swwidemap():
     swmap_wide.npz."""
     import swlbl
     lbl.set_wide()
-    cols = [(ms.column(*c), None) for c in ms.COLUMNS[:3]]
+    cols = [(ms.column(*c), None) for c in (ms.COLUMNS[:3] if SET['base'] else [])]
     for name, (base, air) in MAP_COLUMNS.items():
         P, vmr, m = air_column(base, air)
         vmr['O2'] = np.full(len(P['p']), air.get('o2', 0.0))
@@ -205,16 +339,17 @@ def swwidemap():
         out[f'haze{b}'] = (np.bincount(labn, weights=w * (1e7 / nu / 550.0) ** -swlbl.HAZE['angstrom'], minlength=ms.NG[b]) /
                            np.maximum(ww, 1e-30))
         print(f'band {b}: sunlight per g-point {np.round(ww, 1)} W/m2, {time.time() - t:.0f}s', flush=True)
-    np.savez(lbl.REF / 'swmap_wide.npz', **out)
+    np.savez(lbl.REF / f'swmap_wide{SET["suf"]}.npz', **out)
 
 
 def _sw_fit_columns(t):
     """MAP_COLUMNS as make_swtables.fit's further columns, the collision-induced absorption apart."""
-    cz = np.load(DATA / 'cia_ktables.npz')
+    cz = np.load(DATA / f'cia_ktables{SET["suf"]}.npz')
     cols = []
     for name, (base, air) in MAP_COLUMNS.items():
         P, vmr, m = air_column(base, air)
         vmr['O2'] = np.full(len(P['p']), air.get('o2', 0.0))
+        use_grav(P)
         r = np.load(lbl.REF / f'sw_air_{name}.npz')
         t0 = dict(t)
         tau, tr, th = sw_terms(t0, P, vmr, m, air, cz)
@@ -222,14 +357,21 @@ def _sw_fit_columns(t):
         tau_gas, _, _ = sw_terms(t0, P, vmr, m, air, None)
         pm = (P['p'][1:] - P['p'][:-1]) / np.log(P['p'][1:] / P['p'][:-1])
         cols.append((tau_gas, tr, th, mk.node_weights(np.log(pm * _sw_air(air)['broad'])), P['p'], r, tau - tau_gas))
+        lbl.GRAV = 9.80665
     return cols
 
 
 def swwide():
     lbl.set_wide()
-    ms.build_tables(out='sw_wide.npz', mapname='swmap_wide.npz')
-    ms.fit('sw_wide.npz', extra=_sw_fit_columns)
-    ms.export('sw_wide.npz', 'sw_ktables_wide.npz')
+    sf = SET['suf']
+    ms.build_tables(out=f'sw_wide{sf}.npz', mapname=f'swmap_wide{sf}.npz')
+    if SET['name'] == 'mars':
+        # (V2-7) Mars's shortwave unfitted: on Mars's columns alone the fit ran away (factors e^-48 to e^37 within Mars's pressures)
+        # and doubled the flux error (2.1 against 1.1 W/m2 unfitted)
+        ms.export(f'sw_wide{sf}.npz', f'sw_ktables{sf}.npz')
+        return
+    ms.fit(f'sw_wide{sf}.npz', extra=_sw_fit_columns, base=SET['base'])
+    ms.export(f'sw_wide{sf}.npz', f'sw_ktables{"_wide" if not sf else sf}.npz')
 
 
 # ---------------------------------------------------------------- the shortwave in other air
@@ -263,10 +405,13 @@ def sw_column_tau(P, vmr, m, air, b):
 
 
 def sw_ref(name):
+    if name in MARS_MAP or name in COLUMNS and COLUMNS[name][0] in MARS_T:
+        set_mars()
     lbl.set_wide()
-    base, air = COLUMNS[name] if name in COLUMNS else MAP_COLUMNS[name]
+    base, air = COLUMNS[name] if name in COLUMNS else MAP_COLUMNS[name]   # (Mars's map columns are in MAP_COLUMNS after set_mars)
     P, vmr, m = air_column(base, air)
     vmr['O2'] = np.full(len(P['p']), air.get('o2', 0.0))
+    use_grav(P)
     out = {k: np.zeros((len(ms.MU0), len(ms.BANDS), len(P['p']))) for k in ('dir', 'dif', 'up')}
     for b in range(len(ms.BANDS)):
         t = time.time()
@@ -309,14 +454,14 @@ def sw_terms(t, P, vmr, m, air, cz):
 def sw_check(src=None):
     """The wide shortwave tables against sw_ref's columns: reflected, surface down, the air's absorption (W/m2, S0 1361),
     heating (K/day per LONGWAVE's sub-levels below 1 hPa), per mu0."""
-    t = dict(np.load(src or lbl.REF / 'sw_wide.npz'))
-    cz = np.load(DATA / 'cia_ktables.npz')
+    t = dict(np.load(src or lbl.REF / f'sw_wide{SET["suf"]}.npz'))
+    cz = np.load(DATA / f'cia_ktables{SET["suf"]}.npz')
     worst = dict(flux=0.0, heat=0.0)
-    for name in COLUMNS:
+    for name, (base, air) in checks().items():
         r = np.load(lbl.REF / f'sw_air_{name}.npz')
-        base, air = COLUMNS[name]
         P, vmr, m = air_column(base, air)
         vmr['O2'] = np.full(len(P['p']), air.get('o2', 0.0))
+        use_grav(P)
         tau, tr, th = sw_terms(t, P, vmr, m, air, cz)
         for j, mu0 in enumerate(ms.MU0):
             Fd, Ff, Fu = (ms.band_sum(t, F) for F in ms.g_fluxes(tau, tr, th, mu0, ms.ALB))
@@ -337,6 +482,9 @@ def sw_check(src=None):
 
 
 if __name__ == '__main__':
+    if sys.argv[1] == 'mars':
+        set_mars()
+        del sys.argv[1]
     if sys.argv[1] == 'swref':
         sw_ref(sys.argv[2])
     elif sys.argv[1] == 'swcheck':

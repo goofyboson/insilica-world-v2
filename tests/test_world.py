@@ -344,7 +344,8 @@ def mars_frost():
     second layer at 120 K over the north pole's cap, so frost forms on the ground and in the air and sublimates, in 48 steps. Each step:
     the column's energy with the frost's against sunlight − OLR, the air's mass with the frost's, the kinetic energy that leaves or
     arrives with the frost's air against the heat booked for it; (#238) the ground column's heat through its step (TES albedo, Putzig's
-    thermal inertia); and a reload."""
+    thermal inertia); and a reload. (#239) The dust: each cell's column at the first radiation step against the maps read here at that
+    season, and the sunlight the air absorbs with it against without."""
     from insilica.constants import MARS, air_props
     g = gridmod.get(4)
     h, b, u, extra = cases.mars_build(g, cases.mars_topo(g))
@@ -381,6 +382,43 @@ def mars_frost():
         st['ground_heat'] = max(st['ground_heat'], abs(gheat()[0] - h0) / gross)
     gr.step = gstep
     m0, e0, worst = mass(), m.energy(), 0.0
+    # (#239) the dust: its column at the first step against the map at the season (Ls from the orbit, as sun_lon), and the air's
+    # sunlight with it against without (the shortwave run again on the same state with the dust left out)
+    m.step(1, graph=False)
+    du, pp = ph.dust, ph.p
+    du.update(m.time, m.h)                                # (on this state and time: the kernel against the maps read here)
+    e, nu0 = pp['ecc'], -pp['lam_peri']
+    E0 = 2 * np.arctan(np.sqrt((1 - e) / (1 + e)) * np.tan(nu0 / 2))
+    M = E0 - e * np.sin(E0) + 2 * np.pi * float(m.time.get()[0]) / pp['year_s']
+    Ek = M
+    for _ in range(8):
+        Ek -= (Ek - e * np.sin(Ek) - M) / (1 - e * np.cos(Ek))
+    ls = np.degrees(2 * np.arctan2(np.sqrt(1 + e) * np.sin(Ek / 2), np.sqrt(1 - e) * np.cos(Ek / 2)) + pp['lam_peri']) % 360
+    # the map read here from its file (not the model's cells' table): bilinear at each cell's latitude and longitude
+    from pathlib import Path
+    dm = np.load(Path(cases.__file__).parent / 'data' / 'mars_dust_my30.npz')
+    lsb, la, lo, cmap = dm['ls'], dm['lat'], dm['lon'], dm['cdod610'].astype(float)
+    pos = m.grid.pos
+    clat, clon = np.degrees(np.arcsin(np.clip(pos[:, 2], -1, 1))), np.degrees(np.arctan2(pos[:, 1], pos[:, 0]))
+    yy = np.clip((clat - la[0]) / (la[1] - la[0]), 0, len(la) - 1 - 1e-9)
+    xx = ((clon - lo[0]) / (lo[1] - lo[0])) % len(lo)
+    y0, x0 = yy.astype(int), xx.astype(int)
+    fy, fx, x1 = yy - y0, xx - x0, (xx.astype(int) + 1) % len(lo)
+    tab = ((1 - fy) * ((1 - fx) * cmap[:, y0, x0] + fx * cmap[:, y0, x1]) + fy * ((1 - fx) * cmap[:, y0 + 1, x0] + fx * cmap[:, y0 + 1, x1]))
+    j = int(np.searchsorted(lsb, ls)) - 1
+    j0, j1 = j % len(lsb), (j + 1) % len(lsb)
+    wgt = ((ls - lsb[j0]) % 360) / ((lsb[j1] - lsb[j0]) % 360)
+    want = (tab[j0] * (1 - wgt) + tab[j1] * wgt) * m.grav * m.h.sum(axis=0).get() / 610
+    dust_read = float(np.max(np.abs(du.dtau.get() - want)) / np.max(want))
+    lit = ph.sw.swf[m.L].get() > 0
+    air_dust = ph.sw.swf[:m.L].get().sum(0)
+    ph.lw.dust = None
+    ph.radiate(m.h, m.theta, m.Ts, m.time, m.rad_every * m.dt)
+    air_none = ph.sw.swf[:m.L].get().sum(0)
+    ph.lw.dust = du
+    ph.radiate(m.h, m.theta, m.Ts, m.time, m.rad_every * m.dt)
+    dust_air = (float(air_dust[lit].mean()), float(air_none[lit].mean()))
+    m0, e0 = mass(), m.energy()
     for _ in range(48):
         m.step(1, graph=False)
         flux = float(cp.sum(A * (ph.sw_abs - ph.olr))) * m.dt
@@ -391,12 +429,14 @@ def mars_frost():
     reload_ok = World.load(fs).state_hash() == m.state_hash() and 'frost' in m.STATE and 'gTg' in m.STATE
     os.remove(fs)
     ok = (st['e'] <= 1e-13 and worst <= 1e-13 and st['ke'] <= 1e-13 and st['gross'] > 0 and st['ground'] > 0 and st['sub'] > 0
-          and st['air'] > 0 and st['ground_heat'] <= 1e-13 and reload_ok)
+          and st['air'] > 0 and st['ground_heat'] <= 1e-13 and reload_ok and dust_read <= 1e-6 and dust_air[0] > dust_air[1])
     tot = float(cp.sum(A)) * 48
     text = (f'Mars CO₂ frost (#236), 48 steps: column energy with the frost {fmt(st["e"])} of the energy, air + frost mass {fmt(worst)}, '
             f'kinetic energy with the frost\'s air against heat booked {fmt(st["ke"])} ({st["gross"] / 48:.2e} J a step); condensed on the ground '
             f'{st["ground"] / tot * 1e3:.2f}, in the air {st["air"] / tot * 1e3:.2f}, sublimated {st["sub"] / tot * 1e3:.2f} g/m² a step (planet mean); '
             f'the ground column (#238, {len(gr.dz)} layers to {float(gr.dz.sum()):.1f} m) its heat {fmt(st["ground_heat"])} of its gross; '
+            f'dust (#239, Ls {ls:.1f}): the column against the maps {fmt(dust_read)} of its largest ({float(du.dtau.max()):.3f}), the air '
+            f'absorbing {dust_air[0] * 100:.2f}% of the sunlight with it, {dust_air[1] * 100:.2f}% without (sunlit cells); '
             f'reload {"identical" if reload_ok else "DIFFERENT"}')
     return dict(ok=ok, text=text)
 

@@ -2261,10 +2261,54 @@ extern "C" __global__ void gas_src(int N, int L, int G, const real* src, const r
 }
 
 #define NV 15
+// (V2-7, #239) Mars's dust: its mixing ratio by pressure, the Mars Climate Database's modified Conrath profile (Forget et al. 1999;
+// Montmessin et al. 2004): q ~ exp(0.007 (1 - (p0 / p)^(70 km / zmax))), p0 = 700 Pa, even below p0; the column's dust between
+// pressures a and b (Pa, a < b), in its units: 4-point Gauss-Legendre in log p on 12 pieces from 1e-6 b up (the dust above, nil)
+__device__ real dust_mass(real a, real b, real zmax) {
+  const real GX[4] = {-0.8611363115940526, -0.3399810435848563, 0.3399810435848563, 0.8611363115940526};
+  const real GW[4] = {0.3478548451374538, 0.6521451548625461, 0.6521451548625461, 0.3478548451374538};
+  const real lo = log(fmax(a, b * (real)1e-6)), hi = log(b), d = (hi - lo) / 12, e = (real)70 / fmax(zmax, (real)1);
+  real m = 0;
+  for (int j = 0; j < 12; j++)
+    for (int n = 0; n < 4; n++) {
+      const real lp = lo + d * (j + (real)0.5 + (real)0.5 * GX[n]), pr = exp(lp);
+      m += GW[n] * (real)0.5 * d * pr * (pr >= (real)700 ? (real)1 : exp((real)0.007 * (1 - pow((real)700 / pr, e))));
+    }
+  return m;
+}
+
+// (V2-7, #239) Each cell's dust at the time t (one thread per cell, in the captured tick): its column (the maps' 9.3 um absorption at
+// 610 Pa, tab NB x N of 5-sol means at solar longitudes lsb, degrees, rising) between the two means around the season, times the
+// surface pressure over 610 Pa, into dtau; the profile's top zmax (km) by latitude and season (Montmessin et al. 2004) into dzmax
+extern "C" __global__ void dust_update(int N, int L, const real* par, const real* t, int NB, const float* tab, const real* lsb,
+                                       const real* lat, const real* h, real* dtau, real* dzmax) {
+  const int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= N) return;
+  const Par P = unpack(par);
+  real fd;
+  real ls = fmod(sun_lon(t[0], P, &fd) * (real)(180 / PI_), (real)360);
+  if (ls < 0) ls += 360;
+  int j = NB - 1;
+  for (int n = 0; n < NB; n++) if (lsb[n] > ls) { j = n - 1; break; }
+  const int j1 = (j + 1) % NB, j0 = (j + NB) % NB;
+  real span = lsb[j1] - lsb[j0];
+  if (span <= 0) span += 360;
+  real w = ls - lsb[j0];
+  if (w < 0) w += 360;
+  w = fmin(fmax(w / span, (real)0), (real)1);
+  const real c = (real)tab[(size_t)j0 * N + i] * (1 - w) + (real)tab[(size_t)j1 * N + i] * w;
+  real ps = 0;
+  for (int k = 0; k < L; k++) ps += P.grav * h[(size_t)k * N + i];
+  dtau[i] = c * ps / 610;
+  const real sl = sin(lat[i]), sx = sin((ls - 160) * (real)(PI_ / 180)), s4 = sl * sl * sl * sl;
+  dzmax[i] = fmax((real)10, 60 + 18 * sx - (32 + 18 * sx) * s4 - 8 * s4 * sl);
+}
+
 __device__ __forceinline__ int cloud_sub(int k, int L) { return k == L - 1 ? 1 : (k == 0 ? NSUB - 1 : 1); }
 extern "C" __global__ void lw_setup(int N, int L_in, const real* par, int NP, int NT, real lp0, real dlp, real t0, real dtt,
                                     const float* o3, int NO3, real o3lp0, real o3dlp, real co2, real n2o, real ch4, const real* gx,
-                                    const real* mu_in, const real* theta, const real* qv, const real* cloudo, real hs, int tmode, float* sub) {
+                                    const real* mu_in, const real* theta, const real* qv, const real* cloudo, real hs, int tmode, float* sub,
+                                    const real* dzmax) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x, k = blockIdx.y;
   if (i >= N) return;
 #ifdef NL
@@ -2321,7 +2365,8 @@ extern "C" __global__ void lw_setup(int N, int L_in, const real* par, int NP, in
       W(s, 5) = (float)((fast)xc * ua); W(s, 6) = (float)(xo3 * ua); W(s, 7) = (float)((fast)xn * ua); W(s, 8) = (float)((fast)xm * ua);
       W(s, 10) = 0.f; W(s, 11) = (float)fcl;
       W(s, 12) = (float)ua;
-      W(s, 13) = (float)(FPOW(b / pb[L - 1], (real)8000 / hs) - FPOW(a / pb[L - 1], (real)8000 / hs));
+      W(s, 13) = dzmax ? (float)(dust_mass(a, b, dzmax[i]) / dust_mass(0, pb[L - 1], dzmax[i]))   // (V2-7, #239) the dust's share
+                       : (float)(FPOW(b / pb[L - 1], (real)8000 / hs) - FPOW(a / pb[L - 1], (real)8000 / hs));
 #ifdef AIR_CIA
       W(s, 14) = (float)((real)ua * 1e-20 * (pm / (1.380649e-23 * Tm) * 1e-6) * 1e-20);   // (#226) molecules x number density / 1e40
 #else
@@ -2354,7 +2399,7 @@ extern "C" __global__ void lw_setup(int N, int L_in, const real* par, int NP, in
 
 extern "C" __global__ void lw_column(int N, int L_in, const real* par, int NG, const float* lk, const float* pg,
                                      int NP, int NT, int NTP, real tp0,
-                                     const float* sub, const real* Ts, real* radf, const float* cia) {
+                                     const float* sub, const real* Ts, real* radf, const float* cia, const real* dtau, const float* dabs) {
   const int i = blockIdx.x, g = threadIdx.x;
   const fast refl = par[124] > 0 ? (fast)(1 - par[4]) : (fast)0;   // lw_refl: the share of the longwave the surface reflects, 1 - eps_s (PAR_ORDER 124, 4)
 #ifdef NL
@@ -2398,6 +2443,9 @@ extern "C" __global__ void lw_column(int N, int L_in, const real* par, int NG, c
         const float* C = cia + (size_t)sit[s] * NG + g;
         tau[s] += scia[s] * (C[0] + (C[NG] - C[0]) * sft[s]);
       }
+      // (V2-7, #239) dust's absorption, (1 - ssa) of its extinction (its scattering left out): the sub-level's share of the column's 9.3 um
+      // absorption (read from sub here, not kept in shared memory, which in 64-bit is full)
+      if (dtau) tau[s] += (fast)dtau[i] * (fast)sub[((size_t)s * NV + 13) * N + i] * dabs[g];
     }
     auto Bof = [&](fast T) -> fast {
       fast y = T - (fast)tp0;
@@ -2506,7 +2554,7 @@ extern "C" __global__ void sw_column(int N, int L_in, const real* par, int NG, c
                                      const float* sun, const float* ray, const float* hzf, const float* cssa,
                                      real tau550, real hssa, real hg, real inhom, const float* sub, int mode, const real* t, real interval,
                                      const real* pos, const real* alb, const float* cssa_i, const float* g_i, const real* cloudo, real* swf,
-                                     const float* cia) {
+                                     const float* cia, const real* dtau, const float* dext, const float* dssa, const float* dgg) {
   const int i = blockIdx.x, g = threadIdx.x;
 #ifdef NL
   const int L = NL;
@@ -2526,7 +2574,7 @@ extern "C" __global__ void sw_column(int N, int L_in, const real* par, int NG, c
     sip[s] = (int)x; sfp[s] = x - (fast)sip[s]; sit[s] = (int)y; sft[s] = y - (fast)sit[s];
     for (int c = 0; c < 5; c++) su[s][c] = R_(4 + c);
     su[s][5] = (fast)AIR_O2 * R_(12);                         // O2 (#226: the air's own)
-    sfh[s] = R_(9); sr[s] = R_(12); sh[s] = R_(13); scia[s] = R_(14);
+    sfh[s] = R_(9); sr[s] = R_(12); sh[s] = dtau ? (fast)dtau[i] * (fast)R_(13) : (fast)R_(13); scia[s] = R_(14);   // (#239: the dust's)
     const bool cs = R_(10) > 0 && cloudo;                    // the layer's cloud sub-level (lw_setup's)
     sfc[s] = cs ? (fast)cloudo[(size_t)k * N + i] : (fast)0;
     stc[s] = cs ? (fast)(inhom * cloudo[(size_t)(2 * L + 3 + k) * N + i]) : (fast)0;   // uneven within the cell (#111)
@@ -2569,9 +2617,11 @@ extern "C" __global__ void sw_column(int N, int L_in, const real* par, int NG, c
         const float* C = cia + (size_t)sit[s] * NG + g;
         tg += scia[s] * (C[0] + (C[NG] - C[0]) * sft[s]);
       }
-      const fast tr = RAYF(ray[g] * sr[s]), th = (fast)tau550 * hzf[g] * sh[s];
-      const fast tt = tg + tr + th, sc = tr + (fast)hssa * th;
-      const fast ssa = tt > 0 ? fmin(sc / tt, (fast)(1 - 1e-6)) : (fast)0, ga = sc > 0 ? (fast)hg * (fast)hssa * th / sc : (fast)0;
+      // the haze, or (V2-7, #239) the dust: its extinction per g-point times the sub-level's 9.3 um absorption, its own ssa and asymmetry
+      const fast hw = dtau ? dssa[g] : (fast)hssa, hga = dtau ? dgg[g] : (fast)hg;
+      const fast tr = RAYF(ray[g] * sr[s]), th = dtau ? dext[g] * sh[s] : (fast)tau550 * hzf[g] * sh[s];
+      const fast tt = tg + tr + th, sc = tr + hw * th;
+      const fast ssa = tt > 0 ? fmin(sc / tt, (fast)(1 - 1e-6)) : (fast)0, ga = sc > 0 ? hga * hw * th / sc : (fast)0;
       sw_layer(tt, ssa, ga, mu0, cRd[s], cTd[s], cRs[s], cTs[s], cTdd[s]);
       const fast f = sfc[s];
       if (f > 0 && stc[s] > 0) {                  // the cloudy part: the cloud's scattering added

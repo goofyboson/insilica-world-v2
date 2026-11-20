@@ -106,7 +106,7 @@ class AirPhysics:
         self.flash = z(N)                  # lightning, flashes/s/m² (#104)
         self.rainp = z(4, N)               # rain by source: condensation above the bottom layer, in it, convection; and the snow in all of it (#134)
         self._none = z(1)                                     # q and ice for a dry column (never read)
-        self.lw = self.sw = None
+        self.lw = self.sw = self.dust = None
         if longwave == 'ktables':                     # (with the k-tables' shortwave)
             from .radiation import Longwave, Shortwave
             cia = self.p.get('air_cia')                       # (#226) another air: its tables and collision-induced absorption
@@ -115,6 +115,10 @@ class AirPhysics:
             self.sw = Shortwave(dg, layers, self.par, self.lw, **({'inhom': self.p['cloud_inhom']} if 'cloud_inhom' in self.p else {}),
                                 ice_re=self.p['re_ice'] if self.p.get('ice_sw', 0) > 0 else None, defs=self.defs[1:], cia=cia, tables=tset)
             self.swalb = cp.full(N, self.p['alb'])
+            if self.p.get('dust'):                                     # (V2-7, #239) a planet's prescribed dust
+                from .radiation import Dust
+                dd = self.p['dust']
+                self.dust = self.lw.dust = Dust(dg, layers, self.par, dd['maps'], dd['optics'], self.lw.ng, self.sw.ng, defs=self.defs[1:])
 
     def _speed(self, u):
         """The surface's wind speed at cells from the bottom layer's edge winds, into self.uabs."""
@@ -128,6 +132,8 @@ class AirPhysics:
         """The k-tables' longwave and shortwave from the present state (the sun over the coming interval, s), saved for the
         column steps until the next call."""
         if self.lw is not None:
+            if self.lw.dust is not None:                               # (#239) the dust at the season
+                self.lw.dust.update(t, mu)
             co = self.cloudo if cw is not None else None
             self.lw(mu, theta, q, co, Ts, gx)
             self.sw(self.mode, t, interval, self.pos, self.swalb, co)

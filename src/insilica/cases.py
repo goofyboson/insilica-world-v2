@@ -782,7 +782,8 @@ def _mars_preset():
                 bulk_c=3.0e-3, bulk_gust=1.0, bulk_imp=1.0,           # rho C (|U| + gust): the exchange with the thin air, its air side implicit (#236)
                 bl_mix=1.0, mu_bl=0.1 * mu, mu_ref=mu,
                 frost=1.0,                                            # (step 4, #236) CO2 frost on the ground and in the air
-                thin_stack=1.0)                                       # (#237) an emptied layer no colder than the layer below it
+                thin_stack=1.0,                                       # (#237) an emptied layer no colder than the layer below it
+                dust=dict(maps='mars_dust_my30.npz', optics='mars_dust_optics.npz'))   # (step 5, #239) Mars Year 30's dust
     return dict(build=lambda g: mars_build(g, mars_topo(g)), dt=lambda n: 225.0 * 2.0 ** (4 - n),   # (winds near 200 m/s on cells half Earth's; #237: 450 s broke at sol 261, 300 s at 259, 225 s ran on)
                 visc4_U=15.0, tracer=False, planet=dict(MARS),
                 albedo=lambda g: mars_surface(g, 'albedo'),             # (step 3, #238) TES's albedo, Putzig's thermal inertia under a column

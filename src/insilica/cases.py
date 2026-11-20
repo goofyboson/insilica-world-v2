@@ -695,11 +695,17 @@ def mars_profile(p, lat=0.0):
 
 
 _MARS = {}
+MARS_SMOOTH = 2           # (V2-7, #237) passes of the terrain's smoothing
 
 
-def mars_topo(g):
+def mars_topo(g, smooth=MARS_SMOOTH):
     """Mars's height (m above the areoid) on grid g, from the 1-degree MOLA table (tools/make_mars_topo.py): each 1-degree cell to its
-    nearest grid cell, area-weighted."""
+    nearest grid cell, area-weighted; then `smooth` passes of an area-conserving diffusion, b += 0.1 d^2 Laplacian(b) (d the mean cell
+    spacing), as climate models filter their terrain to what the grid resolves (#237: at n = 4 Olympus Mons was one 16.3 km cell beside
+    2.1 km, a 14 km step, 1.3 scale heights, and the layers over it broke; two passes: the steepest step 5.9 km, the 99th percentile
+    3.4 -> 2.3 km, the summit 10.0 km, the mean unchanged, 325 m rms)."""
+    if (g.N, smooth) in _MARS:
+        return _MARS[(g.N, smooth)]
     if g.N not in _MARS:
         d = np.load(Path(__file__).parent / 'data' / 'mars_topo_1deg.npz')
         lat, lon = np.radians(np.arange(180) - 89.5), np.radians(np.arange(360) - 179.5)
@@ -708,7 +714,13 @@ def mars_topo(g):
         near = np.concatenate([np.argmax(xyz[i:i + 2000] @ g.pos.T, axis=1) for i in range(0, len(xyz), 2000)])
         w = np.cos(la).ravel()
         _MARS[g.N] = np.bincount(near, w * d['elev'].astype(float).ravel(), g.N) / np.maximum(np.bincount(near, w, g.N), 1e-30)
-    return _MARS[g.N]
+    b = _MARS[g.N].copy()
+    wl, d2 = g.le / g.de, float(np.mean(g.de)) ** 2
+    for _ in range(smooth):
+        f = wl * (b[g.eJ] - b[g.eI])
+        b = b + 0.1 * d2 * (np.bincount(g.eI, f, g.N) - np.bincount(g.eJ, f, g.N)) / g.areaCell
+    _MARS[(g.N, smooth)] = b
+    return b
 
 
 def mars_build(g, b=None, stars=None):
@@ -746,8 +758,9 @@ def _mars_preset():
                 c_slab=250.0 * math.sqrt(MARS['day_s'] / math.pi),   # the day's skin: thermal inertia 250 (J m^-2 K^-1 s^-1/2) x sqrt(P / pi)
                 bulk_c=3.0e-3, bulk_gust=1.0, bulk_imp=1.0,           # rho C (|U| + gust): the exchange with the thin air, its air side implicit (#236)
                 bl_mix=1.0, mu_bl=0.1 * mu, mu_ref=mu,
-                frost=1.0)                                            # (step 4, #236) CO2 frost on the ground and in the air
-    return dict(build=lambda g: mars_build(g, mars_topo(g)), dt=lambda n: 450.0 * 2.0 ** (4 - n),   # (winds near 200 m/s on cells half Earth's)
+                frost=1.0,                                            # (step 4, #236) CO2 frost on the ground and in the air
+                thin_stack=1.0)                                       # (#237) an emptied layer no colder than the layer below it
+    return dict(build=lambda g: mars_build(g, mars_topo(g)), dt=lambda n: 225.0 * 2.0 ** (4 - n),   # (winds near 200 m/s on cells half Earth's; #237: 450 s broke at sol 261, 300 s at 259, 225 s ran on)
                 visc4_U=15.0, tracer=False, planet=dict(MARS),
                 floor=10.0 * sc, thin_wind=100.0 * sc, shelf=100.0 * sc,   # (the layer floor, 1 hPa's wind sharing #83, squeezed layers over terrain #97: Earth's 0.1%, 1%, 1%)
                 stress=[0.0] * len(MARS_STARS) + [0.15 * mu / 86400.0],   # Held & Suarez's surface drag on Mars's column (#57)

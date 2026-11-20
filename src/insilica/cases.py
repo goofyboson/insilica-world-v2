@@ -680,3 +680,79 @@ def held_suarez_theta_star(g):
 PRESETS['held_suarez'] = dict(build=held_suarez, dt=lambda n: 900.0 * 2.0 ** (5 - n), visc4_U=15.0,
                               stress=[0.0, SURFACE_DRAG], tracer=False,
                               air=dict(AIR, forcing='held_suarez', physics=dict(theta_star=held_suarez_theta_star)))
+
+# ---- Mars (V2-7, SPEC #231) ----
+MARS_PS = 610.0                             # Pa, the surface pressure at the MOLA datum (its 6.1 hPa)
+MARS_H = 10.8e3                             # m, the scale height R T / g at 210 K: the start's surface pressure falls with height as exp(-z / H)
+MARS_STARS = [1700.0, 1150.0, 950.0, 860.0]  # K, the interfaces' theta* (P0 = 1000 hPa): ~8, ~45, ~200 and ~420 Pa in the start's profile
+
+
+def mars_profile(p, lat=0.0):
+    """The start's temperature (K) at pressure p (Pa): 215 - 20 (sin^2 lat - 1/3) K at the mean surface pressure, falling 2.5 K/km
+    (the observed mean lapse rate; the dry adiabat's is g / cp = 5 K/km) with a 10.5 km scale height, to 150 K at most."""
+    Ts = 215.0 - 20.0 * (np.sin(lat) ** 2 - 1.0 / 3.0)
+    return np.maximum(Ts - 2.5 * 10.5 * np.log(MARS_PS / np.asarray(p, float)), 150.0)
+
+
+_MARS = {}
+
+
+def mars_topo(g):
+    """Mars's height (m above the areoid) on grid g, from the 1-degree MOLA table (tools/make_mars_topo.py): each 1-degree cell to its
+    nearest grid cell, area-weighted."""
+    if g.N not in _MARS:
+        d = np.load(Path(__file__).parent / 'data' / 'mars_topo_1deg.npz')
+        lat, lon = np.radians(np.arange(180) - 89.5), np.radians(np.arange(360) - 179.5)
+        la, lo = np.meshgrid(lat, lon, indexing='ij')
+        xyz = np.stack([np.cos(la) * np.cos(lo), np.cos(la) * np.sin(lo), np.sin(la)], axis=-1).reshape(-1, 3)
+        near = np.concatenate([np.argmax(xyz[i:i + 2000] @ g.pos.T, axis=1) for i in range(0, len(xyz), 2000)])
+        w = np.cos(la).ravel()
+        _MARS[g.N] = np.bincount(near, w * d['elev'].astype(float).ravel(), g.N) / np.maximum(np.bincount(near, w, g.N), 1e-30)
+    return _MARS[g.N]
+
+
+def mars_build(g, b=None, stars=None):
+    """A dry Mars at rest (V2-7 step 1) over terrain b (m; flat if None): the layers' interfaces where the area-mean profile's theta
+    crosses each theta*, flat where the ground is below them and squeezed in proportion to the surface pressure where it is not
+    (the surface pressure MARS_PS exp(-b / MARS_H)); each layer's theta that of the profile at its mid-pressure (the bottom one's by
+    latitude), so the air starts on the lapse rate; the ground at the air's temperature at its surface pressure. Pressures are
+    Earth-gravity masses, as every builder's (World rescales them to the planet's gravity)."""
+    from .constants import MARS, air_props
+    stars = list(stars or MARS_STARS)
+    b = np.zeros(g.N) if b is None else np.asarray(b, float)
+    kap = air_props(MARS['gases'], t_cp=MARS['t_cp'])['kappa']
+    p = np.geomspace(0.5, MARS_PS, 4000)
+    A = g.areaCell / g.areaCell.sum()
+    th = mars_profile(p) * (P0 / p) ** kap
+    pe = [float(np.interp(-ts, -th, p)) for ts in stars]
+    e = np.array([0.0, *pe, MARS_PS])
+    L = len(stars) + 1
+    ps = MARS_PS * np.exp(-b / MARS_H)
+    ec = np.minimum(e[:, None], e[:, None] / MARS_PS * ps[None, :])           # (L + 1, N): squeezed where the ground is high
+    ec[-1] = ps
+    h = np.diff(ec, axis=0) / GRAV
+    pm = 0.5 * (ec[:-1] + ec[1:])
+    theta = [mars_profile(pm[k], g.lat) * (P0 / pm[k]) ** kap for k in range(L)]
+    theta[0] = np.maximum(theta[0], stars[0] + 50.0)
+    Ts = mars_profile(ps, g.lat)
+    return h, b, np.zeros((L, g.E)), dict(theta=np.stack(theta), Ts=Ts)
+
+
+def _mars_preset():
+    from .constants import MARS
+    mu = MARS_PS / MARS['grav']
+    sc = mu / MU_REF                                        # the column's mass against Earth's: the layers' mass thresholds scale with it
+    phys = dict(theta_stars=MARS_STARS, moist=0.0, alb=0.25, eps_s=0.95, mu_night=250.0 * sc,   # (the night's mixed layer, 25 hPa on Earth)
+                c_slab=250.0 * math.sqrt(MARS['day_s'] / math.pi),   # the day's skin: thermal inertia 250 (J m^-2 K^-1 s^-1/2) x sqrt(P / pi)
+                bulk_c=3.0e-3, bulk_gust=1.0,                         # rho C (|U| + gust): the exchange with the thin air
+                bl_mix=1.0, mu_bl=0.1 * mu, mu_ref=mu)
+    return dict(build=lambda g: mars_build(g, mars_topo(g)), dt=lambda n: 450.0 * 2.0 ** (4 - n),   # (winds near 200 m/s on cells half Earth's)
+                visc4_U=15.0, tracer=False, planet=dict(MARS),
+                floor=10.0 * sc, thin_wind=100.0 * sc, shelf=100.0 * sc,   # (the layer floor, 1 hPa's wind sharing #83, squeezed layers over terrain #97: Earth's 0.1%, 1%, 1%)
+                stress=[0.0] * len(MARS_STARS) + [0.15 * mu / 86400.0],   # Held & Suarez's surface drag on Mars's column (#57)
+                air=dict(AIR, longwave='ktables', physics=phys))
+
+
+# step 1: a dry Mars on today's physics over MOLA's terrain, a uniform ground (a slab of the day's skin), no frost, no dust; and flat
+PRESETS['mars'] = _mars_preset()
+PRESETS['mars_flat'] = dict(PRESETS['mars'], build=mars_build)

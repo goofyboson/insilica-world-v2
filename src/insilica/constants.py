@@ -65,11 +65,30 @@ def air_radiation(x):
                 o3=ozone_factor(o2 / EARTH_AIR['o2']), cia=pairs)
 
 
-def air_props(gases=None):
+# (V2-7) CO2's heat capacity at the air's own temperature (t_cp): the ideal gas's 7/2 R (translation and rotation) plus its
+# vibrations as Einstein modes, wavenumbers (cm^-1) and degeneracies (Herzberg): the bend 667 (2), the symmetric stretch 1333, the
+# asymmetric 2349; 32.3 J/mol/K at 200 K and 37.1 at 300 K (NIST 32.4, 37.2). The other gases' vibrations are frozen below 300 K.
+CO2_MODES = ((667.4, 2), (1333.0, 1), (2349.1, 1))
+HC_K = 1.438777                                   # cm K, the second radiation constant h c / k
+
+
+def gas_cp(name, t=None):
+    """A gas's molar heat capacity (J/mol/K): GASES' 300 K value, or CO2's at temperature t (CO2_MODES)."""
+    if t is None or name != 'co2':
+        return GASES[name][1]
+    vib = 0.0
+    for nu, g in CO2_MODES:
+        x = HC_K * nu / t
+        vib += g * x * x * math.exp(x) / (math.exp(x) - 1) ** 2
+    return R_GAS * (3.5 + vib)
+
+
+def air_props(gases=None, t_cp=None, o3=None):
     """The dry air's constants from its gases' mole fractions (normalized): cp (J/kg/K), R (J/kg/K), kappa, molar mass M (g/mol),
     eps = M_water / M and the virtual-temperature factor 1/eps - 1, and the column kernels' compile-time defines. None: the
     constants the model has always used (cp 1004.6, R 287.04 in the dynamics and 287.0 in the column physics, eps 0.622,
-    virtual factors 0.61 and 0.608, M 28.9647), bit for bit."""
+    virtual factors 0.61 and 0.608, M 28.9647), bit for bit. t_cp (V2-7): the temperature (K) CO2's heat capacity is taken at
+    (gas_cp); o3: ozone's factor against Earth's column in place of O2's photochemistry (O3_O2), for an air where that does not hold."""
     if not gases:
         return dict(cp=CP_DRY, kappa=KAPPA, rd=R_DRY, rd_col=287.0, eps=0.622, mair=28.9647, defs=())
     x = {k: float(v) for k, v in gases.items() if float(v) > 0}
@@ -77,11 +96,13 @@ def air_props(gases=None):
     assert not unknown, f'unknown gases {unknown}; known: {sorted(GASES)}'
     tot = sum(x.values())
     M = sum(v / tot * GASES[k][0] for k, v in x.items())
-    cpm = sum(v / tot * GASES[k][1] for k, v in x.items())
+    cpm = sum(v / tot * gas_cp(k, t_cp) for k, v in x.items())
     cp_, R = cpm / (M * 1e-3), R_GAS / (M * 1e-3)
     eps = M_WATER / M
     vf = 1 / eps - 1
     rad = air_radiation({k: v / tot for k, v in x.items()})
+    if o3 is not None:
+        rad['o3'] = float(o3)
     defs = (f'-DAIR_RD={R!r}', f'-DAIR_EPS={eps!r}', f'-DAIR_VF={vf!r}', f'-DAIR_VFB={vf!r}', f'-DAIR_M={M!r}', f'-DAIR_MKG={M * 1e-3!r}',
             f'-DAIR_O2={rad["o2"]!r}', f'-DAIR_RAY={rad["ray"]!r}', f'-DAIR_BROAD={rad["broad"]!r}', f'-DAIR_O3={rad["o3"]!r}', '-DAIR_CIA')
     return dict(cp=cp_, kappa=R / cp_, rd=R, rd_col=R, eps=eps, mair=M, defs=defs, rad=rad)
@@ -90,4 +111,12 @@ def air_props(gases=None):
 # 1987: 1.2-3.0e6 and 0.25-2.2 from dry sand to wet clay; damping depth sqrt(2 k / (c omega)) 2.2 m for the year, 0.12 m for the day),
 # and its layers (m) under the skin, doubling to 6.3 m, three annual damping depths
 C_SOIL, K_SOIL = 2.0e6, 1.0
+
+# Mars (V2-7): radius (mean), sidereal rotation (88642.66 s), surface gravity (mean); the sol (88775.24 s), the year (686.98 days),
+# sunlight at its mean distance (1361 / 1.5237^2), obliquity, eccentricity and the solar longitude of perihelion (Ls 250.9°);
+# the air's mole fractions (Curiosity's SAM, Franz et al. 2017: CO2 0.951, N2 0.0259, Ar 0.0194, O2 0.0016), CO2's heat
+# capacity at 200 K (t_cp), ozone ~1 um-atm (0.1 DU against Earth's ~300: a factor 3e-4; Perrier et al. 2006)
+MARS = dict(radius=3.3895e6, omega=2 * math.pi / 88642.66, grav=3.721, day_s=88775.24, year_s=686.98 * 86400.0, S0=586.2,
+            tilt=math.radians(25.19), ecc=0.0934, lam_peri=math.radians(250.87),
+            gases=dict(co2=0.951, n2=0.0259, ar=0.0194, o2=0.0016), co2=0.951, n2o=0.0, ch4=0.0, t_cp=200.0, o3=3.0e-4)
 SOIL_DZ = (0.1, 0.2, 0.4, 0.8, 1.6, 3.2)

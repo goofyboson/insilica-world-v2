@@ -73,7 +73,8 @@ class World:
         h, u = np.asarray(h, dtype=float), np.asarray(u, dtype=float)
         self.air = spec.get('air')                       # air layers (V2-2a): h is mass per area, θ per layer
         # the dry air's gases (V2-6e, #216): by mole fraction, from the params' physics, the preset's or the planet; none, the old constants
-        self.gas = air_props((P.get('physics', {}) or {}).get('gases') or ((self.air or {}).get('physics', {}) or {}).get('gases') or pl.get('gases'))
+        self.gas = air_props((P.get('physics', {}) or {}).get('gases') or ((self.air or {}).get('physics', {}) or {}).get('gases') or pl.get('gases'),
+                             t_cp=pl.get('t_cp'), o3=pl.get('o3'))   # (V2-7) CO2's heat capacity at the air's temperature; ozone
         if self.air and state is None and self.grav != GRAV:
             h = h * (GRAV / self.grav)                   # (#186) the builders' pressures kept: their masses are Earth's
         if layers and layers != h.shape[0]:
@@ -88,14 +89,14 @@ class World:
         self.dt = float(dt)
         nu4 = P.get('nu4', visc4(self.grid, P['visc4_U']) if 'visc4_U' in P else visc4(self.grid, spec.get('visc4_U', 0.0)))
         self.b = cp.asarray(b, dtype=float)
-        floor = P.get('floor', 10.0 if self.air else 1.0)
+        floor = P.get('floor', spec.get('floor', 10.0 if self.air else 1.0))   # (V2-7) a preset's own: a thinner air's (Mars)
         self.core = Layers(self.dg, self.L, b=self.b, grav=self.grav, gprime=self.gprime, drag=P.get('drag', spec.get('drag', 0.0)),
                            stress=P.get('stress', spec.get('stress', 0.0)),
                            nu4=nu4, floor=floor, rotation=P.get('rotation', 1.0),
                            div_damp=P.get('div_damp', DIV_DAMP),
                            air=dict(t_ref=self.air.get('t_ref', 288.0), cp=self.gas['cp'], kappa=self.gas['kappa'], rd=self.gas['rd']) if self.air else None,
                            vmix=P.get('vmix', spec.get('vmix', 0.0)),
-                           thin_wind=P.get('thin_wind', THIN_WIND if spec.get('air') else 0.0),
+                           thin_wind=P.get('thin_wind', spec.get('thin_wind', THIN_WIND if spec.get('air') else 0.0)),
                            shelf=P.get('shelf', spec.get('shelf', 0.0)))   # (air, V2-6b: a layer squeezed below it over terrain loses its pressure force, as the sea's over its floor, #97)
         self.dynamics = P.get('dynamics', spec.get('dynamics', True))
         self.tracer = P.get('tracer', spec.get('tracer', True))   # transport the demo tracer psi (off for air: #42)

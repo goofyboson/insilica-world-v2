@@ -33,11 +33,11 @@ GAS_TRACERS = (('co2', 400e-6), ('n2o', 0.32e-6), ('ch4', 1.8e-6))
 
 FIELDS = ('h', 'z', 'eta', 'psi', 'speed', 'vort', 'theta', 'T', 'Ts', 'Tsurf', 'ps', 'q', 'rh', 'rain', 'evap', 'lightning', 'ice',
           'sst', 'sss', 'mld', 'tthermo', 'tdeep', 'current', 'land', 'elev', 'soil', 'pond', 'snow',
-          'sla', 'tide', 'co2', 'ch4', 'n2o', 'tsoil', 'g_rain', 'g_rx1', 'g_river', 'g_ftc', 'g_weather', 'frost')
+          'sla', 'tide', 'co2', 'ch4', 'n2o', 'tsoil', 'g_rain', 'g_rx1', 'g_river', 'g_ftc', 'g_weather', 'frost', 'albedo')
 # (V2-6g) sla: the sea level's anomaly from its mean over the sea (m); tide: the equilibrium tide, the tidal potential over g (m);
 # co2, ch4, n2o: the carried gases (ppm, by layer); tsoil: the land column's soil temperature (°C, by soil layer from the top);
 # g_*: geology's accumulators as means (rain mm/day, the largest one-day rain mm, river flow m³/s, freeze-thaw cycles a year,
-# weathering mm/day); frost: CO2 frost on the ground (V2-7, #236; kg/m²)
+# weathering mm/day); frost: CO2 frost on the ground (V2-7, #236; kg/m²); albedo: the surface's for the sunlight (#238)
 # z: height of the layer's top; eta: the free surface; theta, T, Ts, ps: air (potential temperature, temperature,
 # surface temperature, surface pressure in hPa); q, rh, rain, evap, ice: moist air (specific humidity in g/kg, relative
 # humidity, rain and evaporation in mm/day, sea ice in m, Tsurf the radiating surface: the ice skin over ice);
@@ -202,6 +202,18 @@ class World:
                 self.oTg = self.sea.Tg
                 self.STATE = self.STATE + ('oTg',)
             self._sync_sea()
+        # a planet's ground without an ocean (V2-7, #238; Mars): its albedo map, and a column under the skin from its thermal inertia
+        self.ground = None
+        if self.air and self.sea is None and spec.get('albedo') is not None:
+            self.physics.salb = cp.asarray(np.asarray(spec['albedo'](self.grid), dtype=float))
+        if self.air and self.sea is None and spec.get('ground') is not None:
+            from .ground import Ground
+            gs = spec['ground']
+            self.ground = Ground(self.dg, self.Ts, gs['ti'](self.grid), gs['dz'], rho_c=gs['rho_c'], skin=gs['skin'])
+            if 'gTg' in extra:
+                self.ground.Tg[...] = cp.asarray(np.asarray(extra['gTg'], dtype=float))
+            self.cap, self.gTg = self.ground.cap, self.ground.Tg
+            self.STATE = self.STATE + ('gTg',)
         # Moon and tides (V2-6f, #228): the tide-generating force on the ocean and the mixing its dissipation drives
         self.tides = None
         tides = P.get('tides', spec.get('tides'))
@@ -339,6 +351,8 @@ class World:
                                 gx=self.gx if self.gas_on else None)
             if self.physics.frost is not None:                   # (V2-7, #236) the air CO2 frost took or gave, out of the layers
                 self.physics.frost_mass(self.h, self.M, self.u, self.theta)
+            if self.ground is not None:                          # (V2-7, #238) the ground column under the skin
+                self.ground.step(self.Ts, self.dt)
             if rec:
                 rec.post_column()
             if self.geology is not None:
@@ -437,6 +451,8 @@ class World:
             e = self.core.energy(self.h, self.u, self.theta)
             if self.sea is not None:
                 e += self.sea.heat()
+            elif self.ground is not None:                            # (V2-7, #238) the skin and the column under it
+                e += self.ground.heat(self.Ts, A)
             elif self.cap is not None:
                 e += float(cp.sum(self.Ts * A * self.cap))
             else:
@@ -549,6 +565,8 @@ class World:
             return self.physics.flash * 3.15576e13                  # flashes/km²/year
         if name == 'ice':
             return self.ice / self.physics.p['rho_ice']             # m
+        if name == 'albedo':                                         # (#238) the surface's, as the shortwave last took it
+            return self.physics.swalb if getattr(self.physics, 'swalb', None) is not None else cp.full(g.N, self.physics.p['alb'])
         if name == 'frost':
             return self.frost if getattr(self, 'frost', None) is not None else cp.zeros(g.N)   # kg/m² (V2-7, #236)
         if name == 'rh':

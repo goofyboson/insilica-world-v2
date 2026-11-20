@@ -886,7 +886,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
                                       real* tsurf, real* rainp, real* dgo, real* cap, real* qocean,
                                       real* qsw, const real* land, const real* soilcap, real* soil, real* pond, real* snow, real* cloudw, real* cloudo, const real* elev, real* flash,
                                       const real* radf, const real* swf, real* swalb, const real* ch, const real* lc, real* firn, real* xfer,
-                                      real* frost, real* co2x) {
+                                      real* frost, real* co2x, const real* salb) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= N) return;
 #ifdef NL
@@ -1055,7 +1055,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   real wet = isl ? soil[i] : (real)0;
   real pw = isl ? pond[i] : (real)0;
   const real pcov = isl && pw > 0 ? fmin((real)1, pw / P.pond_cover) : (real)0;
-  const real alb0 = !isl ? P.alb
+  const real alb0 = !isl ? (salb ? salb[i] : P.alb)              // (V2-7, #238: a map's, per cell)
                   : lc ? pcov * P.alb + (1 - pcov) * (lc[3 * N + i] * (lc[N + i] + (lc[2 * N + i] - lc[N + i]) * wet / soilcap[i])
                                                      + (1 - lc[3 * N + i]) * lc[4 * N + i])
                        : pcov * P.alb + (1 - pcov) * (P.alb_dry + (P.alb_wet - P.alb_dry) * wet / soilcap[i]);

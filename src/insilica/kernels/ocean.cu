@@ -464,6 +464,33 @@ extern "C" __global__ void land_column(int N, int K, const real* land, real* T, 
   for (int k = 1; k < n; k++) Tg[(size_t)(k - 1) * N + i] = x[k];
 }
 
+// (V2-7, #238) The same column under every cell, its conductivity per cell (a planet's ground from its thermal inertia; ground.py).
+extern "C" __global__ void land_column_k(int N, int K, real* T, const real* cap, real* Tg, const real* dz, real c_soil,
+                                         const real* k_soil, real dt) {
+  LOOP1(i, N)
+  const int n = K + 1;
+  real C[KSOIL + 1], G[KSOIL + 1], x[KSOIL + 1], cp_[KSOIL + 1], dp[KSOIL + 1];
+  C[0] = cap[i]; x[0] = T[i];
+  real half = cap[i] / c_soil / 2;
+  for (int k = 1; k < n; k++) {
+    const real d = dz[k - 1];
+    C[k] = c_soil * d; x[k] = Tg[(size_t)(k - 1) * N + i];
+    G[k - 1] = dt * k_soil[i] / (half + d / 2);
+    half = d / 2;
+  }
+  G[n - 1] = 0;
+  for (int k = 0; k < n; k++) {
+    const real a = k ? G[k - 1] : (real)0, c = G[k];
+    const real den = C[k] + a + c - (k ? a * cp_[k - 1] : (real)0);
+    cp_[k] = c / den;
+    dp[k] = (C[k] * x[k] + (k ? a * dp[k - 1] : (real)0)) / den;
+  }
+  x[n - 1] = dp[n - 1];
+  for (int k = n - 2; k >= 0; k--) x[k] = dp[k] + cp_[k] * x[k + 1];
+  T[i] = x[0];
+  for (int k = 1; k < n; k++) Tg[(size_t)(k - 1) * N + i] = x[k];
+}
+
 // The mixed layer's heat capacity per cell for the air's surface physics: rho_w c_w h0 (J/m^2/K).
 extern "C" __global__ void ocn_cap(int N, const real* h, real rho_cw, real* cap, const real* land, real c_land) {
   LOOP1(i, N)

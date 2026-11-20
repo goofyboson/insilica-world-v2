@@ -87,6 +87,7 @@ class AirPhysics:
         self.frost = z(N) if self.p['frost'] > 0 else None
         self.co2x = z(layers, N) if self.p['frost'] > 0 else None
         self.frost_ke = z(N) if self.p['frost'] > 0 else None    # (J per cell: the kinetic energy booked as heat)
+        self.salb = None                    # (V2-7, #238) the surface's albedo per cell (a map's), set by World; else alb
         # the surface's wind (#135): 0 the bottom layer's edges' kinetic energy, 1 Perot's reconstructed cell wind
         self.perot = None
         if self.p['sfc_wind'] > 0:
@@ -164,7 +165,8 @@ class AirPhysics:
                                           self.sw.swf if self.sw is not None else NULL, self.swalb if self.sw is not None else NULL,
                                           self.ch if self.sfc else NULL, self.cover if self.cover is not None else NULL, firn if firn is not None else NULL,
                                           gx if gx is not None else NULL,
-                                          self.frost if self.frost is not None else NULL, self.co2x if self.co2x is not None else NULL))
+                                          self.frost if self.frost is not None else NULL, self.co2x if self.co2x is not None else NULL,
+                                          self.salb if self.salb is not None else NULL))
         k['advance_time']((1,), (1,), (t, R(dt)))
 
     def frost_mass(self, h, M, u, theta):

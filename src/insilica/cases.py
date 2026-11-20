@@ -723,6 +723,29 @@ def mars_topo(g, smooth=MARS_SMOOTH):
     return b
 
 
+def _mars_cells(g, x):
+    """A 1-degree table x (180 x 360 from 90 S and 180 W) on grid g: each 1-degree cell to its nearest grid cell, area-weighted."""
+    lat, lon = np.radians(np.arange(180) - 89.5), np.radians(np.arange(360) - 179.5)
+    la, lo = np.meshgrid(lat, lon, indexing='ij')
+    xyz = np.stack([np.cos(la) * np.cos(lo), np.cos(la) * np.sin(lo), np.sin(la)], axis=-1).reshape(-1, 3)
+    near = np.concatenate([np.argmax(xyz[i:i + 2000] @ g.pos.T, axis=1) for i in range(0, len(xyz), 2000)])
+    w = np.cos(la).ravel()
+    return np.bincount(near, w * np.asarray(x, float).ravel(), g.N) / np.maximum(np.bincount(near, w, g.N), 1e-30)
+
+
+def mars_surface(g, name):
+    """(V2-7, #238) MGS TES's bolometric albedo ('albedo') or Putzig & Mellon's nightside thermal inertia ('ti', J m^-2 K^-1 s^-1/2)
+    on grid g, from the 1-degree table (tools/make_mars_surface.py), area-weighted."""
+    key = (g.N, name)
+    if key not in _MARS:
+        d = np.load(Path(__file__).parent / 'data' / 'mars_surface_1deg.npz')
+        _MARS[key] = _mars_cells(g, d[name].astype(float))
+    return _MARS[key]
+
+
+MARS_GROUND = dict(rho_c=1.2e6, skin=0.004, dz=[0.004 * 2.0 ** k for k in range(12)])   # (#238) 4 mm of skin over 12 layers to 16 m
+
+
 def mars_build(g, b=None, stars=None):
     """A dry Mars at rest (V2-7 step 1) over terrain b (m; flat if None): the layers' interfaces where the area-mean profile's theta
     crosses each theta*, flat where the ground is below them and squeezed in proportion to the surface pressure where it is not
@@ -762,6 +785,8 @@ def _mars_preset():
                 thin_stack=1.0)                                       # (#237) an emptied layer no colder than the layer below it
     return dict(build=lambda g: mars_build(g, mars_topo(g)), dt=lambda n: 225.0 * 2.0 ** (4 - n),   # (winds near 200 m/s on cells half Earth's; #237: 450 s broke at sol 261, 300 s at 259, 225 s ran on)
                 visc4_U=15.0, tracer=False, planet=dict(MARS),
+                albedo=lambda g: mars_surface(g, 'albedo'),             # (step 3, #238) TES's albedo, Putzig's thermal inertia under a column
+                ground=dict(MARS_GROUND, ti=lambda g: mars_surface(g, 'ti')),
                 floor=10.0 * sc, thin_wind=100.0 * sc, shelf=100.0 * sc,   # (the layer floor, 1 hPa's wind sharing #83, squeezed layers over terrain #97: Earth's 0.1%, 1%, 1%)
                 stress=[0.0] * len(MARS_STARS) + [0.15 * mu / 86400.0],   # Held & Suarez's surface drag on Mars's column (#57)
                 air=dict(AIR, longwave='ktables', physics=phys))

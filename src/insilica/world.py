@@ -220,7 +220,7 @@ class World:
             if self.sea is None:
                 raise ValueError('the wave drag (gw) books its heat with the wind stress: it needs the coupled ocean')
             self.gw = WaveDrag(self.dg, self.L, self.physics.p, self.dt)
-            if self.physics.p.get('gw_conv', 0.0) > 0:          # (#188) launched by the column's convection: its convective rain
+            if self.physics.p.get('gw_conv', 0.0) > 0 or self.physics.p.get('gw_kel', 0.0) > 0:   # (#188, #233) the column's convective rain
                 self.gw.conv = self.physics.rainp[2]
         if self.air:
             self.core.update_gfast(self.h, self.theta)

@@ -614,7 +614,7 @@ def earth7(g, lo=318.0, hi=350.0):
 # #218: the land column (six soil layers to 6.3 m under the skin) in place of the force-restore deep ground (c_deep, #118)
 PRESETS['earth7'] = dict(PRESETS['earth6'], build=earth7, stress=[0.0] * 7,
                          air=dict(PRESETS['earth6']['air'], physics=dict(PRESETS['earth6']['air']['physics'], theta_stars=[500.0, 380.0, 330.0, 305.0, 204.0, 200.0], ice_sw=1.0, det_all=1.0, ml_clear=1.0, cu_cloud=2.0,
-                                                                        c_deep=0.0, soil_dz=list(SOIL_DZ))),
+                                                                        c_deep=0.0, soil_dz=list(SOIL_DZ), gw_kel=2.0e-3)),   # #233 (trial): convection's Kelvin waves
                          tides=True)                                    # #229 (trial): the Moon's and the Sun's tides (#228)
 
 # V2-6d (#165, trial): earth7 over a five-layer ocean: the mixed layer (50 m at the start), the upper thermocline (150 m, 20 °C), the

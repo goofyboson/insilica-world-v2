@@ -71,11 +71,14 @@ class WaveDrag:
         self.op, self.nrm = cp.asarray(op.reshape(-1), dtype=R), cp.asarray(nrm.reshape(-1), dtype=R)
         self.lat = cp.asarray(np.degrees(g.lat), dtype=R)
         self.par = cp.asarray([p.get('grav', GRAV), P0, p.get('kappa', KAPPA), p.get('air_rd', RD), p['gw_bt'], p['gw_cw'], 2 * np.pi / p['gw_lambda'], p['gw_psrc'],
-                               p['gw_cmax'], p['gw_dc'], dt, p.get('gw_conv', 0.0)], dtype=R)
+                               p['gw_cmax'], p['gw_dc'], dt, p.get('gw_conv', 0.0),
+                               p.get('gw_kel', 0.0), p.get('kel_c', 25.0), p.get('kel_cw', 10.0), p.get('kel_lat', 10.0)], dtype=R)
+        # (V2-7, #233) gw_kel: the Kelvin waves' flux (Pa) where convection is at its planetary mean; kel_c, kel_cw their phase
+        # speeds' centre and half-width (m/s); kel_lat their equatorial trapping (degrees)
         self.F, self.zero = cp.zeros((2 * L, g.N), dtype=R), cp.zeros((L, g.N), dtype=R)
         self.k = {n: dg.kernel(n, 'drag.cu') for n in ('gw_cell', 'oro_edge', 'gw_mean')}
         self.conv = None                                       # (#188) the column's convective rain, when gw_conv > 0
-        if p.get('gw_conv', 0.0) > 0:
+        if p.get('gw_conv', 0.0) > 0 or p.get('gw_kel', 0.0) > 0:
             self.cmean = cp.zeros(1, dtype=R)
 
     def apply(self, h, theta, u, dt, diss):

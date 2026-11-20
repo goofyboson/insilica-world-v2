@@ -276,6 +276,32 @@ extern "C" __global__ void gw_cell(int N, int E, int L, const real* mu, const re
     const real room = fmax((real)0, s * (c - U[kd]) * mu[(size_t)kd * N + i] / dt - s * dep[kd]);
     dep[kd] += s * fmin(fabs(amp * (real)b0), room);
   }
+  // (V2-7, #233) Kelvin waves: convection's eastward-only planetary waves, a flux gw_kel (Pa) where the column's convective rain
+  // equals the planet's mean, trapped at the equator (exp(-(lat / kel_lat)^2)), over ground-relative phase speeds 0 to cmax
+  // shaped exp(-ln 2 ((c - kel_c) / kel_cw)^2); launched where c exceeds the source's wind; planetary in scale, they do not
+  // break as the gravity waves do but end at their critical level (the last layer whose wind is still short of c), the top layer
+  // taking the rest, each layer at most what brings its wind to c in a step
+  const real kel = par[12];
+  if (kel > 0 && conv != NULL) {
+    const real kc = par[13], kcw = par[14], kl = par[15];
+    const real trap = exp(-(lat[i] / kl) * (lat[i] / kl));
+    real ksum = 0;
+    for (int n = 0; n < nc; n++) {
+      const real c = -cmax + n * dc, x = (c - kc) / kcw;
+      if (c > 0) ksum += exp(-LN2 * x * x);
+    }
+    const real ampk = ksum > 0 ? kel * trap * conv[i] / fmax(cmean[0], (real)1e-30) / ksum : (real)0;
+    for (int n = 0; n < nc && ampk > 0; n++) {
+      const real c = -cmax + n * dc;
+      if (!(c > 0) || !(c > us)) continue;
+      const real x = (c - kc) / kcw, b0 = exp(-LN2 * x * x);
+      int kd = 0;
+      for (int k = ks; k >= 1; k--) if (!(c > U[k])) { kd = k + 1; break; }
+      if (kd == 0 && !(c > U[0])) kd = 1;
+      const real room = fmax((real)0, (c - U[kd]) * mu[(size_t)kd * N + i] / dt - dep[kd]);
+      dep[kd] += fmin(ampk * b0, room);
+    }
+  }
   real net = 0;
   for (int k = 0; k < L; k++) net += dep[k];
   dep[ks] -= net;                                              // (what no layer could take)

@@ -343,3 +343,117 @@ def test_spinup(record, tmp_path):
            f'balanced): SST rms {rms:.2f} K (mean {d.mean():+.2f}); heat uptake {up_o:+.2f} against {up_c:+.2f} W/m² ({heat * 100:.0f}% off); '
            f'salt {fmt(salt)}', 'SST rms ≤ 0.5 K; heat within 15%; salt ≤ 1e-13', ok)
     assert ok
+
+
+# Viking Lander 1's daily-mean surface pressure (Pa) in 10° bins of Ls from 0°, its years together (PDS vl_avep.dat, Tillman's
+# sol averages; SPEC #234, #240): mean 797, least 684 near Ls 155, most 892 near Ls 255
+VL1_PA = np.array([806, 811, 820, 825, 830, 831, 826, 813, 792, 767, 742, 719, 701, 688, 684, 684, 691, 706, 723, 745, 774, 808, 836,
+                   863, 883, 892, 890, 885, 881, 862, 850, 833, 817, 810, 802, 802.])
+VL1_SITE = (22.27, -47.95, -3627.0)          # latitude, longitude (°), elevation (m, MOLA)
+
+
+def mars_ls(w):
+    """The season, Ls (°), at the world's time (the orbit the radiation uses)."""
+    p = w.physics.p
+    e, nu0 = p['ecc'], -p['lam_peri']
+    E0 = 2 * np.arctan(np.sqrt((1 - e) / (1 + e)) * np.tan(nu0 / 2))
+    M = E0 - e * np.sin(E0) + 2 * np.pi * float(w.time.get()[0]) / p['year_s']
+    Ek = M
+    for _ in range(8):
+        Ek -= (Ek - e * np.sin(Ek) - M) / (1 - e * np.cos(Ek))
+    return float(np.degrees(2 * np.arctan2(np.sqrt(1 + e) * np.sin(Ek / 2), np.sqrt(1 - e) * np.cos(Ek / 2)) + p['lam_peri']) % 360)
+
+
+@pytest.mark.long
+@pytest.mark.xdist_group('mars')
+def test_mars(record):
+    """MARS Mars (n = 4, the second year after a cached first): Viking Lander 1's pressure cycle, the CO2 caps' reach, the tropics' day and night, the solstices' winter jets and polar-night air"""
+    w0 = World(4, 'mars')
+    year = int(round(w0.physics.p['year_s'] / w0.dt))
+    w, _ = runcache.spun_up('mars-n4', lambda: World(4, 'mars'), year)
+    g, L, p = w.grid, w.L, w.physics.p
+    lat = np.degrees(g.lat)
+    A = g.areaCell
+    band = np.clip(((lat + 90) // 5).astype(int), 0, 35)                  # 5° latitude bands, centres −87.5 … 87.5
+    blat = np.arange(-87.5, 90, 5)
+    zm = lambda f: np.bincount(band, weights=f * A, minlength=36) / np.bincount(band, weights=A, minlength=36)
+    s = np.radians(VL1_SITE[:2])
+    vl1 = int(np.argmax(g.pos @ np.array([np.cos(s[0]) * np.cos(s[1]), np.cos(s[0]) * np.sin(s[1]), np.sin(s[0])])))
+    R = w.core.cpa * w.core.kap
+    spd = int(round(p['day_s'] / w.dt))
+    trop = cp.asarray(np.abs(lat) < 15)
+    At = float(A[np.abs(lat) < 15].sum())
+    Ac = cp.asarray(A)
+    co2 = lambda: float(cp.sum(Ac * (cp.sum(w.h, axis=0) + w.frost)))
+    win = {c: dict(u=cp.zeros_like(w.u), T=cp.zeros_like(w.h), p=cp.zeros_like(w.h), n=0) for c in (90, 270)}
+    lsl, pvl, tvl, frost, rng = [], [], [], [], []
+    m0, t = co2(), 0
+    while t < year:
+        n = min(spd, year - t)
+        ls0 = mars_ls(w)
+        act = [d for c, d in win.items() if abs(((ls0 - c + 180) % 360) - 180) <= 10]
+        with w._stream:
+            ps = cp.zeros(()); tmax, tmin = cp.full(g.N, -1e9), cp.full(g.N, 1e9)
+        for k in range(n):
+            w.launch_tick()
+            with w._stream:
+                ps += w.grav * cp.sum(w.h[:, vl1]); tmax = cp.maximum(tmax, w.Ts); tmin = cp.minimum(tmin, w.Ts)
+                if act and k % 8 == 0:
+                    T = cp.stack([w.field('T', j) for j in range(L)])
+                    pc = w.grav * (cp.cumsum(w.h, axis=0) - 0.5 * w.h)
+                    for d in act:
+                        d['u'] += w.u; d['T'] += T; d['p'] += pc; d['n'] += 1
+        w._stream.synchronize()
+        t += n
+        lsl.append(ls0); pvl.append(float(ps) / n); tvl.append(float(w.field('T', L - 1)[vl1]))
+        frost.append(zm(w.frost.get()))
+        rng.append(float(cp.sum(Ac[trop] * (tmax - tmin)[trop])) / At)
+    ok_run = bool(np.isfinite(pvl).all() and np.isfinite(rng).all())
+    drift = abs(co2() - m0) / m0
+    # Viking: each sol's mean at the cell moved to the lander's height (hydrostatic, the bottom layer's temperature)
+    lsl, frost = np.array(lsl), np.array(frost)
+    pl = np.array(pvl) * np.exp((float(w.b[vl1]) - VL1_SITE[2]) * w.grav / (R * np.array(tvl)))
+    b10 = (lsl // 10).astype(int) % 36
+    m = np.array([pl[b10 == k].mean() for k in range(36)])
+    mean = m.mean() / VL1_PA.mean() - 1
+    lmin, lmax = m.argmin() * 10 + 5, m.argmax() * 10 + 5
+    off = lambda a, b: abs(((a - b + 180) % 360) - 180)
+    swing = (m.max() - m.min()) / (VL1_PA.max() - VL1_PA.min()) - 1
+    shape = float(np.sqrt(np.mean((m / m.mean() - VL1_PA / VL1_PA.mean()) ** 2)))
+    # the caps' furthest reach: the band nearest the equator with zonal frost over 10 kg/m², any sol
+    cs = [blat[(blat < 0) & (f > 10)] for f in frost]
+    cn = [blat[(blat > 0) & (f > 10)] for f in frost]
+    south = max((c.max() for c in cs if c.size), default=-90.0)
+    north = min((c.min() for c in cn if c.size), default=90.0)
+    day_night = float(np.mean(rng))
+    # the solstices (Ls 90 ± 10, 270 ± 10): the winter hemisphere's jet (zonal-mean east wind, any layer) and its polar-night air
+    # (poleward of 75°, the bottom layer against CO2's frost point at its mid-pressure)
+    E = np.stack([-np.sin(g.lon), np.cos(g.lon), np.zeros(g.N)], 1)
+    sol = {}
+    for c, d in win.items():
+        nn = max(d['n'], 1)
+        u, T, pc = d['u'].get() / nn, d['T'].get() / nn, d['p'].get() / nn
+        U = np.array([zm(np.sum(cell_winds(g, u[k]) * E, 1)) for k in range(L)])
+        hemi = blat > 0 if c == 270 else blat < 0
+        Uh = np.where(hemi[None], U, -np.inf)
+        k, j = np.unravel_index(np.argmax(Uh), Uh.shape)
+        pole = lat > 75 if c == 270 else lat < -75
+        Tf = 3148.0 / (23.102 - np.log(0.01 * p['frost_x'] * pc[L - 1]))
+        dev = float(np.sum((A * (T[L - 1] - Tf))[pole]) / A[pole].sum())
+        sol[c] = (float(U[k, j]), float(blat[j]), int(k), dev, float(np.sum((A * T[L - 1])[pole]) / A[pole].sum()), d['n'])
+    jets = all(60 <= sol[c][0] <= 180 and 40 <= abs(sol[c][1]) <= 70 for c in sol)
+    polar = all(abs(sol[c][3]) <= 10 for c in sol)
+    ok = (ok_run and abs(mean) <= 0.05 and off(lmin, 155) <= 30 and off(lmax, 255) <= 30 and abs(swing) <= 0.25 and shape <= 0.06
+          and abs(south + 55) <= 5 and abs(north - 57.5) <= 5 and 80 <= day_night <= 130 and jets and polar)
+    jet = lambda c: f'{sol[c][0]:.0f} m/s at {sol[c][1]:+.1f}° (layer {sol[c][2]})'
+    record('MARS', f'year 2 ({year} ticks of {w.dt:.0f} s{"" if ok_run else ", NOT FINITE"}): Viking Lander 1 (10° Ls means at the lander\'s '
+           f'height) mean {m.mean():.0f} Pa ({mean * 100:+.1f}%), least {m.min():.0f} at Ls {lmin} ({off(lmin, 155)}° off), most '
+           f'{m.max():.0f} at Ls {lmax} ({off(lmax, 255)}° off), swing {m.max() - m.min():.0f} Pa ({swing * 100:+.0f}%), the cycle\'s shape '
+           f'{shape * 100:.1f}% rms; the caps\' reach (frost > 10 kg/m²) {south:+.1f}° and {north:+.1f}°; the tropics\' (|lat| < 15°) '
+           f'day − night ground {day_night:.0f} K; winter jets Ls 270 {jet(270)}, Ls 90 {jet(90)}; polar-night air (poleward of 75°, '
+           f'bottom layer) {sol[270][4]:.0f} K north, {sol[90][4]:.0f} K south, against the frost point {sol[270][3]:+.1f} and '
+           f'{sol[90][3]:+.1f} K; reported: CO2 (air and frost) over the year {fmt(drift)}',
+           'Viking mean within 5%; least and most within 30° of Ls 155 and 255; swing within 25% of 208 Pa; shape ≤ 6% rms; caps '
+           'within 5° of 55°S and 57.5°N; tropical day − night 80–130 K; winter jets 60–180 m/s at 40–70°; polar-night air within 10 K '
+           'of the frost point', ok)
+    assert ok

@@ -72,6 +72,7 @@ struct Par {
   real frost, frost_x, L_co2, T_fref, alb_frost, frost_cover;   // CO2 frost (V2-7, #236): on (1), CO2's mole fraction, its latent heat (J/kg),
                                                    // the frost's reference temperature (K), its albedo and the frost (kg/m^2) that covers the ground
   real bulk_imp;                                   // (V2-7, #236) the bulk exchange's air side implicit, as the surface layer's (sfc)
+  real frost_eps, frost_eps_n;                     // (V2-7, #240) CO2 frost's emissivity, the south's and the north's
   real thin_stack;                                 // (V2-7, #237) an emptied layer no colder than the layer below it
   real ths[LMAX];                                  // the theta* of the interfaces above the lowest one, from the top (decision #101)
 };
@@ -126,7 +127,7 @@ __device__ Par unpack(const real* a) {
   P.kappa = a[15]; P.p0 = a[16]; P.tilt = a[17]; P.year_s = a[18]; P.day_s = a[19]; P.tau_lin = a[20]; P.theta_star2 = a[21];
   P.moist = a[22]; P.Lv = a[23]; P.Lf = a[24]; P.Tf = a[25]; P.k_evap = a[26]; P.tau_conv = a[27]; P.alb_ice = a[28];
   P.rho_ice = a[29]; P.ice_cover = a[30]; P.k_ice = a[31]; P.Rv = a[32]; P.sat_layer = a[33]; P.sw_tau = a[34];
-  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; P.plume_ent = a[78]; P.l_ice = a[79]; P.storm_area = a[80]; P.graupel_v = a[81]; P.ice_small = a[82]; P.q_shape = a[83]; P.edge_heat = a[84]; P.freeze_dry = a[85]; P.edge_vap = a[86]; P.conv_revap = a[87]; P.plume_root = a[88]; P.bl_q = a[89]; P.sfc = a[90]; P.z0_land = a[91]; P.downdraft = a[92]; P.ent_cloud = a[93]; P.c_deep = a[94]; P.rs_max = a[95]; P.rs_sun = a[96]; P.q_sea = a[97]; P.bl_reach = a[98]; P.dry_edge = a[99]; P.bl_lcl = a[100]; P.edge_k = (int)a[101]; P.ice_air = a[102]; P.revap = a[103]; P.revap_rhs = a[104]; P.revap_rhl = a[105]; P.revap_area = a[106]; P.root_q = a[107]; P.ent_det = a[108]; P.ent_ifs = a[109]; P.shallow = a[110]; P.cu_dth = a[111]; P.cu_dp = a[112]; P.buoy_v = a[113]; P.cu_sub = a[114]; P.bare_fx = a[115]; P.det_all = a[116]; P.cl_float = a[117]; P.ml_clear = a[118]; P.cu_cloud = a[119]; P.firn = a[120]; P.k_firn = a[121]; P.rho_firn = a[122]; P.c_ice = a[123]; P.lw_refl = a[124]; P.ent_loc = a[125]; P.ecc = a[126]; P.lam_peri = a[127]; P.liq_cold = a[128]; P.cw_qs = a[129]; P.ent_lcl = a[130]; P.sub_mix = a[131]; P.frost = a[132]; P.frost_x = a[133]; P.L_co2 = a[134]; P.T_fref = a[135]; P.alb_frost = a[136]; P.frost_cover = a[137]; P.bulk_imp = a[138]; P.thin_stack = a[139]; P.xf = 0; P.bl_room = (real)1e30; for (int j = 0; j < LMAX; j++) P.ths[j] = a[140 + j];
+  P.alb_dry = a[35]; P.alb_wet = a[36]; P.soil_beta = a[37]; P.k_inf = a[38]; P.pond_cover = a[39]; P.alb_snow = a[40]; P.alb_ice_melt = a[41]; P.alb_snow_melt = a[42]; P.alb_glacier = a[43]; P.snow_cover = a[44]; P.alb_ramp = a[45]; P.land_exch = a[46]; P.plume_deep = a[47]; P.lw_w0 = a[48]; P.c_dry = a[49]; P.c_wet = a[50]; P.sat_prof = a[51]; P.land_rs = a[52]; P.sat_base = a[53]; P.bl_bot = a[54]; P.cloud = a[55]; P.rh_crit = a[56]; P.re_liq = a[57]; P.re_ice = a[58]; P.cloud_g = a[59]; P.k_lw_liq = a[60]; P.k_lw_ice = a[61]; P.c_auto = a[62]; P.q_auto = a[63]; P.v_ice = a[64]; P.l_det = a[65]; P.tau_erode = a[66]; P.k_revap = a[67]; P.mu_cloud = a[68]; P.theta_rise = a[69]; P.bl_mix = a[70]; P.mu_night = a[71]; P.bl_ent = a[72]; P.bl_cap = a[73]; P.bulk_c = a[74]; P.bulk_gust = a[75]; P.bulk_z = a[76]; P.bulk_w = a[77]; P.plume_ent = a[78]; P.l_ice = a[79]; P.storm_area = a[80]; P.graupel_v = a[81]; P.ice_small = a[82]; P.q_shape = a[83]; P.edge_heat = a[84]; P.freeze_dry = a[85]; P.edge_vap = a[86]; P.conv_revap = a[87]; P.plume_root = a[88]; P.bl_q = a[89]; P.sfc = a[90]; P.z0_land = a[91]; P.downdraft = a[92]; P.ent_cloud = a[93]; P.c_deep = a[94]; P.rs_max = a[95]; P.rs_sun = a[96]; P.q_sea = a[97]; P.bl_reach = a[98]; P.dry_edge = a[99]; P.bl_lcl = a[100]; P.edge_k = (int)a[101]; P.ice_air = a[102]; P.revap = a[103]; P.revap_rhs = a[104]; P.revap_rhl = a[105]; P.revap_area = a[106]; P.root_q = a[107]; P.ent_det = a[108]; P.ent_ifs = a[109]; P.shallow = a[110]; P.cu_dth = a[111]; P.cu_dp = a[112]; P.buoy_v = a[113]; P.cu_sub = a[114]; P.bare_fx = a[115]; P.det_all = a[116]; P.cl_float = a[117]; P.ml_clear = a[118]; P.cu_cloud = a[119]; P.firn = a[120]; P.k_firn = a[121]; P.rho_firn = a[122]; P.c_ice = a[123]; P.lw_refl = a[124]; P.ent_loc = a[125]; P.ecc = a[126]; P.lam_peri = a[127]; P.liq_cold = a[128]; P.cw_qs = a[129]; P.ent_lcl = a[130]; P.sub_mix = a[131]; P.frost = a[132]; P.frost_x = a[133]; P.L_co2 = a[134]; P.T_fref = a[135]; P.alb_frost = a[136]; P.frost_cover = a[137]; P.bulk_imp = a[138]; P.thin_stack = a[139]; P.frost_eps = a[140]; P.frost_eps_n = a[141]; P.xf = 0; P.bl_room = (real)1e30; for (int j = 0; j < LMAX; j++) P.ths[j] = a[142 + j];
   return P;
 }
 
@@ -886,7 +887,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
                                       real* tsurf, real* rainp, real* dgo, real* cap, real* qocean,
                                       real* qsw, const real* land, const real* soilcap, real* soil, real* pond, real* snow, real* cloudw, real* cloudo, const real* elev, real* flash,
                                       const real* radf, const real* swf, real* swalb, const real* ch, const real* lc, real* firn, real* xfer,
-                                      real* frost, real* co2x, const real* salb) {
+                                      real* frost, real* co2x, const real* salb, real* seps) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= N) return;
 #ifdef NL
@@ -1068,7 +1069,12 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   const real fsee = isl && lc ? fice * lc[5 * N + i] : fice;    // (#132: the ice the cover lets show)
   real alb = fsee * alb_i + (1 - fsee) * alb0;
   if (fro) alb += (P.alb_frost - alb) * fmin((real)1, m_fr / P.frost_cover);   // (#236) the frost's
-  if (swalb) swalb[i] = alb;                                     // for the next radiation step (k-tables)
+  if (swalb) swalb[i] = alb;
+  // (V2-7, #240) the surface's emissivity: the frost's where it lies (its hemisphere's), the ground's elsewhere; for the next radiation
+  // step it also reflects the rest of the longwave reaching it (seps: lw_column, Kirchhoff)
+  real eps_i = P.eps_s;
+  if (fro) eps_i += ((pos[3 * i + 2] < 0 ? P.frost_eps : P.frost_eps_n) - P.eps_s) * fmin((real)1, m_fr / P.frost_cover);
+  if (seps) seps[i] = eps_i;                                     // for the next radiation step (k-tables)
   // the k-tables' shortwave (sw_column at the last radiation step): each layer's and the surface's share of the sunlight
   const real toAir = swf ? [&]() { real s = 0; for (int k = 0; k < L; k++) s += swf[(size_t)k * N + i]; return s * I; }()
                          : P.asw * (mt / P.mu_ref) * I;
@@ -1214,7 +1220,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   }
 
   // ---- longwave from the emitting surface, up through the layers ----
-  real up = P.eps_s * P.sigma * tsk * tsk * tsk * tsk;
+  real up = eps_i * P.sigma * tsk * tsk * tsk * tsk;
   if (radf) {
     const real Es = up;
     #define RF(r, k) radf[(size_t)((r) * RW + (k)) * N + i]
@@ -1313,7 +1319,7 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
   real qS;
   if (fon) Tfn += (condb - cond) * dt / Cf;                      // the firn between them
   if (skin) qS = fon ? -condb : -cond;
-  else qS = swS + ldown - P.eps_s * P.sigma * tsk * tsk * tsk * tsk - H - P.Lv * E;   // (tsk: the slab's own, or the ground's skin)
+  else qS = swS + ldown - eps_i * P.sigma * tsk * tsk * tsk * tsk - H - P.Lv * E;   // (tsk: the slab's own, or the ground's skin)
   real Tn = ts + qS * dt / Cw;
   if (qocean) qocean[i] = qS;                                    // W/m^2 into the surface water (before ice)
   if (qsw) qsw[i] = skin ? (real)0 : swS;                      // its sunlight (open water), part of which passes below
@@ -2399,9 +2405,11 @@ extern "C" __global__ void lw_setup(int N, int L_in, const real* par, int NP, in
 
 extern "C" __global__ void lw_column(int N, int L_in, const real* par, int NG, const float* lk, const float* pg,
                                      int NP, int NT, int NTP, real tp0,
-                                     const float* sub, const real* Ts, real* radf, const float* cia, const real* dtau, const float* dabs) {
+                                     const float* sub, const real* Ts, real* radf, const float* cia, const real* dtau, const float* dabs,
+                                     const real* seps) {
   const int i = blockIdx.x, g = threadIdx.x;
-  const fast refl = par[124] > 0 ? (fast)(1 - par[4]) : (fast)0;   // lw_refl: the share of the longwave the surface reflects, 1 - eps_s (PAR_ORDER 124, 4)
+  // (#240: seps, the surface's own emissivity per cell, reflecting the rest)
+  const fast refl = seps ? (fast)(1 - seps[i]) : par[124] > 0 ? (fast)(1 - par[4]) : (fast)0;   // lw_refl: the share of the longwave the surface reflects, 1 - eps_s (PAR_ORDER 124, 4)
 #ifdef NL
   const int L = NL;
 #else

@@ -90,6 +90,7 @@ class Longwave:
         self.k = dg.kernel('lw_column', 'air.cu', (f'-DNL={layers}',) + tuple(defs))
         self.ng = np.asarray(t['ng'])
         self.dust = None                                           # (V2-7, #239) a Dust, set by AirPhysics
+        self.seps = None                                           # (#240) the surface's emissivity per cell, set by AirPhysics
 
     def __call__(self, mu, theta, q, cloudo, Ts, gx=None):
         """cloudo: AirPhysics.cloudo (the clouds' cover and longwave optical depth at the column's last step), or None. gx: the
@@ -104,7 +105,8 @@ class Longwave:
         self.k((g.N,), (self.block,), (i32(g.N), i32(self.L), self.par, i32(self.NG), self.logk, self.planck,
                                         i32(self.NP), i32(self.NT), i32(self.planck.shape[0]), R(self.tp0), self.sub, Ts,
                                         self.radf, self.cia if self.cia is not None else NULL,
-                                        self.dust.dtau if self.dust is not None else NULL, self.dust.lw_abs if self.dust is not None else NULL))
+                                        self.dust.dtau if self.dust is not None else NULL, self.dust.lw_abs if self.dust is not None else NULL,
+                                        self.seps if self.seps is not None else NULL))
 
 
 SW_DATA = Path(__file__).resolve().parent / 'data' / 'sw_ktables.npz'

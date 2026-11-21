@@ -3,7 +3,8 @@ together through xdist groups) and prints every measured value against its thres
 performance probe (PERF) runs only with --perf, alone after the suite, at every stage close.
 
   python tools/run_tests.py              the suite
-  python tools/run_tests.py --perf       the suite, then PERF
+  python tools/run_tests.py --perf       the suite with its long runs (MARS), then PERF
+  python tools/run_tests.py --long       the suite with its long runs (MARS)
   python tools/run_tests.py --jobs 3     fewer processes
   python tools/run_tests.py --cold       a fresh, empty cache directory (grids, v1 dump, spin-ups rebuilt)
   python tools/run_tests.py -- -k grid   extra pytest arguments after --
@@ -19,7 +20,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 RESULTS = REPO / 'cache' / 'output' / 'results'
-ORDER = ["GRID", "V1-GRID", "V1-ENGINE", "ACCURACY", "WAVES", "BAROCLINIC", "RCE", "HELD-SUAREZ", "CLIMATE", "WEATHER", "SPINUP", "LONGWAVE", "ORBIT", "EARTH", "CONSERVE", "REPRO", "VIEWER", "PERF"]
+ORDER = ["GRID", "V1-GRID", "V1-ENGINE", "ACCURACY", "WAVES", "BAROCLINIC", "RCE", "HELD-SUAREZ", "CLIMATE", "WEATHER", "SPINUP", "LONGWAVE", "ORBIT", "EARTH", "MARS","CONSERVE", "REPRO", "VIEWER", "PERF"]
 
 
 def sort_key(row):
@@ -42,6 +43,7 @@ def main():
     ap.add_argument('--jobs', type=int, default=5)
     ap.add_argument('--cold', action='store_true')
     ap.add_argument('--perf', action='store_true')
+    ap.add_argument('--long', action='store_true')
     ap.add_argument('rest', nargs='*')
     a = ap.parse_args()
     if a.jobs > 5:
@@ -55,7 +57,8 @@ def main():
     print('Environment:', environment(py, env))
     t0 = time.perf_counter()
     jobs = ['-n', str(a.jobs), '--dist', 'loadgroup'] if a.jobs > 1 else []
-    r1 = subprocess.run([py, '-m', 'pytest', '-q', '-m', 'not perf', *jobs, *a.rest], cwd=REPO, env=env)
+    sel = 'not perf' if a.perf or a.long else 'not perf and not long'     # (#240) the hour-long runs at a stage close
+    r1 = subprocess.run([py, '-m', 'pytest', '-q', '-m', sel, *jobs, *a.rest], cwd=REPO, env=env)
     t1 = time.perf_counter()
     r2 = subprocess.CompletedProcess([], 0)
     if a.perf:

@@ -684,7 +684,8 @@ PRESETS['held_suarez'] = dict(build=held_suarez, dt=lambda n: 900.0 * 2.0 ** (5 
 # ---- Mars (V2-7, SPEC #231) ----
 MARS_PS = 610.0                             # Pa, the surface pressure at the MOLA datum (its 6.1 hPa)
 MARS_H = 10.8e3                             # m, the scale height R T / g at 210 K: the start's surface pressure falls with height as exp(-z / H)
-MARS_STARS = [1700.0, 1150.0, 950.0, 860.0]  # K, the interfaces' theta* (P0 = 1000 hPa): ~8, ~45, ~200 and ~420 Pa in the start's profile
+MARS_STARS = [2100.0, 1700.0, 1150.0, 950.0, 860.0]   # K, the interfaces' theta* (P0 = 1000 hPa): ~4, ~9, ~40, ~230 and ~480 Pa in the
+                                                     # start's profile ((#242) 2100 K, the old top layer's median over its year, splits it)
 
 
 def mars_profile(p, lat=0.0):

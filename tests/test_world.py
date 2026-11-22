@@ -353,8 +353,9 @@ def mars_frost():
     extra = dict(extra, frost=np.where(south, 50.0, 0.0))
     extra['Ts'] = np.where(north, 140.0, extra['Ts'])
     kap = air_props(MARS['gases'], t_cp=MARS['t_cp'])['kappa']
-    pm = np.cumsum(h, axis=0)[1] * cases.GRAV - 0.5 * h[1] * cases.GRAV           # (Earth-gravity pressures, as the builder's)
-    extra['theta'][1] = np.where(g.lat > np.radians(80), 120.0 * (cases.P0 / pm) ** kap, extra['theta'][1])
+    k1 = h.shape[0] - 4                                                            # (the layer under theta* 1700 K)
+    pm = np.cumsum(h, axis=0)[k1] * cases.GRAV - 0.5 * h[k1] * cases.GRAV          # (Earth-gravity pressures, as the builder's)
+    extra['theta'][k1] = np.where(g.lat > np.radians(80), 120.0 * (cases.P0 / pm) ** kap, extra['theta'][k1])
     m = World(4, 'mars', state=(h, b, u, extra))
     A, ph = cp.asarray(m.grid.areaCell), m.physics
     lede, ge = cp.asarray(m.grid.le * m.grid.de), m.grid

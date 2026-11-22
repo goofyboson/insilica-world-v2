@@ -779,18 +779,15 @@ def _mars_preset():
     sc = mu / MU_REF                                        # the column's mass against Earth's: the layers' mass thresholds scale with it
     phys = dict(theta_stars=MARS_STARS, moist=0.0, alb=0.25, eps_s=0.95, mu_night=250.0 * sc,   # (the night's mixed layer, 25 hPa on Earth)
                 c_slab=250.0 * math.sqrt(MARS['day_s'] / math.pi),   # the day's skin: thermal inertia 250 (J m^-2 K^-1 s^-1/2) x sqrt(P / pi)
-                bulk_c=3.0e-3, bulk_gust=1.0, bulk_imp=1.0,           # rho C (|U| + gust): the exchange with the thin air, its air side implicit (#236)
+                bulk_c=3.0e-3, bulk_gust=1.0,                         # rho C (|U| + gust): the exchange with the thin air and its drag on the ground (#241)
                 bl_mix=1.0, mu_bl=0.1 * mu, mu_ref=mu,
-                frost=1.0,                                            # (step 4, #236) CO2 frost on the ground and in the air
-                frost_eps=0.85, frost_eps_n=0.85,                     # (#240) its emissivity (seasonal caps measured 0.7-0.95), the rest reflected
-                thin_stack=1.0,                                       # (#237) an emptied layer no colder than the layer below it
+                frost_eps=0.85, lw_refl=1.0,                          # (#240) its emissivity (seasonal caps measured 0.7-0.95), the rest reflected
                 dust=dict(maps='mars_dust_my30.npz', optics='mars_dust_optics.npz'))   # (step 5, #239) Mars Year 30's dust
     return dict(build=lambda g: mars_build(g, mars_topo(g)), dt=lambda n: 225.0 * 2.0 ** (4 - n),   # (winds near 200 m/s on cells half Earth's; #237: 450 s broke at sol 261, 300 s at 259, 225 s ran on)
                 visc4_U=15.0, tracer=False, planet=dict(MARS),
                 albedo=lambda g: mars_surface(g, 'albedo'),             # (step 3, #238) TES's albedo, Putzig's thermal inertia under a column
                 ground=dict(MARS_GROUND, ti=lambda g: mars_surface(g, 'ti')),
                 floor=10.0 * sc, thin_wind=100.0 * sc, shelf=100.0 * sc,   # (the layer floor, 1 hPa's wind sharing #83, squeezed layers over terrain #97: Earth's 0.1%, 1%, 1%)
-                stress=[0.0] * len(MARS_STARS) + [0.15 * mu / 86400.0],   # Held & Suarez's surface drag on Mars's column (#57)
                 air=dict(AIR, longwave='ktables', physics=phys))
 
 

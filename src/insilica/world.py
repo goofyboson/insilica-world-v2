@@ -224,19 +224,24 @@ class World:
             self.tides = Tides(self.dg, self.sea, self.physics.p, self.planet['radius'], tides,
                                rough=spec['rough'](self.grid) if spec.get('rough') is not None else None,
                                nbot=spec['nbot'](self.grid) if spec.get('nbot') is not None else None)
+        # (V2-7, #241) the air's stress on the ground of a world without an ocean, the drags' kinetic energy returned as its heat (diss,
+        # as the ocean's): the surface layer's rho C_D U where the world has one, else the bulk form's (bulk_c)
+        self.ground_drag = (self.air and self.sea is None and self.physics.forcing == 'radiation'
+                            and (self.physics.sfc or self.physics.p['bulk_c'] > 0))
+        self.diss = self.sea.diss if self.sea is not None else cp.zeros(self.grid.E) if self.air else None
+        if self.ground_drag and self.physics.cd is None:
+            self.physics.cd = cp.zeros(self.grid.N)
         # the mountains' drag (V2-6b, #127): Lott & Miller (1997) from the sub-grid orography
         self.oro = None
         if self.air and self.physics.p['oro'] > 0:
             from .orodrag import OroDrag
-            if self.sea is None or spec.get('sso') is None:
-                raise ValueError('the mountain drag (oro) needs the coupled ocean and the preset sub-grid orography (sso)')
+            if spec.get('sso') is None:
+                raise ValueError('the mountain drag (oro) needs the preset sub-grid orography (sso)')
             self.oro = OroDrag(self.dg, self.L, spec['sso'](self.grid), self.physics.p, self.dt)
         # the gravity waves not tied to the ground (#128): Alexander & Dunkerton (1999)
         self.gw = None
         if self.air and self.physics.p['gw'] > 0:
             from .orodrag import WaveDrag
-            if self.sea is None:
-                raise ValueError('the wave drag (gw) books its heat with the wind stress: it needs the coupled ocean')
             self.gw = WaveDrag(self.dg, self.L, self.physics.p, self.dt)
             if self.physics.p.get('gw_conv', 0.0) > 0 or self.physics.p.get('gw_kel', 0.0) > 0:   # (#188, #233) the column's convective rain
                 self.gw.conv = self.physics.rainp[2]
@@ -326,14 +331,30 @@ class World:
                 self.physics.surface(self.h, self.theta, self.Ts, self.u, q=self.q if self.moist else None,
                                      ice=self.ice if self.moist else None, land=self.land)
             self.sea.couple(self.h, self.u, self.surface_drag, self.dt, cd=self.physics.cd if self.air else None)
+        elif self.ground_drag:                                    # (V2-7, #241) the ground's drag where there is no ocean
+            g, i32, R, ph = self.dg, np.int32, self.dg.dtype.type, self.physics
+            if ph.sfc:
+                ph.surface(self.h, self.theta, self.Ts, self.u, q=self.q if self.moist else None,
+                           ice=self.ice if self.moist else None, land=self.land)
+            else:
+                ph._speed(self.u)
+                ph.k['bulk_drag'](*grid_dims(g.N), (i32(g.N), i32(self.L), ph.par, ph.uabs, self.h, self.theta, self.Ts, ph.cd))
+            ph.k['ground_stress'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(self.L), self.h, self.u, g.eI, g.eJ, ph.cd, R(self.dt), self.diss))
+        elif self.air and (self.oro is not None or self.gw is not None):
+            self.diss.fill(0)
+        if self.air and (self.sea is not None or self.ground_drag or self.oro is not None or self.gw is not None):
+            g, i32, R = self.dg, np.int32, self.dg.dtype.type
             if self.oro is not None:
-                self.oro.apply(self.h, self.theta, self.u, self.dt, self.sea.diss)
+                self.oro.apply(self.h, self.theta, self.u, self.dt, self.diss)
             if self.gw is not None:
-                self.gw.apply(self.h, self.theta, self.u, self.dt, self.sea.diss)
+                self.gw.apply(self.h, self.theta, self.u, self.dt, self.diss)
+            if rec and self.sea is not None:
+                rec.post_couple()
+            self.core.k['vmix_heat'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.diss, g.cellEdge, g.le, g.de,
+                                                       g.areaCell, R(self.grav), R(self.core.cpa), R(self.core.kap), R(P0), self.theta))
+        elif self.sea is not None:
             if rec:
                 rec.post_couple()
-            self.core.k['vmix_heat'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.sea.diss, g.cellEdge, g.le, g.de,
-                                                       g.areaCell, R(self.grav), R(self.core.cpa), R(self.core.kap), R(P0), self.theta))
         if self.air:
             if rad:
                 self.physics.radiate(self.h, self.theta, self.Ts, self.time, self.rad_every * self.dt,

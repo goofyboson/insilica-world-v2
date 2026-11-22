@@ -160,7 +160,7 @@ class World:
         if land is not None:
             p = self.physics.p
             self.land = cp.asarray(np.asarray(land, dtype=float))
-            self.soilcap = cp.asarray(p['soil_base'] + p['soil_per_m'] * np.maximum(cp.asarray(b).get(), 0.0))
+            self.soilcap = cp.asarray(p['soil_base'] + p['soil_per_m'] * np.maximum(cp.asarray(b).get(), 0.0))   # (#243: soil_per_m 0 by default, v1's height term dropped)
             self.soil = 0.5 * self.soilcap
             self.pond, self.snow = cp.zeros(self.grid.N), cp.zeros(self.grid.N)
             if p.get('snow_start', 0) > 0 and state is None and self.moist:  # (#222) an ice sheet starts under its firn, as snow

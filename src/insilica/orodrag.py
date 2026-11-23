@@ -92,3 +92,22 @@ class WaveDrag:
                                             self.F))
         self.k['oro_edge'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(self.L), h, g.eI, g.eJ, self.nrm, self.zero, self.F,
                                              R(dt), u, diss))
+
+
+class EmptyBrake:
+    """(V2-7, #245) The empty-cell brake (drag.cu brake_edge): an edge wind out of a nearly empty cell into a full one relaxes over
+    tau toward the full cell's wind; the kinetic energy changed is added to diss (J/m² per edge)."""
+
+    def __init__(self, dg, L, floor, thin, tau):
+        g, R = dg.host, dg.dtype
+        op, nrm = operators(g)
+        self.dg, self.L, self.floor, self.thin, self.tau = dg, L, floor, thin, tau
+        self.op, self.nrm = cp.asarray(op.reshape(-1), dtype=R), cp.asarray(nrm.reshape(-1), dtype=R)
+        self.W = cp.zeros((2 * L, g.N), dtype=R)
+        self.k = {n: dg.kernel(n, 'drag.cu') for n in ('brake_cell', 'brake_edge')}
+
+    def apply(self, h, u, dt, diss):
+        g, i32, R = self.dg, np.int32, self.dg.dtype.type
+        self.k['brake_cell'](*grid_dims(g.N), (i32(g.N), i32(self.L), u, g.cellEdge, self.op, i32(g.E), self.W))
+        self.k['brake_edge'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(self.L), h, g.eI, g.eJ, self.nrm, self.W, R(self.floor),
+                                               R(self.thin), R(self.tau), R(dt), u, diss))

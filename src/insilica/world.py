@@ -245,6 +245,15 @@ class World:
             self.gw = WaveDrag(self.dg, self.L, self.physics.p, self.dt)
             if self.physics.p.get('gw_conv', 0.0) > 0 or self.physics.p.get('gw_kel', 0.0) > 0:   # (#188, #233) the column's convective rain
                 self.gw.conv = self.physics.rainp[2]
+        # (V2-7, #245) the empty-cell brake: brake_tau (s; 0 = off) relaxes an edge wind out of a nearly empty cell toward the wind of
+        # the full cell it blows into (below thin_wind, fully at twice the floor)
+        self.brake = None
+        tau = P.get('brake_tau', spec.get('brake_tau', 0.0))
+        if self.air and tau > 0 and self.L > 1 and self.core.thin_wind > 2 * self.core.floor:
+            from .orodrag import EmptyBrake
+            self.brake = EmptyBrake(self.dg, self.L, self.core.floor, self.core.thin_wind, float(tau))
+            if self.diss is None:
+                self.diss = cp.zeros(self.grid.E)
         if self.air:
             self.core.update_gfast(self.h, self.theta)
         # fast sub-steps per step: from the fastest column, with 20% room
@@ -340,14 +349,16 @@ class World:
                 ph._speed(self.u)
                 ph.k['bulk_drag'](*grid_dims(g.N), (i32(g.N), i32(self.L), ph.par, ph.uabs, self.h, self.theta, self.Ts, ph.cd))
             ph.k['ground_stress'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(self.L), self.h, self.u, g.eI, g.eJ, ph.cd, R(self.dt), self.diss))
-        elif self.air and (self.oro is not None or self.gw is not None):
+        elif self.air and (self.oro is not None or self.gw is not None or self.brake is not None):
             self.diss.fill(0)
-        if self.air and (self.sea is not None or self.ground_drag or self.oro is not None or self.gw is not None):
+        if self.air and (self.sea is not None or self.ground_drag or self.oro is not None or self.gw is not None or self.brake is not None):
             g, i32, R = self.dg, np.int32, self.dg.dtype.type
             if self.oro is not None:
                 self.oro.apply(self.h, self.theta, self.u, self.dt, self.diss)
             if self.gw is not None:
                 self.gw.apply(self.h, self.theta, self.u, self.dt, self.diss)
+            if self.brake is not None:
+                self.brake.apply(self.h, self.u, self.dt, self.diss)
             if rec and self.sea is not None:
                 rec.post_couple()
             self.core.k['vmix_heat'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.diss, g.cellEdge, g.le, g.de,

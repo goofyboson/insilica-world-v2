@@ -317,3 +317,49 @@ extern "C" __global__ void gw_mean(int N, const real* conv, const real* area, re
   for (int s = blockDim.x / 2; s > 0; s >>= 1) { if (threadIdx.x < s) { sa[threadIdx.x] += sa[threadIdx.x + s]; sb[threadIdx.x] += sb[threadIdx.x + s]; } __syncthreads(); }
   if (threadIdx.x == 0) out[0] = (real)(sa[0] / sb[0]);
 }
+
+// The empty-cell brake (V2-7, #245): an edge wind blowing out of a cell whose layer is nearly empty moves no air (the floor's
+// limiter, lay_scale, stops the flux), so no pressure answers it and the kinetic energy and Coriolis terms can drive it without
+// bound (earth8's Yakutian break). Such an edge's wind relaxes over tau toward the wind of the cell it blows into (that cell's
+// Perot wind along the edge's normal), in full where the upwind cell is at twice the floor and the downwind one holds twice
+// thin; none where the upwind cell holds thin or the downwind one under thin (there #83's sharing applies). Exact
+// exponential; the kinetic energy removed (or taken) goes to diss for vmix_heat.
+// First the cells' Perot winds (east, north) per layer: W (2 L, N).
+extern "C" __global__ void brake_cell(int N, int L, const real* u, const int* cellEdge, const real* op, int E, real* W) {
+  LOOP1(i, N)
+  for (int k = 0; k < L; k++) {
+    real ue = 0, un = 0;
+    for (int m = 0; m < 6; m++) {
+      const int e = cellEdge[i * 6 + m];
+      if (e < 0) break;
+      const real v = u[(size_t)k * E + e];
+      ue += op[(i * 6 + m) * 2] * v;
+      un += op[(i * 6 + m) * 2 + 1] * v;
+    }
+    W[(size_t)(2 * k) * N + i] = ue;
+    W[(size_t)(2 * k + 1) * N + i] = un;
+  }
+}
+
+extern "C" __global__ void brake_edge(int N, int E, int L, const real* h, const int* eI, const int* eJ, const real* nrm, const real* W,
+                                      real floor_, real thin, real tau, real dt, real* u, real* diss) {
+  LOOP1(e, E)
+  const int ci = eI[e], cj = eJ[e];
+  real d = 0;
+  for (int k = 0; k < L; k++) {
+    real* pa = u + (size_t)k * E + e;
+    const real a0 = *pa;
+    const bool fromI = a0 > 0;
+    const int cu = fromI ? ci : cj, cd = fromI ? cj : ci, s = fromI ? 2 : 0;
+    const real hu = h[(size_t)k * N + cu], hd = h[(size_t)k * N + cd];
+    const real fu = fmin((real)1, fmax((real)0, (thin - hu) / (thin - 2 * floor_)));
+    const real fd = fmin((real)1, fmax((real)0, (hd - thin) / thin));
+    const real f = fu * fd;
+    if (!(f > 0)) continue;
+    const real tg = W[(size_t)(2 * k) * N + cd] * nrm[e * 4 + s] + W[(size_t)(2 * k + 1) * N + cd] * nrm[e * 4 + s + 1];
+    const real a1 = tg + (a0 - tg) * exp(-f * dt / tau);
+    *pa = a1;
+    d += (real)0.5 * (real)0.5 * (hu + hd) * (a0 * a0 - a1 * a1);
+  }
+  diss[e] += d;
+}

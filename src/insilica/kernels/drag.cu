@@ -363,3 +363,27 @@ extern "C" __global__ void brake_edge(int N, int E, int L, const real* h, const 
   }
   diss[e] += d;
 }
+
+// The flux-consistent wind (V2-7, #247): the floor's limiter (lay_scale) lets a cell send out only the share s of its layer's outflow
+// that it holds above the floor, but the dynamics' edge wind keeps its full speed, a wind that moved no air (earth8's Yakutian break:
+// nothing answers it, and the kinetic energy and Coriolis terms drive it without bound). After the step, an edge wind blowing the way
+// its layer's flux went, out of a cell whose outflow was cut to s < 1, keeps s of itself: the speed the air it moved had. F and scale
+// are the step's last stage's (Layers.F, Layers.scale); the kinetic energy removed goes to diss (J/m² per edge) for vmix_heat.
+extern "C" __global__ void wind_cap(int N, int E, int L, const real* h, const int* eI, const int* eJ, const real* F, const real* scale,
+                                    real* u, real* diss) {
+  LOOP1(e, E)
+  const int ci = eI[e], cj = eJ[e];
+  real d = 0;
+  for (int k = 0; k < L; k++) {
+    const real f = F[(size_t)k * E + e];
+    real* pa = u + (size_t)k * E + e;
+    const real a0 = *pa;
+    if (!(f * a0 > 0)) continue;
+    const real s = scale[(size_t)k * N + (f > 0 ? ci : cj)];
+    if (!(s < 1)) continue;
+    const real a1 = s * a0;
+    *pa = a1;
+    d += (real)0.5 * (real)0.5 * (h[(size_t)k * N + ci] + h[(size_t)k * N + cj]) * (a0 * a0 - a1 * a1);
+  }
+  diss[e] += d;
+}

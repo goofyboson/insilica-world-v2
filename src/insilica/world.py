@@ -254,6 +254,13 @@ class World:
             self.brake = EmptyBrake(self.dg, self.L, self.core.floor, self.core.thin_wind, float(tau))
             if self.diss is None:
                 self.diss = cp.zeros(self.grid.E)
+        # (V2-7, #247) the flux-consistent wind: wind_cap (0/1; 0 = off) keeps of an edge wind out of a cell whose outflow the floor's limiter
+        # cut to the share s only s of itself, the speed of the air it moved (drag.cu wind_cap)
+        self.wind_cap = None
+        if self.air and self.dynamics and P.get('wind_cap', spec.get('wind_cap', 0)):
+            self.wind_cap = self.dg.kernel('wind_cap', 'drag.cu')
+            if self.diss is None:
+                self.diss = cp.zeros(self.grid.E)
         if self.air:
             self.core.update_gfast(self.h, self.theta)
         # fast sub-steps per step: from the fastest column, with 20% room
@@ -349,9 +356,9 @@ class World:
                 ph._speed(self.u)
                 ph.k['bulk_drag'](*grid_dims(g.N), (i32(g.N), i32(self.L), ph.par, ph.uabs, self.h, self.theta, self.Ts, ph.cd))
             ph.k['ground_stress'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(self.L), self.h, self.u, g.eI, g.eJ, ph.cd, R(self.dt), self.diss))
-        elif self.air and (self.oro is not None or self.gw is not None or self.brake is not None):
+        elif self.air and (self.oro is not None or self.gw is not None or self.brake is not None or self.wind_cap is not None):
             self.diss.fill(0)
-        if self.air and (self.sea is not None or self.ground_drag or self.oro is not None or self.gw is not None or self.brake is not None):
+        if self.air and (self.sea is not None or self.ground_drag or self.oro is not None or self.gw is not None or self.brake is not None or self.wind_cap is not None):
             g, i32, R = self.dg, np.int32, self.dg.dtype.type
             if self.oro is not None:
                 self.oro.apply(self.h, self.theta, self.u, self.dt, self.diss)
@@ -359,6 +366,8 @@ class World:
                 self.gw.apply(self.h, self.theta, self.u, self.dt, self.diss)
             if self.brake is not None:
                 self.brake.apply(self.h, self.u, self.dt, self.diss)
+            if self.wind_cap is not None:
+                self.wind_cap(*grid_dims(g.E), (i32(g.N), i32(g.E), i32(self.L), self.h, g.eI, g.eJ, self.core.F, self.core.scale, self.u, self.diss))
             if rec and self.sea is not None:
                 rec.post_couple()
             self.core.k['vmix_heat'](*grid_dims(g.N), (i32(g.N), i32(self.L), self.h, self.diss, g.cellEdge, g.le, g.de,

@@ -27,7 +27,7 @@ import numpy as np
 from .constants import CP_DRY, GRAV, KAPPA, P0, R_DRY
 from .gpu import NULL, grid_dims
 
-LMAX = 8
+LMAX = 10
 FAST_COURANT = 0.5          # fast sub-step: tau·√(gH)/d_min ≤ this
 DIV_DAMP = 0.1              # divergence damping of the fast mode (decision #28)
 

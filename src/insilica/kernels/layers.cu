@@ -11,7 +11,7 @@
 // (LMAX layers at most); the others take the layer from blockIdx.y.
 
 typedef REAL real;
-#define LMAX 8
+#define LMAX 10
 // Division by a fixed grid quantity (cell area, edge spacing, vertex area): mixed precision passes its stored reciprocal
 // and multiplies, one 64-bit operation for a division's many (#106); the 64-bit reference divides as before.
 #if defined(MIXED)

@@ -88,6 +88,12 @@ class Longwave:
         self.sub = cp.zeros((4 * layers * 15, dg.N), dtype=cp.float32)        # the sub-levels' properties (lw_setup)
         self.ks = dg.kernel('lw_setup', 'air.cu', (f'-DNL={layers}',) + tuple(defs))
         self.k = dg.kernel('lw_column', 'air.cu', (f'-DNL={layers}',) + tuple(defs))
+        # (#250) its reduction rows in dynamic shared memory, 144 floats each; past 48 KB the kernel opts in
+        self.shm = (3 * (layers + 1) + 3 + 6 * layers) * 144 * 4
+        if self.shm > 48 * 1024:
+            stat = self.k.shared_size_bytes
+            self.k.max_dynamic_shared_size_bytes = self.shm
+            assert stat + self.shm <= 99 * 1024, 'lw_column: shared memory past the 99 KB a block can hold'
         self.ng = np.asarray(t['ng'])
         self.dust = None                                           # (V2-7, #239) a Dust, set by AirPhysics
         self.seps = None                                           # (#240) the surface's emissivity per cell, set by AirPhysics
@@ -106,7 +112,7 @@ class Longwave:
                                         i32(self.NP), i32(self.NT), i32(self.planck.shape[0]), R(self.tp0), self.sub, Ts,
                                         self.radf, self.cia if self.cia is not None else NULL,
                                         self.dust.dtau if self.dust is not None else NULL, self.dust.lw_abs if self.dust is not None else NULL,
-                                        self.seps if self.seps is not None else NULL))
+                                        self.seps if self.seps is not None else NULL), shared_mem=self.shm)
 
 
 SW_DATA = Path(__file__).resolve().parent / 'data' / 'sw_ktables.npz'

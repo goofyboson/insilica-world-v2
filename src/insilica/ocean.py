@@ -85,6 +85,7 @@ class Ocean:
             m[(land[g.eI] > 0.5) | (land[g.eJ] > 0.5)] = 0.0
             self.wall = m
             self.land = cp.asarray(np.asarray(land, dtype=float))
+        assert L <= 8, "ocean.cu holds at most 8 layers (its LMAX)"
         self.core = Layers(dg, L, b=self.b, grav=grav, gprime=list(c['gprime']), stress=[0.0] * (L - 1) + [c['bottom_stress']], nu4=nu4,
                            floor=c['hmin'], vmix=c['interface_stress'], vmix_cd=c['interface_cd'], thin=c['thin'], wall=self.wall, shelf=c['shelf'] if c['bed'] is not None else 0.0,
                            shelf_bed=c['shelf_bed'] > 0)

@@ -19,7 +19,7 @@
 // (added to diss, booked as the wind stress's).
 
 typedef REAL real;
-#define LMAX 8
+#define LMAX 10
 #define LOOP1(i, n) const int i = blockIdx.x * blockDim.x + threadIdx.x; if (i >= (n)) return;
 #if defined(MIXED)
 typedef float fast;                                              // the waves' spectrum arithmetic (#106; the deposits stay real)

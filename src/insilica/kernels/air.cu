@@ -692,9 +692,10 @@ __device__ real cu_top(int L, const real* mu, const real* th, const real* q, con
 }
 
 // cl_layers (V2-7, #250): the n free layers between the cumulus layer and the n-th interface above it (the 305 K edge) share the cloud layer's
-// role. The cloud layer is the lowest of them holding air (1% of the column or more): where the air of the lower ones is all warmer than
-// their edges (the tropics' below 295 K) they are empty, and the cumulus layer's top rises through their edges, which follow it up just
-// above it (their fixed theta* where that is higher). n = 1: the layer above the cumulus layer, as before
+// role. The cloud layer is the lowest of them holding air (1% of the column or more) whose fixed top edge is above the cumulus top the plume
+// wants (cu_top; #251: by the plume, not by the mass alone, which flickered about 1% in the tropics and each time dropped the top under
+// 295 K and pushed the cumulus air up whole). Where the lower ones are passed their edges follow the cumulus top up just above it (their fixed
+// theta* where that is higher) and their air moves out across them. n = 1: the layer above the cumulus layer, as before
 __device__ void cu_edges(int L, const real* mu, const real* th, const real* q, Par& P) {
   const real want = P.cu_dp > 0 ? cu_top(L, mu, th, q, P) : P.theta_star + P.cu_dth;
   int kc = L - 3;
@@ -702,7 +703,7 @@ __device__ void cu_edges(int L, const real* mu, const real* th, const real* q, P
     real mt = 0;
     for (int k = 0; k < L; k++) mt += mu[k];
     for (int k = L - 4; k >= L - 2 - P.cl_layers && k >= 0; k--) P.ths[k] = P.ths0[k];
-    while (kc > L - 2 - P.cl_layers && kc > 1 && mu[kc] < (real)0.01 * mt) kc--;
+    while (kc > L - 2 - P.cl_layers && kc > 1 && (mu[kc] < (real)0.01 * mt || want >= P.ths0[kc - 1] - (real)0.5)) kc--;
   }
   P.kcl = kc;
   P.ths[L - 3] = fmax(P.theta_star + (real)0.5, fmin(want, fmin(th[kc] - 1, P.ths[kc - 1] - (real)0.5)));

@@ -187,7 +187,7 @@ EARTH_CYCLES = (5, 20)                           # (1 coupled year + 20 ocean-on
 
 def _earth_equilibrium():
     from insilica import spinup
-    w = World(4, 'earth8')                     # (#248: earth8, the 305-330 K layer split at 315 K, with the flux-consistent wind #247) the seven-layer earth: its boundary layer a layer of its own (#125), its stratosphere two (#129), a cumulus layer (#142), the free troposphere split at 330 K (#153)
+    w = World(4, 'earth8')                     # (#248: earth8, the 305-330 K layer split at 315 K, with the flux-consistent wind #247; #254: and force #253) the seven-layer earth: its boundary layer a layer of its own (#125), its stratosphere two (#129), a cumulus layer (#142), the free troposphere split at 330 K (#153)
     year = int(round(365 * 86400 / w.dt))
     w.step(EARTH_SPIN_YEARS * year)
     spinup.spin_up(w, *EARTH_CYCLES)

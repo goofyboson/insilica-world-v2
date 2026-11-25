@@ -207,13 +207,14 @@ extern "C" __global__ void af_muphi(int N, int E, int L, const real* hedge, cons
 }
 
 extern "C" __global__ void af_u(int N, int E, const real* phi, const real* Tp, const real* G, const int* eI, const int* eJ,
-                                const real* de, real tau, real* uf, real* acc) {
+                                const real* de, real tau, real* uf, real* acc, const real* rk) {
   LOOP(e, E)
   const size_t o = (size_t)l * E + e;
   const real v = uf[o];
   acc[o] += v;
   const real* pl = phi + (size_t)l * N;
-  uf[o] = v + tau * (DIVBY(-(pl[eJ[e]] - pl[eI[e]]), de[e]) + Tp[o] + G[e]);
+  if (rk) uf[o] = v + tau * (rk[o] * DIVBY(-(pl[eJ[e]] - pl[eI[e]]), de[e]) + Tp[o] + G[e]);
+  else uf[o] = v + tau * (DIVBY(-(pl[eJ[e]] - pl[eI[e]]), de[e]) + Tp[o] + G[e]);
 }
 
 // The stage's layer fluxes: the stage's edge thickness times the mean wind of the substeps.
@@ -252,12 +253,13 @@ extern "C" __global__ void air_gfast(int N, int L, const real* h, const real* th
 // Per stage: each edge's layer thickness h_e and potential vorticity q_e (the mean of its two vertices), read by
 // lay_slow for every neighbour instead of being recomputed from cells and vertices there: packed with the edge's wind.
 extern "C" __global__ void lay_edge_hq(int N, int E, int NV, const real* h, const real* q, const int* eI, const int* eJ,
-                                       const int* ev1, const int* ev2, real shelf, const real* u, real* he, fast* pk, const real* ob) {
+                                       const int* ev1, const int* ev2, real shelf, const real* u, real* he, fast* pk, const real* ob, real* rk) {
   LOOP(e, E)
   const size_t o = (size_t)l * E + e;
   const real hv = edge_h(h[(size_t)l * N + eI[e]], h[(size_t)l * N + eJ[e]], shelf_at(ob, N, l, eI[e], eJ[e], shelf));
   const real qv = (real)0.5 * (q[(size_t)l * NV + ev1[e]] + q[(size_t)l * NV + ev2[e]]);
   he[o] = hv;
+  if (rk) { const real hm = (real)0.5 * (h[(size_t)l * N + eI[e]] + h[(size_t)l * N + eJ[e]]); rk[o] = hm > 0 ? hv / hm : (real)1; }
   fast* pp = pk + ((size_t)e * gridDim.y + l) * 3;   // for lay_slow's gathers: [edge][layer][h_e, u, q_e]
   pp[0] = (fast)hv; pp[1] = (fast)u[o]; pp[2] = (fast)qv;
 }
@@ -271,7 +273,7 @@ extern "C" __global__ void lay_slow(int N, int E, int L, const fast* pk, const f
                                     const real* de, const real* drag, const real* stress,
                                     real floor_, real nu4, const real* lap4, const real* theta, const real* pibar,
                                     real dts, real thin, real shelf, real* Tp, real* G, real* He, real* ubs,
-                                    const real* sig, const real* zm, const real* ob, real cd_bot, const real* cbot) {
+                                    const real* sig, const real* zm, const real* ob, real cd_bot, const real* cbot, const real* rk) {
   LOOP1(e, E)
   real T[LMAX], hev[LMAX], sqk[LMAX];
   real H = 0, U = 0, GT = 0;
@@ -300,7 +302,13 @@ extern "C" __global__ void lay_slow(int N, int E, int L, const fast* pk, const f
     // (air, V2-6b: a layer squeezed against the ground keeps its own forces here and takes its neighbours' below)
     const real sq = theta ? (real)1 : sq0;
     sqk[k] = sq0;
-    real d = Q - DIVBY(sq * (Bl[eJ[e]] - Bl[eI[e]]), de[e]) - (drag[k] + (1 - sq) / (real)21600) * ul[e];
+    // (V2-7, #253, flux_force: rk given) rr, the flux's edge thickness (the thinner side's below shelf) over the mean of the two cells,
+    // which the kinetic energy is measured with, on the conservative forces (the PV flux, grad B, pibar grad theta; and the fast
+    // substeps' grad phi): their work is then the energy the flux converts. Without it a thin layer's edge gained kinetic energy at the
+    // mean's rate for the thinner side's conversion: earth8 made ~0.5 W/m^2 of energy so. 1 unless flux_force
+    const real rr = rk ? rk[(size_t)k * E + e] : (real)1;
+    real d = rk ? rr * (Q - DIVBY(sq * (Bl[eJ[e]] - Bl[eI[e]]), de[e])) - (drag[k] + (1 - sq) / (real)21600) * ul[e]
+                : Q - DIVBY(sq * (Bl[eJ[e]] - Bl[eI[e]]), de[e]) - (drag[k] + (1 - sq) / (real)21600) * ul[e];
     real ck = stress[k];
     if (k == L - 1 && (cd_bot > 0 || cbot)) {
       // (V2-6f, #228, with tides) the bottom layer's quadratic stress cd |u| (|u| from its normal and TRiSK tangential
@@ -321,7 +329,8 @@ extern "C" __global__ void lay_slow(int N, int E, int L, const fast* pk, const f
     if (theta) {                       // air: + pibar grad(theta), the pressure force of theta varying in a layer
       const real* tl = theta + (size_t)k * N;
       const real* pl = pibar + (size_t)k * N;
-      d = d + DIVBY((real)0.5 * (pl[eI[e]] + pl[eJ[e]]) * (tl[eJ[e]] - tl[eI[e]]), de[e]);
+      if (rk) d = d + rr * DIVBY((real)0.5 * (pl[eI[e]] + pl[eJ[e]]) * (tl[eJ[e]] - tl[eI[e]]), de[e]);
+      else d = d + DIVBY((real)0.5 * (pl[eI[e]] + pl[eJ[e]]) * (tl[eJ[e]] - tl[eI[e]]), de[e]);
     }
     if (sig) {                         // ocean (#166): + zm grad(sigma), the pressure force of the density varying in a layer
       const real* sl = sig + (size_t)k * N;
@@ -338,7 +347,10 @@ extern "C" __global__ void lay_slow(int N, int E, int L, const fast* pk, const f
   // barotropic force (the surface pressure's gradient, g times the ground's slope) reaches every layer alike and is balanced only in
   // the layers with mass. The scrap of air is embedded in its neighbours and feels their pressure gradient: its slow tendency
   // blends to the thickness-weighted tendency of the nearest unsqueezed layers above and below, all the way at twice the floor.
-  if (theta && shelf > 0) {
+  // (V2-7, #253: not with flux_force. The blend drives the thin layer's wind with forces its own mass flux does not convert: on
+  // earth8, where 30% of the cumulus layer's and 13% of the cloud layer's edges are this thin, it made ~1.2 W/m^2 of energy; the
+  // thinner side's thickness over the mean, rr, scales the layer's own forces down there instead)
+  if (theta && shelf > 0 && !rk) {
     real Tn[LMAX];
     for (int k = 0; k < L; k++) {
       Tn[k] = T[k];

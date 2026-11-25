@@ -34,7 +34,7 @@ DIV_DAMP = 0.1              # divergence damping of the fast mode (decision #28)
 
 class Layers:
     def __init__(self, dg, layers=1, b=None, grav=GRAV, gprime=(), drag=0.0, stress=0.0, nu4=0.0, floor=1.0, rotation=1.0,
-                 div_damp=DIV_DAMP, air=None, vmix=0.0, thin=2.0, wall=None, thin_wind=0.0, shelf=0.0, vmix_cd=0.0, shelf_bed=False):
+                 div_damp=DIV_DAMP, air=None, vmix=0.0, thin=2.0, wall=None, thin_wind=0.0, shelf=0.0, vmix_cd=0.0, shelf_bed=False, flux_force=False):
         """air: None for Boussinesq (ocean-like) layers, h in m; or a dict for air layers, h the layer's mass per area
         (kg/m²) with a potential temperature θ per layer passed to step() (decision #32). The fast mode then runs on
         the column mass with each cell's own coefficient Gc = R·T_s/μ (decision #37), at √(R·T_s). thin: the PV flux's cap on a
@@ -46,6 +46,9 @@ class Layers:
         self.real = dg.dtype.type
         self.grav, self.nu4, self.floor, self.div_damp, self.thin = grav, nu4, floor, div_damp, thin
         self.thin_wind = thin_wind
+        # (V2-7, #253) air: where an edge's flux thickness is the thinner side's (shelf), the conservative forces there scaled by it over
+        # the mean thickness the kinetic energy is measured with, so their work equals the energy the flux converts
+        self.flux_force = bool(flux_force) and air is not None and shelf > 0
         self.shelf = shelf                                 # sea floor: layers thinner than this take the thinner side's thickness at an edge (#97)
         self.ob = cp.zeros((layers, dg.N), dtype=dg.dtype) if shelf_bed and shelf > 0 else None   # (#174) only layers resting on the floor
         assert wall is None or not air, 'walls are for Boussinesq layers'
@@ -79,6 +82,7 @@ class Layers:
         self.D1, self.Z1, self.L1, self.L2 = z(L, N), z(L, NV), z(L, E), z(L, E)
         self.hold = z(L, N)
         self.hedge = z(L, E)
+        self.rk = z(L, E) if self.flux_force else None
         self.diss = z(E)
         k = lambda n, f='layers.cu': dg.kernel(n, f)
         self.k = {n: k(n) for n in ('lay_eta', 'lay_ubar', 'lay_bern', 'air_bern', 'air_gfast', 'lay_slow', 'bt_eta', 'bt_u', 'lay_flux', 'lay_scale',
@@ -140,13 +144,15 @@ class Layers:
                                 self.tide if self.tide is not None else NULL))
         k['swe_vertex'](*grid_dims(g.NV, L), (N, E, NV, hs, us, g.vCell, g.vSlot, g.kite, g.vEdge, g.vEdgeSign, g.de, g.rAV,
                                               self.fV, self.q))
-        k['lay_edge_hq'](*grid_dims(g.E, L), (N, E, NV, hs, self.q, g.eI, g.eJ, g.ev1, g.ev2, R(self.shelf), us, self.hedge, self.pk, self.ob if self.ob is not None else NULL))
+        k['lay_edge_hq'](*grid_dims(g.E, L), (N, E, NV, hs, self.q, g.eI, g.eJ, g.ev1, g.ev2, R(self.shelf), us, self.hedge, self.pk, self.ob if self.ob is not None else NULL,
+                                               self.rk if self.rk is not None else NULL))
         k['lay_slow'](*e1, (N, E, i32(L), self.pk, self.wf, self.hedge, us, self.B, g.eoeStart, g.eoe, g.eI, g.eJ, g.rde,
                             self.drag, self.stress, R(self.floor), R(self.nu4), self.L2 if self.nu4 else NULL,
                             theta if self.air else NULL,
                             self.pibar if self.air else NULL, R(c * dt), R(self.thin), R(self.shelf), self.Tp, self.G, self.He,
                             self.ubs, self.sig if self.sig is not None else NULL, self.zm if self.sig is not None else NULL,
-                            self.ob if self.ob is not None else NULL, R(self.cd_bot), self.cbot if self.cbot is not None else NULL))
+                            self.ob if self.ob is not None else NULL, R(self.cd_bot), self.cbot if self.cbot is not None else NULL,
+                            self.rk if self.rk is not None else NULL))
         n = max(1, math.ceil(c * nfast))
         tau = R(c * dt / n)
         if self.air:
@@ -157,7 +163,7 @@ class Layers:
             for _ in range(n):
                 k['af_muphi'](*c1, (N, E, i32(L), self.hedge, self.uf, g.cellEdge, g.cellSign, g.le, g.rA, tau, self.muf, self.mup,
                                     R(self.div_damp), self.S, self.phi))
-                k['af_u'](*eL, (N, E, self.phi, self.Tp, self.G, g.eI, g.eJ, g.rde, tau, self.uf, self.accL))
+                k['af_u'](*eL, (N, E, self.phi, self.Tp, self.G, g.eI, g.eJ, g.rde, tau, self.uf, self.accL, self.rk if self.rk is not None else NULL))
             k['af_flux'](*eL, (E, self.hedge, self.accL, R(1.0 / n), self.F))
             k['lay_scale'](*cL, (N, E, h0, self.F, g.cellEdgeAsc, g.eI, g.le, g.areaCell, R(c * dt), R(self.floor), self.scale))
             k['lay_limit'](*eL, (N, E, g.eI, g.eJ, self.scale, g.le, R(dt), self.F, Fm if Fm is not None else NULL))

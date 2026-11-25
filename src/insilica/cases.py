@@ -664,10 +664,10 @@ def earth9(g, lo=290.0, hi=300.0):
 
 # V2-7 (#250, trial): earth8 with its cloud layer split at 295 K, so the extratropics' lower troposphere (the 285-300 K isentropes that
 # slope 60-80 hPa per 5 degrees across 40-65 S, where the storm track draws its energy; #249) holds two winds, not one. In the tropics the
-# air there is all warmer than 295 K: the lower part empties and the cumulus top rises through its edge (cl_layers 2)
+# air there is all warmer than 295 K: the lower part empties and the cumulus top rises through its edge (cl_layers 3: with the 305-315 K layer, as earth8 has since #257)
 PRESETS['earth9'] = dict(PRESETS['earth8'], build=earth9, stress=[0.0] * 9,
                          air=dict(PRESETS['earth8']['air'], physics=dict(PRESETS['earth8']['air']['physics'], theta_stars=[500.0, 380.0, 330.0, 315.0, 305.0, 295.0, 204.0, 200.0],
-                                                                         cl_layers=2.0)))
+                                                                         cl_layers=3.0)))
 
 PRESETS['earth7o8'] = dict(PRESETS['earth7'], ocean=dict(PRESETS['earth7']['ocean'], gprime=(0.0096, 0.0115, 0.0099, 0.0083, 0.0067, 0.0052, 0.0036),
                                                          h_layers=(50.0, 50.0, 75.0, 100.0, 150.0, 200.0, 400.0), T_layers=tuple(273.15 + t for t in _C8[:-1]),

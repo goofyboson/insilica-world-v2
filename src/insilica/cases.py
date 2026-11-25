@@ -646,7 +646,8 @@ def earth8(g, lo=310.0, hi=322.0):
 # (#248) Earth's preset since the split keeps the African Easterly Jet, with the flux-consistent wind (#247) that lets it run;
 # (#254) with the flux-consistent force (#253) that closes its energy to ~0.3 W/m²
 PRESETS['earth8'] = dict(PRESETS['earth7'], build=earth8, stress=[0.0] * 8, wind_cap=1, flux_force=1,
-                         air=dict(PRESETS['earth7']['air'], physics=dict(PRESETS['earth7']['air']['physics'], theta_stars=[500.0, 380.0, 330.0, 315.0, 305.0, 204.0, 200.0])))
+                         air=dict(PRESETS['earth7']['air'], physics=dict(PRESETS['earth7']['air']['physics'], theta_stars=[500.0, 380.0, 330.0, 315.0, 305.0, 204.0, 200.0],
+                                                                         cl_layers=2.0)))   # (#257: the cumulus top passes 305 K when the plume wants, #251)
 
 
 def earth9(g, lo=290.0, hi=300.0):

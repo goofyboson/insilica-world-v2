@@ -9,6 +9,7 @@ Cases and their settings are in cases.py; `params` overrides a case's settings:
   with d the mean cell spacing, the grid-scale wave then damps at U/d), rotation (multiplies f), beta (transport),
   div_damp (the fast mode's divergence damping, default 0.1), nfast (fast sub-steps per step; default from √(gH)),
   thin_wind (air: the layer mass below which a layer takes its neighbours' wind, default 100 kg/m², #83; 0 = off).
+  iface_U (air: the interfaces' biharmonic smoothing as a velocity scale, kap4 = U d^3 / pi^4 as visc4_U, V2-7 #279; 0 = off).
   ri_mix (air: the critical Richardson number below which adjacent layers' shear is mixed back to it, V2-7 #276; 0 = off).
 """
 import hashlib
@@ -98,6 +99,7 @@ class World:
                            air=dict(t_ref=self.air.get('t_ref', 288.0), cp=self.gas['cp'], kappa=self.gas['kappa'], rd=self.gas['rd']) if self.air else None,
                            vmix=P.get('vmix', spec.get('vmix', 0.0)),
                            ri_mix=P.get('ri_mix', spec.get('ri_mix', 0.0)),
+                           iface=visc4(self.grid, P.get('iface_U', spec.get('iface_U', 0.0))),
                            thin_wind=P.get('thin_wind', spec.get('thin_wind', THIN_WIND if spec.get('air') else 0.0)),
                            shelf=P.get('shelf', spec.get('shelf', 0.0)),
                            flux_force=P.get('flux_force', spec.get('flux_force', 0)))   # (V2-7, #253; off by default)   # (air, V2-6b: a layer squeezed below it over terrain loses its pressure force, as the sea's over its floor, #97)
@@ -341,6 +343,13 @@ class World:
             if moved:
                 self.tr.step_many(self.M, self._M1, self._Fm, moved, order=3)
             cp.copyto(self.M, self._M1)
+            if self.core.iface:                     # (V2-7, #279) the interfaces' smoothing, its own step, its tracers upwind
+                self.core.iface_step(self.h, self.u, self.theta, self.dt, self._Fm)
+                self.tr.mass_after(self.M, self._Fm, self._M1)
+                if moved:
+                    self.tr.step_many(self.M, self._M1, self._Fm, moved, order=1)
+                cp.copyto(self.M, self._M1)
+                self.core.iface_apply_heat(self.h, self.theta)
         if self.sea is not None:
             # the wind stress, exactly, with its kinetic energy back as the air's heat
             g, i32, R = self.dg, np.int32, self.dg.dtype.type

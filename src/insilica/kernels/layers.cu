@@ -677,3 +677,91 @@ extern "C" __global__ void vmix_heat(int N, int L, const real* h, const real* di
     xt = x;
   }
 }
+
+// (V2-7, #279) Interface smoothing of air layers (iface_U; 0 = off): each interior interface's pressure p_k (the mass above it times g) is
+// smoothed biharmonically, dp_k/dt = -kap4 del^4 p_k, as isentropic-coordinate models do (Bleck & Benjamin 1993) to stop the layers'
+// interfaces collapsing to grid-scale folds (#278). The move is a pair of opposite mass fluxes in the two layers either side of the
+// interface (a bolus flux, as Gent & McWilliams'), G_k = +kap4 grad(del^2 p_k) / g (dp/dt = -div(kap4 grad del^2 p)), so layer k's flux gains G_k - G_{k-1}: every
+// column's mass is kept, the surface pressure untouched. iface_lap: D_k = del^2 p_k at cells (k < L - 1), from the step's start.
+extern "C" __global__ void iface_lap(int N, int L, const real* h, const int* cellEdge, const int* eI, const int* eJ, const real* le,
+                                     const real* de, const real* areaCell, real grav, real* D) {
+  LOOP1(i, N)
+  real Di[LMAX];
+  for (int k = 0; k < L; k++) Di[k] = 0;
+  for (int m = 0; m < 6; m++) {
+    const int e = cellEdge[i * 6 + m];
+    if (e < 0) break;
+    const int j = eI[e] == i ? eJ[e] : eI[e];
+    const real w = le[e] / de[e];
+    real pi = 0, pj = 0;
+    for (int k = 0; k + 1 < L; k++) {
+      pi += grav * h[(size_t)k * N + i];
+      pj += grav * h[(size_t)k * N + j];
+      Di[k] += w * (pj - pi);
+    }
+  }
+  for (int k = 0; k + 1 < L; k++) D[(size_t)k * N + i] = Di[k] / areaCell[i];
+}
+
+// The layers' fluxes added to the final stage's F (kg/m/s, before the floor's limiter: the move keeps every layer above its floor and
+// carries theta, vapour and the tracers with the mass through the transport); Fi keeps the added part for iface_heat. Only where the
+// interface is free: both its layers hold more than twice the floor in both cells (an interface that meets the ground, its layers
+// squeezed against the terrain, is the ground's shape, not a fold to smooth).
+extern "C" __global__ void iface_flux(int N, int E, int L, const real* D, const int* eI, const int* eJ, const real* de, real kap4,
+                                      real grav, real* F, real* Fi, const real* h, real floor_) {
+  LOOP1(e, E)
+  real Gp = 0;
+  for (int k = 0; k < L; k++) {
+    bool fr = k + 1 < L;
+    for (int s = 0; s < 2 && fr; s++)
+      for (int j = k; j <= k + 1 && fr; j++) fr = h[(size_t)j * N + (s ? eJ[e] : eI[e])] > 2 * floor_;
+    const real G = fr ? kap4 * (D[(size_t)k * N + eJ[e]] - D[(size_t)k * N + eI[e]]) / (de[e] * grav) : (real)0;   // dp/dt = -div(kap4 grad D)
+    F[(size_t)k * E + e] += G - Gp;
+    Fi[(size_t)k * E + e] = G - Gp;
+    Gp = G;
+  }
+}
+
+// After the limiter: the energy the move makes, back as heat through vmix_heat. A column's energy per area changes by M_k per kg of
+// layer k at fixed theta, and by cp pibar_k h_k per kelvin of theta_k, so a mass dm moved from the donor to the receiver makes
+// dm (M_r - M_d + cp pibar_r (theta_c - theta_r) + K_r - K_d) (K the cell's kinetic energy per kg, the winds staying), theta_c the theta it carries (the donor's weighted by wd with the receiver's:
+// wd = 1 upwind); its negative over dt / d_e is the edge's heat (J/m^2 at the edge; M and pibar from the step's start). The moved
+// part is the added flux Fi times the limiter's factor on the edge's whole flux (F after / Fu before).
+extern "C" __global__ void iface_heat(int N, int E, int L, const real* Fi, const real* Fu, const real* F, const real* h, const real* theta,
+                                      const real* b, const int* eI, const int* eJ, const real* de, real grav, real cp, real kappa,
+                                      real p0, real dt, real wd, const real* u, const int* cellEdge, const real* le,
+                                      const real* areaCell, real* diss) {
+  LOOP1(e, E)
+  const int c2[2] = {eI[e], eJ[e]};
+  real M[2][LMAX], pib[2][LMAX], Kc[2][LMAX];
+  for (int s = 0; s < 2; s++) {
+    const int i = c2[s];
+    real xb[LMAX], p = 0, xt = 0;
+    for (int k = 0; k < L; k++) {
+      const real pt = p;
+      p += grav * h[(size_t)k * N + i]; xb[k] = pow(p / p0, kappa);
+      pib[s][k] = p > pt ? cp * (p * xb[k] - pt * xt) / ((kappa + 1) * (p - pt)) : cp * xb[k];
+      xt = xb[k];
+      real ke = 0;
+      for (int m = 0; m < 6; m++) {
+        const int f = cellEdge[i * 6 + m];
+        if (f < 0) break;
+        const real uf = u[(size_t)k * E + f];
+        ke += le[f] * de[f] * (real)0.25 * uf * uf;
+      }
+      Kc[s][k] = ke / areaCell[i];
+    }
+    real Mk = grav * b[i] + theta[(size_t)(L - 1) * N + i] * cp * xb[L - 1];
+    M[s][L - 1] = Mk;
+    for (int k = L - 2; k >= 0; k--) { Mk += (theta[(size_t)k * N + i] - theta[(size_t)(k + 1) * N + i]) * cp * xb[k]; M[s][k] = Mk; }
+  }
+  real d = 0;
+  for (int k = 0; k < L; k++) {
+    const size_t o = (size_t)k * E + e;
+    const real dF = Fi[o] * (Fu[o] != 0 ? F[o] / Fu[o] : (real)1);
+    const int dn = dF >= 0 ? 0 : 1, rc = 1 - dn;
+    const real th_r = theta[(size_t)k * N + c2[rc]], th_c = wd * theta[(size_t)k * N + c2[dn]] + (1 - wd) * th_r;
+    d -= fabs(dF) * (M[rc][k] - M[dn][k] + pib[rc][k] * (th_c - th_r) + Kc[rc][k] - Kc[dn][k]);
+  }
+  diss[e] = d * dt / de[e];
+}

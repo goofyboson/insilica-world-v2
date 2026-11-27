@@ -34,7 +34,7 @@ DIV_DAMP = 0.1              # divergence damping of the fast mode (decision #28)
 
 class Layers:
     def __init__(self, dg, layers=1, b=None, grav=GRAV, gprime=(), drag=0.0, stress=0.0, nu4=0.0, floor=1.0, rotation=1.0,
-                 div_damp=DIV_DAMP, air=None, vmix=0.0, thin=2.0, wall=None, thin_wind=0.0, shelf=0.0, vmix_cd=0.0, shelf_bed=False, flux_force=False, ri_mix=0.0):
+                 div_damp=DIV_DAMP, air=None, vmix=0.0, thin=2.0, wall=None, thin_wind=0.0, shelf=0.0, vmix_cd=0.0, shelf_bed=False, flux_force=False, ri_mix=0.0, iface=0.0):
         """air: None for Boussinesq (ocean-like) layers, h in m; or a dict for air layers, h the layer's mass per area
         (kg/m²) with a potential temperature θ per layer passed to step() (decision #32). The fast mode then runs on
         the column mass with each cell's own coefficient Gc = R·T_s/μ (decision #37), at √(R·T_s). thin: the PV flux's cap on a
@@ -68,6 +68,7 @@ class Layers:
         self.cpa, self.kap, self.rda = (air or {}).get('cp', CP_DRY), (air or {}).get('kappa', KAPPA), (air or {}).get('rd', R_DRY)
         self.vmix = vmix                    # interfacial stress coefficient c (decision #39), h-units/s
         self.vmix_cd = vmix_cd              # (#167) its quadratic part: c = vmix_cd |Δu|
+        self.iface = iface if air else 0.0     # (V2-7, #279) air: the interfaces' biharmonic smoothing coefficient (m^4/s; 0 = off)
         self.ri_mix = ri_mix if air else 0.0   # (V2-7, #276) air: shear instability's mixing below this Richardson number (0 = off)
         self.zero = z(N)
         self.Gc = cp.full(N, float(grav))   # the fast mode's coefficient per cell: g, or for air R·T_s/μ
@@ -87,7 +88,7 @@ class Layers:
         self.diss = z(E)
         k = lambda n, f='layers.cu': dg.kernel(n, f)
         self.k = {n: k(n) for n in ('lay_eta', 'lay_ubar', 'lay_bern', 'air_bern', 'air_gfast', 'lay_slow', 'bt_eta', 'bt_u', 'lay_flux', 'lay_scale',
-                                    'lay_limit', 'lay_h', 'lay_u', 'xch_cell', 'xch_edge', 'lay_vmix', 'lay_rimix', 'vmix_heat', 'lay_edge_hq',
+                                    'lay_limit', 'lay_h', 'lay_u', 'xch_cell', 'xch_edge', 'lay_vmix', 'lay_rimix', 'iface_lap', 'iface_flux', 'iface_heat', 'vmix_heat', 'lay_edge_hq',
                                     'air_stiff', 'af_muphi', 'af_u', 'af_flux', 'lay_mask', 'lay_onbed')}
         # lay_slow's gathers: each edge's (h_e, u, q_e) per layer packed together, and the PV weights, 32-bit when mixed (#106)
         self.pk = cp.zeros(3 * layers * dg.E, dtype=cp.float32 if dg.mixed else dg.dtype)
@@ -95,6 +96,8 @@ class Layers:
         self.k['swe_vertex'] = k('swe_vertex', 'fused.cu')
         self.k.update({n: k(n, 'trisk.cu') for n in ('cell_div', 'vertex_curl', 'edge_lap')})
         self.dmin = float(np.min(dg.host.de))
+        if self.iface:
+            self.Dp, self.dissI, self.Fs, self.Si = z(L, N), z(E), z(L, E), z(L, N)
 
     def mask(self, a, rows):
         """Zero the wall edges of `rows` rows of the edge field a (no-op without walls)."""
@@ -225,6 +228,25 @@ class Layers:
                 R = self.real
                 k['vmix_heat'](*grid_dims(g.N), (i32(g.N), i32(L), h, self.diss, g.cellEdge, g.le, g.de, g.areaCell, R(self.grav),
                                                  R(self.cpa), R(self.kap), R(P0), theta))
+
+    def iface_step(self, h, u, theta, dt, Fm):
+        """(#279) The interfaces' smoothing as a step of its own after the dynamics and their transport: the layers' bolus fluxes from
+        the interfaces' del^4, limited so no layer goes below its floor, h moved, Fm (l dt F, kg) for the caller's upwind transport of
+        theta and the tracers, and the energy the move makes (exact for the upwind move) into dissI for iface_apply_heat."""
+        g, k, L, i32, R = self.dg, self.k, self.L, np.int32, self.real
+        N, E = i32(g.N), i32(g.E)
+        k['iface_lap'](*grid_dims(g.N), (N, i32(L), h, g.cellEdge, g.eI, g.eJ, g.le, g.de, g.areaCell, R(self.grav), self.Dp))
+        k['iface_flux'](*grid_dims(g.E), (N, E, i32(L), self.Dp, g.eI, g.eJ, g.de, R(self.iface), R(self.grav), self.Fs, self.Fs, h, R(self.floor)))
+        k['lay_scale'](*grid_dims(g.N, L), (N, E, h, self.Fs, g.cellEdgeAsc, g.eI, g.le, g.areaCell, R(dt), R(self.floor), self.Si))
+        k['lay_limit'](*grid_dims(g.E, L), (N, E, g.eI, g.eJ, self.Si, g.le, R(dt), self.Fs, Fm))
+        k['iface_heat'](*grid_dims(g.E), (N, E, i32(L), self.Fs, self.Fs, self.Fs, h, theta, self.b, g.eI, g.eJ, g.de, R(self.grav), R(self.cpa),
+                                          R(self.kap), R(P0), R(dt), R(1.0), u, g.cellEdge, g.le, g.areaCell, self.dissI))
+        k['lay_h'](*grid_dims(g.N, L), (N, E, h, self.Fs, g.cellEdge, g.cellSign, g.le, g.rA, R(dt), h))
+
+    def iface_apply_heat(self, h, theta):
+        g, i32, R = self.dg, np.int32, self.real
+        self.k['vmix_heat'](*grid_dims(g.N), (i32(g.N), i32(self.L), h, self.dissI, g.cellEdge, g.le, g.de, g.areaCell, R(self.grav),
+                                              R(self.cpa), R(self.kap), R(P0), theta))
 
     def exchange(self, wx, h, u, M, psi, theta=None, seq=False):
         """Move thickness wx (L−1, N; m, positive upward across the interface below layer k) between layers with

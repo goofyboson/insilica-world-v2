@@ -34,7 +34,7 @@ DIV_DAMP = 0.1              # divergence damping of the fast mode (decision #28)
 
 class Layers:
     def __init__(self, dg, layers=1, b=None, grav=GRAV, gprime=(), drag=0.0, stress=0.0, nu4=0.0, floor=1.0, rotation=1.0,
-                 div_damp=DIV_DAMP, air=None, vmix=0.0, thin=2.0, wall=None, thin_wind=0.0, shelf=0.0, vmix_cd=0.0, shelf_bed=False, flux_force=False):
+                 div_damp=DIV_DAMP, air=None, vmix=0.0, thin=2.0, wall=None, thin_wind=0.0, shelf=0.0, vmix_cd=0.0, shelf_bed=False, flux_force=False, ri_mix=0.0):
         """air: None for Boussinesq (ocean-like) layers, h in m; or a dict for air layers, h the layer's mass per area
         (kg/m²) with a potential temperature θ per layer passed to step() (decision #32). The fast mode then runs on
         the column mass with each cell's own coefficient Gc = R·T_s/μ (decision #37), at √(R·T_s). thin: the PV flux's cap on a
@@ -68,6 +68,7 @@ class Layers:
         self.cpa, self.kap, self.rda = (air or {}).get('cp', CP_DRY), (air or {}).get('kappa', KAPPA), (air or {}).get('rd', R_DRY)
         self.vmix = vmix                    # interfacial stress coefficient c (decision #39), h-units/s
         self.vmix_cd = vmix_cd              # (#167) its quadratic part: c = vmix_cd |Δu|
+        self.ri_mix = ri_mix if air else 0.0   # (V2-7, #276) air: shear instability's mixing below this Richardson number (0 = off)
         self.zero = z(N)
         self.Gc = cp.full(N, float(grav))   # the fast mode's coefficient per cell: g, or for air R·T_s/μ
         if air:
@@ -86,7 +87,7 @@ class Layers:
         self.diss = z(E)
         k = lambda n, f='layers.cu': dg.kernel(n, f)
         self.k = {n: k(n) for n in ('lay_eta', 'lay_ubar', 'lay_bern', 'air_bern', 'air_gfast', 'lay_slow', 'bt_eta', 'bt_u', 'lay_flux', 'lay_scale',
-                                    'lay_limit', 'lay_h', 'lay_u', 'xch_cell', 'xch_edge', 'lay_vmix', 'vmix_heat', 'lay_edge_hq',
+                                    'lay_limit', 'lay_h', 'lay_u', 'xch_cell', 'xch_edge', 'lay_vmix', 'lay_rimix', 'vmix_heat', 'lay_edge_hq',
                                     'air_stiff', 'af_muphi', 'af_u', 'af_flux', 'lay_mask', 'lay_onbed')}
         # lay_slow's gathers: each edge's (h_e, u, q_e) per layer packed together, and the PV weights, 32-bit when mixed (#106)
         self.pk = cp.zeros(3 * layers * dg.E, dtype=cp.float32 if dg.mixed else dg.dtype)
@@ -209,9 +210,17 @@ class Layers:
         self._stage(h, u, h, u, 1 / 3, dt, nfast, self.h1, self.u1, theta=theta)
         self._stage(self.h1, self.u1, h, u, 1 / 2, dt, nfast, self.h2, self.u2, theta=theta)
         self._stage(self.h2, self.u2, h, u, 1.0, dt, nfast, h, u, Fm, theta=theta)
-        if (self.vmix or self.vmix_cd) and L > 1:
+        vm, ri = (self.vmix or self.vmix_cd) and L > 1, self.ri_mix > 0 and L > 1
+        if vm:
             k['lay_vmix'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(L), h, g.eI, g.eJ, self.real(self.vmix), self.real(dt), u, self.diss, self.real(self.vmix_cd)))
             self.mask(u, L)
+        if ri:
+            # (#276) the winds before the mixing, for the tangential components (u1 is free after the stages)
+            cp.copyto(self.u1, u)
+            R = self.real
+            k['lay_rimix'](*grid_dims(g.E), (i32(g.N), i32(g.E), i32(L), h, theta, g.eI, g.eJ, g.eoeStart, g.eoe, g.w, self.u1, R(self.grav),
+                                             R(self.kap), R(P0), R(self.rda), R(self.ri_mix), u, self.diss, i32(1 if vm else 0)))
+        if vm or ri:
             if self.air:
                 R = self.real
                 k['vmix_heat'](*grid_dims(g.N), (i32(g.N), i32(L), h, self.diss, g.cellEdge, g.le, g.de, g.areaCell, R(self.grav),

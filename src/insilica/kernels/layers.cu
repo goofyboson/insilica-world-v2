@@ -604,6 +604,52 @@ extern "C" __global__ void lay_vmix(int N, int E, int L, const real* h, const in
   diss[e] = d;
 }
 
+// (V2-7, #276) Shear instability's momentum mixing between air layers (ri_mix = the critical Richardson number Ri_c; 0 = off):
+// stratified air whose shear drives the gradient Richardson number Ri = N^2 dz^2 / |dV|^2 below Ri_c overturns (Kelvin-Helmholtz)
+// within minutes and mixes its momentum until the shear is marginal (Price, Weller & Pinkel 1986's gradient-Ri adjustment). Each
+// edge's adjacent pair of layers (top down, as lay_vmix): N^2 = g dtheta / (theta dz), dz the distance between the layers' mid-heights
+// (their masses over the hydrostatic density at their mid-pressures), dV = (du_n, dv_t) with v_t the TRiSK tangential wind (read
+// from u0, the winds before the mixing); where Ri < Ri_c the normal difference is scaled by |dV|_c / |dV|, |dV|_c = sqrt(N^2 / Ri_c) dz
+// (statically unstable or neutral pairs, N^2 <= 0, mix fully). The pair's mass-weighted momentum is unchanged and the kinetic energy
+// removed, 0.5 h_a h_b / (h_a + h_b) (du0^2 - du1^2), is added to diss (J/m^2) for vmix_heat.
+extern "C" __global__ void lay_rimix(int N, int E, int L, const real* h, const real* theta, const int* eI, const int* eJ,
+                                     const int* eoeStart, const int* eoe, const real* w, const real* u0, real grav, real kappa,
+                                     real p0, real rd, real ric, real* u, real* diss, int add) {
+  LOOP1(e, E)
+  real d = 0, p = 0;
+  real hk[LMAX], pm[LMAX], dz[LMAX], th[LMAX];
+  for (int k = 0; k < L; k++) {
+    hk[k] = (real)0.5 * (h[(size_t)k * N + eI[e]] + h[(size_t)k * N + eJ[e]]);
+    th[k] = (real)0.5 * (theta[(size_t)k * N + eI[e]] + theta[(size_t)k * N + eJ[e]]);
+    pm[k] = p + (real)0.5 * grav * hk[k];
+    p += grav * hk[k];
+    const real T = th[k] * pow(pm[k] / p0, kappa);
+    dz[k] = hk[k] * rd * T / pm[k];               // h / rho
+  }
+  for (int k = 0; k + 1 < L; k++) {
+    const real ha = hk[k], hb = hk[k + 1];
+    real* ua = u + (size_t)k * E + e;
+    real* ub = u + (size_t)(k + 1) * E + e;
+    real va = 0, vb = 0;
+    for (int m = eoeStart[e]; m < eoeStart[e + 1]; m++) {
+      va += w[m] * u0[(size_t)k * E + eoe[m]];
+      vb += w[m] * u0[(size_t)(k + 1) * E + eoe[m]];
+    }
+    const real du0 = *ua - *ub, dv = va - vb, s2 = du0 * du0 + dv * dv;
+    if (!(s2 > 0)) continue;
+    const real Dz = (real)0.5 * (dz[k] + dz[k + 1]);
+    const real N2 = grav * (th[k] - th[k + 1]) / ((real)0.5 * (th[k] + th[k + 1]) * Dz);
+    const real c2 = N2 > 0 ? N2 / ric * Dz * Dz : (real)0;    // |dV|_c^2
+    if (s2 <= c2) continue;
+    const real du1 = du0 * sqrt(c2 / s2);
+    const real mean = (ha * *ua + hb * *ub) / (ha + hb);
+    *ua = mean + hb / (ha + hb) * du1;
+    *ub = mean - ha / (ha + hb) * du1;
+    d += (real)0.5 * ha * hb / (ha + hb) * (du0 * du0 - du1 * du1);
+  }
+  diss[e] = add ? diss[e] + d : d;
+}
+
 // The kinetic energy the interfacial stress, the wind stress or the crossings' momentum mixing removed, back as heat
 // (air; decisions #39, #65, #73): each edge's loss
 // l_e d_e diss_e (J) goes half to each of its cells, spread over the column's layers in proportion to their mass, so

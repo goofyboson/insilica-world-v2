@@ -9,7 +9,7 @@ Cases and their settings are in cases.py; `params` overrides a case's settings:
   with d the mean cell spacing, the grid-scale wave then damps at U/d), rotation (multiplies f), beta (transport),
   div_damp (the fast mode's divergence damping, default 0.1), nfast (fast sub-steps per step; default from √(gH)),
   thin_wind (air: the layer mass below which a layer takes its neighbours' wind, default 100 kg/m², #83; 0 = off).
-  iface_U (air: the interfaces' biharmonic smoothing as a velocity scale, kap4 = U d^3 / pi^4 as visc4_U, V2-7 #279; 0 = off).
+  iface_U (air: the interfaces' biharmonic smoothing as a velocity scale, kap4 = U d^3 / pi^4 as visc4_U, V2-7 #279; default IFACE_U in air worlds, #280; 0 = off).
   ri_mix (air: the critical Richardson number below which adjacent layers' shear is mixed back to it, V2-7 #276; 0 = off).
 """
 import hashlib
@@ -29,6 +29,7 @@ from .land import LandWater
 from .layers import DIV_DAMP, Layers
 from .transport import BETA, Transport
 
+IFACE_U = 20.0       # m/s: the air interfaces' biharmonic smoothing, on in every air world (#279, #280)
 THIN_WIND = 100.0     # kg/m² (~1 hPa): below it an air layer takes its neighbours' wind, fully at the floor (#83)
 # the gases carried as tracers (V2-6e, #217), in the k-tables' order, and their starting mole fractions where the planet gives none
 GAS_TRACERS = (('co2', 400e-6), ('n2o', 0.32e-6), ('ch4', 1.8e-6))
@@ -99,7 +100,7 @@ class World:
                            air=dict(t_ref=self.air.get('t_ref', 288.0), cp=self.gas['cp'], kappa=self.gas['kappa'], rd=self.gas['rd']) if self.air else None,
                            vmix=P.get('vmix', spec.get('vmix', 0.0)),
                            ri_mix=P.get('ri_mix', spec.get('ri_mix', 0.0)),
-                           iface=visc4(self.grid, P.get('iface_U', spec.get('iface_U', 0.0))),
+                           iface=visc4(self.grid, P.get('iface_U', spec.get('iface_U', IFACE_U if spec.get('air') else 0.0))),
                            thin_wind=P.get('thin_wind', spec.get('thin_wind', THIN_WIND if spec.get('air') else 0.0)),
                            shelf=P.get('shelf', spec.get('shelf', 0.0)),
                            flux_force=P.get('flux_force', spec.get('flux_force', 0)))   # (V2-7, #253; off by default)   # (air, V2-6b: a layer squeezed below it over terrain loses its pressure force, as the sea's over its floor, #97)

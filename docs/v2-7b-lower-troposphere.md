@@ -129,6 +129,11 @@ of earth7's (energy, water exact with ten layers; no test added); run time again
 **Measured as §2.3**, plus the transition layer's mass, relative humidity and cover over the stratocumulus seas and the trades,
 and the plumes' stop height above cloud base (#180's 25 hPa).
 
+**Built (SPEC #308), as above, plus one addition:** with `cb_dp` the freezing heat on ice-covered ground goes into the column's
+bottom `mu_bl`, not a mixed layer alone (a pond freezing on the Karakoram's ice heated a 22 kg/m² mixed layer by 92 K). Under the
+observed sea: tropical evaporation 4.11 mm/day, the mixed layer's relative humidity 0.78, the stratocumulus seas' cloud effect on
+sunlight −51.4 W/m²; the coupled year's sea uptake +13.3 W/m² (earth9's state is far from earth10's equilibrium).
+
 ## 3. Part 2: an upper-ocean thermocline layer
 
 After Part 1's air, the 700 m layer under the ocean's mixed layer is split into an upper thermocline layer (~100–200 m) and

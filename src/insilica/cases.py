@@ -669,6 +669,26 @@ PRESETS['earth9'] = dict(PRESETS['earth8'], build=earth9, stress=[0.0] * 9,
                          air=dict(PRESETS['earth8']['air'], physics=dict(PRESETS['earth8']['air']['physics'], theta_stars=[500.0, 380.0, 330.0, 315.0, 305.0, 295.0, 204.0, 200.0],
                                                                          cl_layers=3.0, bl_width=0.1)))   # (#264: the thermals' statistics over the mixed layer's own spread, #261, #263)
 
+def earth10(g, f=0.2):
+    """The ten-layer start (V2-7b, #308): earth9's with its cumulus layer's lowest share f as the cloud-base layer, 1.5 K above the mixed
+    layer, the rest warmer so that the two keep the layer's mean theta; both the layer's vapor and wind."""
+    h9, b, u9, x = earth9(g)
+    th9, q9 = x['theta'], x['q']
+    lo = np.minimum(th9[8] + 1.5, th9[7] - 0.5)
+    hi = (th9[7] - f * lo) / (1 - f)
+    h = np.concatenate([h9[:7], ((1 - f) * h9[7])[None], (f * h9[7])[None], h9[8:]])
+    th = np.concatenate([th9[:7], hi[None], lo[None], th9[8:]])
+    q = np.concatenate([q9[:8], q9[7:]])
+    return h, b, np.concatenate([u9[:8], u9[7:]]), dict(x, theta=th, q=q)
+
+
+# V2-7b (#308, trial): earth9 with a cloud-base layer between the mixed layer and the cumulus layer, from the mixed layer's top to its air
+# lifted 50 hPa (cb_dp) from there: the cloudy boundary layer's air under an inversion (stratocumulus) or at the trade cumulus's base,
+# with the mixed layer mixing theta_l and q_t (ml_moist, #307)
+PRESETS['earth10'] = dict(PRESETS['earth9'], build=earth10, stress=[0.0] * 10,
+                          air=dict(PRESETS['earth9']['air'], physics=dict(PRESETS['earth9']['air']['physics'], theta_stars=[500.0, 380.0, 330.0, 315.0, 305.0, 295.0, 208.0, 204.0, 200.0],
+                                                                          cb_dp=5.0e3, ml_moist=1.0)))
+
 PRESETS['earth7o8'] = dict(PRESETS['earth7'], ocean=dict(PRESETS['earth7']['ocean'], gprime=(0.0096, 0.0115, 0.0099, 0.0083, 0.0067, 0.0052, 0.0036),
                                                          h_layers=(50.0, 50.0, 75.0, 100.0, 150.0, 200.0, 400.0), T_layers=tuple(273.15 + t for t in _C8[:-1]),
                                                          T_deep=273.15 + _C8[-1], T_classes=tuple(273.15 + t for t in _C8), fw_local=1.0, kappa_h=1000.0,

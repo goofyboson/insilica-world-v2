@@ -220,7 +220,8 @@ def conserve_air(record):
     air = {'physics': {'gases': dict(n2=0.9, co2=0.1)}}
     # (#220: with geology's accumulators, each sum against the same kept here, the runoff against the water reaching the sea)
     # (#307: with V2-7b's moist mixed layer, its cloud from theta_l and q_t and its cloud top's cooling in its entrainment)
-    e = World(4, 'earth7', params=dict(air, physics=dict(air['physics'], ml_moist=1.0), gas_tracers=1, geology=1))
+    # (#308: on earth10, with V2-7b's cloud-base layer between the mixed layer and the cumulus layer, its plumes, downdrafts and edges one up)
+    e = World(4, 'earth10', params=dict(air, gas_tracers=1, geology=1))
     e.gas_src[0, :100] = 1e-9
     gamt = lambda: [float(cp.sum(e.M * e.gx[j])) for j in range(e.gx.shape[0])]
     g0, gsrc = gamt(), 0.0
@@ -301,7 +302,7 @@ def conserve_air(record):
         p = e.physics
         gsrc += float(cp.sum(A * e.gas_src[0])) * e.dt
         if t == 0:                                        # (#217) the k-tables reading the carried gases, all at the planet's values
-            f = World(4, 'earth7', params=air)
+            f = World(4, 'earth10', params=air)
             f.step(1, graph=False)
             olr_gx = abs(float(cp.sum(A * p.olr)) / float(cp.sum(A * f.physics.olr)) - 1)
         snow += float(cp.sum(A * p.rainp[3])) / float(cp.sum(A)) * e.dt
@@ -325,7 +326,7 @@ def conserve_air(record):
     record('CONSERVE air', f'moist column ledgers, 48 steps: energy worst {fmt(worst)} of the energy stored ({fmt(per_step)} of one step of sunlight), '
            f'water {fmt(water)}; moist aqua 10 d (3 layers; dynamics, radiation, crossings ~{crossed:.2f} kg/m² per step, convection, rain): '
            f'air mass {fmt(mass)}, tracer {fmt(tracer)}, vapor against evaporation − rain {fmt(vapor)}; adiabatic air (two layers), '
-           f'15 d: energy drift {fmt(drift)}; seven-layer earth in N₂–CO₂ air (cp {e.gas["cp"]:.1f}, R {e.gas["rd"]:.1f}, #216), 48 steps (mixed layer, cumulus layer, plumes with downdrafts and entrainment, a shallow plume, ice in the air with its '
+           f'15 d: energy drift {fmt(drift)}; ten-layer earth (earth10, #308) in N₂–CO₂ air (cp {e.gas["cp"]:.1f}, R {e.gas["rd"]:.1f}, #216), 48 steps (mixed layer, cumulus layer, plumes with downdrafts and entrainment, a shallow plume, ice in the air with its '
            f'freezing heat aloft, {snow * 86400 / (48 * e.dt):.3f} kg/m² of snow a day reaching the ground): '
            f'column energy {fmt(e4)} of the energy stored, water {fmt(e4w)}; kinetic energy removed against heat booked: mountain drag (#127) '
            f'{fmt(drag["oro"]["energy"])}, waves (#128) {fmt(drag["gw"]["energy"])} of the kinetic energy ({drag["oro"]["gross"] / 48:.2e}, '

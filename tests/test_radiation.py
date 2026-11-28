@@ -233,11 +233,11 @@ def test_earth_budget(record):
     day = int(round(86400 / w.dt))
     S = 365 * 4                                  # four samples a day over the measured year
     usum, hsum = cp.zeros_like(w.u), cp.zeros_like(w.h)
-    rsum, ssum = cp.zeros(w.grid.N), cp.zeros(w.grid.N)
+    rsum, ssum, tsum = cp.zeros(w.grid.N), cp.zeros(w.grid.N), cp.zeros(w.grid.N)
     for _ in range(S):
         w.step(day // 4)
         usum += w.u; hsum += w.h
-        rsum += w.physics.rain; ssum += w.physics.rainp[3]
+        rsum += w.physics.rain; ssum += w.physics.rainp[3]; tsum += w.sea.T[0]
         p, co = w.physics, w.physics.cloudo
         f = p.sw.swf
         acc['sun'] += a @ p.sw_abs
@@ -317,6 +317,58 @@ def test_earth_budget(record):
            + f'; snow {float(np.average(sn, weights=g.areaCell)):.3f} globally, {float(np.average(sn, weights=g.areaCell * (np.abs(lat) > 50))):.2f} poleward of 50°',
            'global within 15%; maximum within 10° of latitude; each 10° band 50°S–50°N within 30%', okr,
            title="RAIN earth10's rain against GPCP (V2-6c, SPEC #134; earth6 since #142, earth7 since #153, earth8 since #248, earth9 since #260, earth10 since #310)")
+
+    # SST (V2-7b, SPEC #311): the same year's sea surface against WOA23's annual 1991-2020 (tools/woa_sst.py): the global bias and rms
+    # over the sea WOA covers, and the zonal bias in 10° bands 60°S–60°N. Reported; its limits agreed after the first numbers (#305)
+    woa = np.load(Path(__file__).resolve().parent / 'data' / 'woa23_sst_n4.npz')['sst']
+    A_, land = g.areaCell, w.land.get().astype(bool)
+    sm = ~land & np.isfinite(woa)
+    dT = np.where(sm, tsum.get() / S - 273.15 - np.nan_to_num(woa), 0.0)
+    bias, rms = float(np.average(dT[sm], weights=A_[sm])), float(np.sqrt(np.average(dT[sm] ** 2, weights=A_[sm])))
+    sb = [float(np.average(dT[sm & (lat >= x) & (lat < x + 10)], weights=A_[sm & (lat >= x) & (lat < x + 10)])) for x in range(-60, 60, 10)]
+    record('SST', f'the same year\'s sea surface against WOA23 (annual 1991–2020): bias {bias:+.2f} K, rms {rms:.2f} K; 10° bands 60°S–60°N '
+           + ', '.join(f'{x:+.1f}' for x in sb) + ' K', 'reported; limits to be agreed (#305)', True,
+           title='SST the coupled year\'s sea surface against WOA23 (V2-7b, SPEC #311)')
+
+    # OBSERVED SEA (V2-7b, SPEC #311): from the same state, the air over WOA23's annual surface (the sea's mixed layer relaxed to it each
+    # day, a 2-day scale), 30 days to adjust and a year measured: the air's own errors apart from the ocean's (#287). The tropical sea's
+    # evaporation and the mixed layer's relative humidity there (at the surface's pressure), the cloud effect on sunlight over the
+    # stratocumulus seas (California, Peru, Namibia) and in 10° bands, and the rain's 10° bands against GPCP. Reported; limits after the
+    # first numbers (#305)
+    P_, bot = w.physics.p, L - 1
+    Tobs, mR, rr = cp.asarray(np.nan_to_num(woa) + 273.15), cp.asarray(sm), 1 - np.exp(-0.5)
+
+    def relax():
+        T0 = w.sea.T[0]
+        T0[...] = cp.where(mR, T0 + rr * (Tobs - T0), T0)
+    for _ in range(30):
+        w.step(day)
+        relax()
+    o_ = {k: cp.zeros(g.N) for k in ('evap', 'q', 'th', 'ps', 'sw', 'rain')}
+    for _ in range(365):
+        for _ in range(4):
+            w.step(day // 4)
+            p = w.physics
+            o_['evap'] += p.evap; o_['q'] += w.q[bot]; o_['th'] += w.theta[bot]; o_['ps'] += P_['grav'] * w.h.sum(0)
+            o_['sw'] += p.cloudo[L + 1]; o_['rain'] += p.rain
+        relax()
+    o_ = {k: v.get() / (4 * 365) for k, v in o_.items()}
+    Ta = o_['th'] * (o_['ps'] / P_['p0']) ** P_['kappa']
+    es = 611.2 * np.exp(17.67 * (Ta - 273.15) / (Ta - 29.65))
+    rh = o_['q'] / (0.622 * es / (o_['ps'] - 0.378 * es))
+    lon = (np.degrees(g.lon) + 180) % 360 - 180
+    trop = sm & (np.abs(lat) < 10)
+    sc = sm & (((lat >= 15) & (lat < 30) & (lon >= -140) & (lon < -115)) | ((lat >= -30) & (lat < -10) & (lon >= -95) & (lon < -75))
+               | ((lat >= -30) & (lat < -10) & (lon >= -5) & (lon < 12)))
+    av = lambda x, msk: float(np.average(x[msk], weights=A_[msk]))
+    swb = [av(o_['sw'], sm & (lat >= x) & (lat < x + 10)) for x in range(-60, 60, 10)]
+    zr = zmb(o_['rain'] * 86400.0, 10)
+    record('OBSERVED SEA', f'a year over WOA23\'s annual surface after 30 days (relaxed daily): tropical sea 10°S–10°N evaporation '
+           f'{av(o_["evap"], trop) * 86400:.2f} mm/day (~3.5–4), the mixed layer\'s relative humidity there {av(rh, trop):.2f} (~0.8); cloud effect '
+           f'on sunlight over the stratocumulus seas {av(o_["sw"], sc):+.1f} W/m² (~−60 to −90), in 10° bands 60°S–60°N over the sea '
+           + ', '.join(f'{x:+.0f}' for x in swb) + ' W/m²; rain, 10° bands 50°S–50°N ' + ', '.join(f'{100 * (zr[i] / ro["bands"][i] - 1):+.0f}%' for i in mid)
+           + f' against GPCP, global {float(np.average(o_["rain"] * 86400.0, weights=A_)):.2f} mm/day', 'reported; limits to be agreed (#305)', True,
+           title='OBSERVED SEA earth10\'s air over the observed sea surface (V2-7b, SPEC #311)')
     assert ok and okw and okr
 
 

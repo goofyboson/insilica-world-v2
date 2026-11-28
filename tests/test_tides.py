@@ -119,11 +119,11 @@ def test_tides(record):
     ok &= t5 <= 1e-2 and vol <= 1e-13
     out.append(f'T5 no Moon: power at 12.42 h against the Sun\'s 12.00 h {t5:.1e}; ocean volume {fmt(vol)}')
 
-    # T6: tidal mixing on earth9's equilibrium (#260) (EARTH's, cached): 10 days with a Moon of 4x the tidal pull against none;
+    # T6: tidal mixing on earth10's equilibrium (#310; earth9's since #260) (EARTH's, cached): 10 days with a Moon of 4x the tidal pull against none;
     # the mixing's heat and salt exact on every call; and Earth's own tide's dissipation over the same 10 days
     from insilica import runcache
     from test_radiation import EARTH_CYCLES, EARTH_SPIN_YEARS, _earth_equilibrium
-    base = runcache.spun_up(f'earth9-n4-eq{EARTH_SPIN_YEARS}x{EARTH_CYCLES[0]}x{EARTH_CYCLES[1]}', _earth_equilibrium, 0)[0]
+    base = runcache.spun_up(f'earth10-n4-eq{EARTH_SPIN_YEARS}x{EARTH_CYCLES[0]}x{EARTH_CYCLES[1]}', _earth_equilibrium, 0)[0]
     import os, tempfile
     from insilica.io import save as savefile
     f0 = os.path.join(tempfile.gettempdir(), f'tides{os.getpid()}.iw2')

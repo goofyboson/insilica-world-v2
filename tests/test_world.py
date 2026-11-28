@@ -219,7 +219,8 @@ def conserve_air(record):
     from insilica.constants import SOIL_DZ
     air = {'physics': {'gases': dict(n2=0.9, co2=0.1)}}
     # (#220: with geology's accumulators, each sum against the same kept here, the runoff against the water reaching the sea)
-    e = World(4, 'earth7', params=dict(air, gas_tracers=1, geology=1))
+    # (#307: with V2-7b's moist mixed layer, its cloud from theta_l and q_t and its cloud top's cooling in its entrainment)
+    e = World(4, 'earth7', params=dict(air, physics=dict(air['physics'], ml_moist=1.0), gas_tracers=1, geology=1))
     e.gas_src[0, :100] = 1e-9
     gamt = lambda: [float(cp.sum(e.M * e.gx[j])) for j in range(e.gx.shape[0])]
     g0, gsrc = gamt(), 0.0

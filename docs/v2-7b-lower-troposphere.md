@@ -134,6 +134,10 @@ bottom `mu_bl`, not a mixed layer alone (a pond freezing on the Karakoram's ice 
 observed sea: tropical evaporation 4.11 mm/day, the mixed layer's relative humidity 0.78, the stratocumulus seas' cloud effect on
 sunlight −51.4 W/m²; the coupled year's sea uptake +13.3 W/m² (earth9's state is far from earth10's equilibrium).
 
+**Equilibrium (SPEC #309)**, with a second addition: the mixed layer kept at least `mu_night`, refilled from the layer above (a
+floor-thin mixed layer over Tibet broke the first spin-up). EARTH passes; the sea's surface against WOA23 bias +0.82 K, rms 3.41 K
+(earth9 −1.56, 4.68), the tropical sea 27.9 °C (27.8); RAIN and WINDS fail.
+
 ## 3. Part 2: an upper-ocean thermocline layer
 
 After Part 1's air, the 700 m layer under the ocean's mixed layer is split into an upper thermocline layer (~100–200 m) and

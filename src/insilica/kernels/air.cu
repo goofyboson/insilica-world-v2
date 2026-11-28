@@ -1998,6 +1998,23 @@ extern "C" __global__ void air_column(int N, int L_in, const real* par, int mode
       }
       MLB(5)
     }
+    // cb_dp (#308): the air touching the ground is never thinner than the night's mixed layer (mu_night, #98): over Tibet the plumes and
+    // the winds thinned it to its floor under a cloud-base layer of 380 kg/m^2 at its own theta, and a pond's evaporation into its 10 kg/m^2
+    // took it to 73 g/kg and 167 K. Below mu_night it takes the shortfall from the layer above (the lowest holding air), its coldest slice,
+    // as its entrainment does (#112, #119, #122)
+    if (P.ntr && P.bl_mix > 0 && bot >= 2 && mu[bot] < P.mu_night) {
+      int kb = bot - 1;
+      while (kb > 1 && !(mu[kb] > P.floor_ * (real)1.000001)) kb--;
+      const real m = fmin(P.mu_night - mu[bot], mu[kb] - P.floor_);
+      if (m > 0) {
+        const real e = kb < bot - 1 ? fmax(tstar(kb, L, P), th[bot]) : tstar(kb, L, P), fm = fmin((real)1, m / mu[kb]);
+        const bool spread = kb >= 1 && th[kb] < tstar(kb - 1, L, P) && th[kb] > e;
+        const real thc = spread ? e + fm * (th[kb] - e) : th[kb];
+        const real qx = P.edge_vap > 0 ? edge_q(kb, false, mu, th, q, m, P) : q[kb];
+        move_mass(L, P, mu, th, q, pib, kb, bot, m, thc, thc, qx, qx, cloudy ? cl : (real*)0);
+        for (int j = kb; j < bot; j++) wxo[j] -= m;
+      }
+    }
   }
   SNAP(8)
   // the plumes' rain evaporates as it falls below their base through the bottom layer's clear air (#112), as the clouds' rain does

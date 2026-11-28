@@ -85,6 +85,50 @@ a tenth air layer is added between the mixed layer and the cumulus layer.
 - About 40 places in air.cu treat "the layer above the mixed layer" (bot − 1) as the cumulus layer. Each is audited and
   assigned to the transition layer or the cumulus layer (bot − 2) before the preset is built.
 
+#### 2.4.1 Addendum (2026-11-28, after #307): the audit and the design
+
+**Why now.** #307 showed the mixed layer, computed consistently in θ_l and q_t, holds no cloud of its own: over the
+stratocumulus seas it stays ~1 K under the sea and below its condensation level. The air that should be the deck sits in the
+cumulus layer, blended with inversion air (4–6 K warmer, 0.56 of saturation), so no regime test can separate it (#306).
+
+**The layer.** Layer `kt = bot − 1` (one switch, `cb_dp`, Pa; 0 = off, every preset as before). It spans θ from the mixed
+layer's top edge θ* (unchanged: the mixed layer's θ) to θ_t = the θ the mixed layer's air reaches lifted `cb_dp` above its top,
+condensing on the way (`cu_top`'s lift with `cb_dp` in place of `cu_dp`), at least θ* + 2 K. This is cloud-base air: the
+saturated, slightly warmer air of a stratocumulus deck, or of the trade-cumulus layer's first few hundred metres.
+- **`cb_dp` = 50 hPa** (~450 m). A stratocumulus deck is 200–500 m thick (Wood 2012). Lifted moist-adiabatically 50 hPa from a
+  290–298 K cloud base, θ rises ~2.5–4 K, so the layer's mean stays above θ* + 1 K, the floor the mixed layer's top edge keeps
+  (θ* ≤ θ̄_kt − 1, unchanged). The only new constant; reported with this source.
+- The cumulus layer (`kcu = bot − 2`) starts at θ_t. Its top (`cu_edges`'s cumulus top) and the cloud layers above keep their
+  rules, their interface indices shifted up one (`L − 3 → L − 4` …, `cloud_k`'s default `bot − 2 → bot − 3`).
+
+**The audit** (air.cu at 13f68f9; "interface" = an index into tstar, unchanged):
+
+| Site | What it does | Goes to |
+|---|---|---|
+| θ* clamp (970, 1536) | the mixed layer's top below the next layer's mean − 1 | kt (the layer above) |
+| entrainment source `ka`, `reach_edge`, dry encroachment (1598–1629) | the mixed layer's growth takes the air just above it | kt |
+| night release (1655), #124's release above the LCL (1665) | the mixed layer gives its top back / its cloudy air leaves | kt: the cloudy boundary layer's air piles under the inversion, where the deck lives |
+| `cu_cloud` cover (1042) | the thermals' cloud-base cover | kt |
+| `cu_sub` compensating subsidence (1979) | the air sinking between the clouds into the mixed layer | kt (the air just above cloud base) |
+| plume start against θ* (606, 1722, 1839) | interface | unchanged |
+| `ek`, the plumes' entrainment sub-levels (621) | IFS entrainment near cloud base | kt and kcu |
+| the shallow plume's stop (692) | stops in the cumulus or cloud layer | kcu and above (kt passed through) |
+| `cu_edges`, `cl_float`, `cloud_k` (727–736, 977, 211) | the cumulus top and cloud-layer edges | shifted one up; kt's top edge θ_t added |
+| downdraft's level of free sinking (1801–1814) | lower θ_e of cumulus and cloud layer | kcu and the cloud layer; it sinks through kt |
+| shallow plume's detrainment range (1885, 1889) | stops between the cloud layer and bot − 1 | unchanged (kt included) |
+| non-`cu_dth` paths (1747, 1748, 1927–1930, 1848) | earlier presets only | unchanged (inert with `cb_dp`) |
+| floor scraps (2113–2116), edge_q, crossing, radiation | generic over layers | unchanged |
+
+**Start.** The trials start from the test's earth9 equilibrium with a layer inserted at `kt`: its mass at the floor, θ* + 1 K,
+the cumulus layer's vapor and wind. The physics fills it (#124's release, the crossings). The preset `earth10` = earth9 with
+`cb_dp` 50 hPa, the extra θ* placeholder and `ml_moist` on (the deck's cloud needs θ_l's levels only if it reaches the mixed
+layer; kept on so the two parts are judged together).
+
+**Checks.** Off bit-identical (earth9 hash 5984c6cb6a071387); CONSERVE's air ledger check runs on an earth10 column in place
+of earth7's (energy, water exact with ten layers; no test added); run time against earth9 (~11% expected; lw_column's shared memory 54 KB of 99).
+**Measured as §2.3**, plus the transition layer's mass, relative humidity and cover over the stratocumulus seas and the trades,
+and the plumes' stop height above cloud base (#180's 25 hPa).
+
 ## 3. Part 2: an upper-ocean thermocline layer
 
 After Part 1's air, the 700 m layer under the ocean's mixed layer is split into an upper thermocline layer (~100–200 m) and

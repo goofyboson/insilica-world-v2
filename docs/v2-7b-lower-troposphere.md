@@ -151,6 +151,60 @@ the rest.
 - **Measured against:** coupled SST against WOA23 (#288's bias map: global −1.57 K, rms 4.68), the ocean's heat transport
   (now 0.4–0.6 PW), the sea's heat uptake.
 
+### 3.1 Addendum (2026-11-28, after #312): what earth10's ocean does, and the design
+
+**Measured** (earth10's equilibrium; the layers by scratch olay.py, WOA23's annual profile by woaprof.py over 35–740 m):
+
+| Region | Mixed layer | The 700 m layer | WOA23 35–740 m | earth9's 700 m layer |
+|---|---|---|---|---|
+| Tropics 10°S–10°N | 36 m, 28.1 °C | 658 m, **27.5 °C** | 12.1 °C | 22.2 °C |
+| Subtropics 10–30° | 48 m, 24.2 °C | 687 m, 23.5 °C | 13.1 °C | 20.3 °C |
+| 30–50° | 43 m, 15.7 °C | 610 m, 15.4 °C | 9.3 °C | 14.4 °C |
+| 50–70° | 56 m, 7.7 °C | 527 m, 7.4 °C | 2.7 °C | 7.5 °C |
+
+- **There is no thermocline.** The 700 m layer sits within 0.1–0.7 K of the mixed layer above it everywhere. It is 6–15 K warmer
+  than the observed water at those depths, and 5 K warmer in the tropics than earth9's: earth10's warmer tropical surface is
+  carried straight down.
+- **It is still warming:** the sea takes up +4.2 W/m² in the equilibrium's coupled year.
+- **The currents carry little heat:** 0.4–0.7 PW northward at 20–50°N, against ~1.5–2 observed near 20°N. With no cold water under
+  the warm surface there is little temperature contrast for the overturning to carry.
+- **The high latitudes' warm surface** (+3 to +5 K poleward of 50°) sits over a 7.4 °C layer where WOA has 2.7 °C. The Southern
+  Ocean's too-weak cloud cut to sunlight (−55 against CERES's −71 W/m² at 50–60°S, #312) adds to it.
+
+**Why (to be confirmed first, 4a below).** The 700 m layer gains heat only through the mixed layer: detrained water at the mixed
+layer's temperature, and the currents. Nothing cools it from below (`kappa_d` 0), and the only cold water it takes in is where
+the mixed layer itself is cold. In the real ocean, thermocline water is subducted in late winter at 30–50° (at 10–20 °C, the
+ventilated thermocline: Luyten, Pedlosky & Stommel 1983) and mixed slowly into the cold deep (κ ~1e-5 m²/s in the thermocline,
+Ledwell et al. 1993). The tropics' 12 °C at 35–740 m is that subducted water.
+
+**Steps:**
+
+- **4a. Trace (no code change).** An ocean-only replay year from earth10's equilibrium, driven by its own recorded forcing (#196's
+  harness). The 700 m layer's heat budget by term and region: detrainment, entrainment, the currents' convergence, the interfaces.
+  This confirms where its heat comes from before any layer depth is chosen. **Pause:** report.
+- **4b. Build, if 4a confirms it: a four-layer ocean.** The mixed layer; an upper thermocline of ~150 m (the seasonal and subtropical
+  thermocline, which a winter mixed layer reaches); a lower thermocline of ~550 m (the main thermocline, its water subducted at
+  30–50°); the abyss.
+  - **Free temperatures,** as the present ocean, not fixed classes. The class oceans kept their warm classes and overheated the
+    tropics to 30–33 °C (#171, #199).
+  - **The density steps** g' = g·α·ΔT between the layers' mean temperatures in WOA23's columns (α 2e-4/K), stated with their
+    numbers when built.
+  - **Diapycnal mixing** κ_d 1e-5 m²/s across the thermocline's interfaces (the existing `kappa_d`; Ledwell et al. 1993).
+  - **The start** from WOA23 (#193's method: each cell's nearest WOA column, the layers' mean temperatures at their depths).
+  - **A preset**, `earth10o4`, so earth10 stays as it is until the trial is judged.
+- **4c. Measure:** a coupled year's sign first (#298's lesson), then the EARTH path's equilibrium.
+  - **SST** against WOA23 (its limits now in EARTH's run, #312), poleward of 40° included.
+  - **The layers' temperatures** against WOA23's over 35–185 m and 185–740 m.
+  - **The currents' heat transport, the sea's uptake, EARTH.**
+  - **Pause:** report.
+
+**Risks.**
+- **The tropics overheating,** as every earlier split did (#171, #189–#199): the upper thermocline holds the warm water under the
+  mixed layer, and earth10's air now evaporates less than the air those trials ran with. Checked in the coupled year's sign before
+  an equilibrium.
+- **The lower thermocline warming over the spin-up** as the 700 m layer does now, if 4a finds a cause the split does not remove.
+- **Run time:** small (one more ocean layer; the ocean's step is hourly).
+
 ## 4. Part 3: the new Earth
 
 A preset with the stage's switches on, its own cached equilibrium (the test's procedure: 3 coupled years, 5 × (1 + 20),

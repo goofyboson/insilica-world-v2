@@ -319,22 +319,26 @@ def test_earth_budget(record):
            title="RAIN earth10's rain against GPCP (V2-6c, SPEC #134; earth6 since #142, earth7 since #153, earth8 since #248, earth9 since #260, earth10 since #310)")
 
     # SST (V2-7b, SPEC #311): the same year's sea surface against WOA23's annual 1991-2020 (tools/woa_sst.py): the global bias and rms
-    # over the sea WOA covers, and the zonal bias in 10° bands 60°S–60°N. Reported; its limits agreed after the first numbers (#305)
+    # over the sea WOA covers, and the zonal bias in 10° bands 60°S–60°N; limits agreed after the first numbers (#305, #311): bias within
+    # ±1 K, rms ≤ 4 K, each 10° band 40°S–40°N within ±2.5 K (poleward of 40° reported: Part 2's ocean)
     woa = np.load(Path(__file__).resolve().parent / 'data' / 'woa23_sst_n4.npz')['sst']
     A_, land = g.areaCell, w.land.get().astype(bool)
     sm = ~land & np.isfinite(woa)
     dT = np.where(sm, tsum.get() / S - 273.15 - np.nan_to_num(woa), 0.0)
     bias, rms = float(np.average(dT[sm], weights=A_[sm])), float(np.sqrt(np.average(dT[sm] ** 2, weights=A_[sm])))
     sb = [float(np.average(dT[sm & (lat >= x) & (lat < x + 10)], weights=A_[sm & (lat >= x) & (lat < x + 10)])) for x in range(-60, 60, 10)]
+    oks = abs(bias) <= 1.0 and rms <= 4.0 and all(abs(x) <= 2.5 for x in sb[2:10])
     record('SST', f'the same year\'s sea surface against WOA23 (annual 1991–2020): bias {bias:+.2f} K, rms {rms:.2f} K; 10° bands 60°S–60°N '
-           + ', '.join(f'{x:+.1f}' for x in sb) + ' K', 'reported; limits to be agreed (#305)', True,
+           + ', '.join(f'{x:+.1f}' for x in sb) + ' K', 'bias within ±1 K; rms ≤ 4 K; each 10° band 40°S–40°N within ±2.5 K', oks,
            title='SST the coupled year\'s sea surface against WOA23 (V2-7b, SPEC #311)')
 
     # OBSERVED SEA (V2-7b, SPEC #311): from the same state, the air over WOA23's annual surface (the sea's mixed layer relaxed to it each
     # day, a 2-day scale), 30 days to adjust and a year measured: the air's own errors apart from the ocean's (#287). The tropical sea's
     # evaporation and the mixed layer's relative humidity there (at the surface's pressure), the cloud effect on sunlight over the
-    # stratocumulus seas (California, Peru, Namibia) and in 10° bands, and the rain's 10° bands against GPCP. Reported; limits after the
-    # first numbers (#305)
+    # stratocumulus seas (California, Peru, Namibia) and in 10° bands against CERES EBAF Ed2.8 (2001–2013, tools/ceres_cre.py, over the
+    # same cells), and the rain's 10° bands against GPCP. Limits agreed after the first numbers (#305, #311): evaporation 3.5–4.5 mm/day,
+    # relative humidity 0.75–0.85, the stratocumulus seas' cloud effect within 15 W/m² of CERES, each rain band 50°S–50°N within 30%
+    # (the bands' cloud effects reported)
     P_, bot = w.physics.p, L - 1
     Tobs, mR, rr = cp.asarray(np.nan_to_num(woa) + 273.15), cp.asarray(sm), 1 - np.exp(-0.5)
 
@@ -361,15 +365,20 @@ def test_earth_budget(record):
     sc = sm & (((lat >= 15) & (lat < 30) & (lon >= -140) & (lon < -115)) | ((lat >= -30) & (lat < -10) & (lon >= -95) & (lon < -75))
                | ((lat >= -30) & (lat < -10) & (lon >= -5) & (lon < 12)))
     av = lambda x, msk: float(np.average(x[msk], weights=A_[msk]))
-    swb = [av(o_['sw'], sm & (lat >= x) & (lat < x + 10)) for x in range(-60, 60, 10)]
+    cer = np.load(Path(__file__).resolve().parent / 'data' / 'ceres_swcre_n4.npz')['swcre']
+    swb = [(av(o_['sw'], sm & (lat >= x) & (lat < x + 10)), av(cer, sm & (lat >= x) & (lat < x + 10))) for x in range(-60, 60, 10)]
     zr = zmb(o_['rain'] * 86400.0, 10)
+    ev, rht, scm, sco = av(o_['evap'], trop) * 86400, av(rh, trop), av(o_['sw'], sc), av(cer, sc)
+    rbo = {i: zr[i] / ro['bands'][i] - 1 for i in mid}
+    oko = 3.5 <= ev <= 4.5 and 0.75 <= rht <= 0.85 and abs(scm - sco) <= 15 and all(abs(x) <= 0.30 for x in rbo.values())
     record('OBSERVED SEA', f'a year over WOA23\'s annual surface after 30 days (relaxed daily): tropical sea 10°S–10°N evaporation '
-           f'{av(o_["evap"], trop) * 86400:.2f} mm/day (~3.5–4), the mixed layer\'s relative humidity there {av(rh, trop):.2f} (~0.8); cloud effect '
-           f'on sunlight over the stratocumulus seas {av(o_["sw"], sc):+.1f} W/m² (~−60 to −90), in 10° bands 60°S–60°N over the sea '
-           + ', '.join(f'{x:+.0f}' for x in swb) + ' W/m²; rain, 10° bands 50°S–50°N ' + ', '.join(f'{100 * (zr[i] / ro["bands"][i] - 1):+.0f}%' for i in mid)
-           + f' against GPCP, global {float(np.average(o_["rain"] * 86400.0, weights=A_)):.2f} mm/day', 'reported; limits to be agreed (#305)', True,
+           f'{ev:.2f} mm/day, the mixed layer\'s relative humidity there {rht:.2f}; cloud effect on sunlight over the stratocumulus seas '
+           f'{scm:+.1f} W/m² (CERES {sco:+.1f}), in 10° bands 60°S–60°N over the sea ' + ', '.join(f'{x:+.0f} ({y:+.0f})' for x, y in swb)
+           + ' W/m²; rain, 10° bands 50°S–50°N ' + ', '.join(f'{100 * rbo[i]:+.0f}%' for i in mid)
+           + f' against GPCP, global {float(np.average(o_["rain"] * 86400.0, weights=A_)):.2f} mm/day',
+           'evaporation 3.5–4.5 mm/day; relative humidity 0.75–0.85; stratocumulus seas within 15 W/m² of CERES; each rain band 50°S–50°N within 30%', oko,
            title='OBSERVED SEA earth10\'s air over the observed sea surface (V2-7b, SPEC #311)')
-    assert ok and okw and okr
+    assert ok and okw and okr and oks and oko
 
 
 @pytest.mark.xdist_group('grid4')
